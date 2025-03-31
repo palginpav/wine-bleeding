@@ -5186,6 +5186,7 @@ static WINAPI HRESULT presentation_clock_AddClockStateSink(IMFPresentationClock 
 {
     struct presentation_clock *pc = impl_from_IMFPresentationClock(iface);
 
+    todo_wine_if(!expect_presentation_clock_AddClockStateSink)
     CHECK_EXPECT(presentation_clock_AddClockStateSink);
 
     if (pc->clock_state_sink)
@@ -5201,6 +5202,7 @@ static WINAPI HRESULT presentation_clock_RemoveClockStateSink(IMFPresentationClo
 {
     struct presentation_clock *pc = impl_from_IMFPresentationClock(iface);
 
+    todo_wine_if(!expect_presentation_clock_RemoveClockStateSink)
     CHECK_EXPECT(presentation_clock_RemoveClockStateSink);
 
     if (pc->clock_state_sink == state_sink)
@@ -6539,7 +6541,7 @@ static void test_sar(void)
     check_interface(sink, &IID_IMFMediaEventGenerator, TRUE);
     check_interface(sink, &IID_IMFClockStateSink, TRUE);
     check_interface(sink, &IID_IMFGetService, TRUE);
-    todo_wine check_interface(sink, &IID_IMFPresentationTimeSource, TRUE);
+    check_interface(sink, &IID_IMFPresentationTimeSource, TRUE);
     todo_wine check_service_interface(sink, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateSupport, TRUE);
     check_service_interface(sink, &MF_RATE_CONTROL_SERVICE, &IID_IMFRateControl, FALSE);
     check_service_interface(sink, &MR_POLICY_VOLUME_SERVICE, &IID_IMFSimpleAudioVolume, TRUE);
@@ -7090,7 +7092,6 @@ if (rate_support1)
 
     /* Test IMFPresentationTimeSource interface */
     hr = IMFMediaSink_QueryInterface(sink, &IID_IMFPresentationTimeSource, (void**)&time_source);
-    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = IMFMediaSink_QueryInterface(sink, &IID_IMFClockStateSink, (void **)&state_sink1);
@@ -7200,7 +7201,9 @@ if (time_source)
 
     SET_EXPECT(presentation_clock_GetTimeSource);
     hr = IMFMediaSink_SetPresentationClock(sink, clock);
+    todo_wine
     ok(hr == MF_E_CLOCK_NO_TIME_SOURCE, "Unexpected hr %#lx.\n", hr);
+    todo_wine
     CHECK_CALLED(presentation_clock_GetTimeSource);
 
     IMFPresentationTimeSource_AddRef(presentation_clock->time_source = time_source);
@@ -7209,6 +7212,7 @@ if (time_source)
     SET_EXPECT(presentation_clock_AddClockStateSink);
     hr = IMFMediaSink_SetPresentationClock(sink, clock);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    todo_wine
     CHECK_CALLED(presentation_clock_GetTimeSource);
     CHECK_CALLED(presentation_clock_AddClockStateSink);
 
@@ -7242,6 +7246,7 @@ if (time_source)
 
     /* But no MEStreamSinkPrerolled will be provided until we provide a second sample */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkPrerolled, 100, &propvar);
+    todo_wine
     ok(hr == WAIT_TIMEOUT, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7261,6 +7266,7 @@ if (time_source)
 
     /* Now we get the pre-roll event. The third sample does not need to be provided */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkPrerolled, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7275,15 +7281,18 @@ if (time_source)
 
     /* Two more samples are immediately requested */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
     /* Before we get the started event */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkStarted, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7295,6 +7304,7 @@ if (time_source)
     }
 
     /* Clock time will halt at exactly 200000 as this is the total duration of the two samples */
+    todo_wine
     ok(time == 200000, "Unexpected time %I64d.\n", time);
 
     /* Provide a third sample */
@@ -7327,6 +7337,7 @@ if (time_source)
     }
 
     /* Time is now greater than 300000 as, due to the ENDOFSEGMENT marker, SAR will now insert silence and continue the timer */
+    todo_wine
     ok(time > 300000, "Unexpected time %I64d.\n", time);
 
     /* No new samples are requested after the marker */
@@ -7374,6 +7385,7 @@ if (time_source)
 
     /* But no MEStreamSinkPrerolled will be provided until we provide at least 200ms of data */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkPrerolled, 100, &propvar);
+    todo_wine
     ok(hr == WAIT_TIMEOUT, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7400,6 +7412,7 @@ if (time_source)
 
     /* Confirm a start prior to pre-roll completion will fail */
     hr = IMFPresentationClock_Start(clock, 0);
+    todo_wine
     ok(hr == MF_E_STATE_TRANSITION_PENDING, "Unexpected hr %#lx.\n", hr);
 
     /* Complete the pre-roll, we still need 180ms of duration. We'll send an 80ms sample and four 25ms.
@@ -7439,12 +7452,14 @@ if (time_source)
     /* A new sample is not requested if duration is provided and the total duration of samples buffered is 200ms or more
      * Instead there is a preroll event */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkPrerolled, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
     /* Check clock time before start */
     hr = IMFPresentationClock_GetTime(clock, &time);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    todo_wine
     ok(time == 0, "Unexpected time %I64d.\n", time);
 
     /* Start clock */
@@ -7455,6 +7470,7 @@ if (time_source)
     for (i = 0; i < 7; i++)
     {
         hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 1000, &propvar);
+        todo_wine
         ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         PropVariantClear(&propvar);
     }
@@ -7488,10 +7504,12 @@ if (time_source)
 
     /* Test scrubbing. Start by setting clock rate to zero. */
     hr = IMFClockStateSink_OnClockSetRate(state_sink1, 0, 0.0);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     /* Wait for the rate changed event */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRateChanged, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7515,6 +7533,7 @@ if (time_source)
 
     /* And then the scrub complete event. No samples need to be provided. */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkScrubSampleComplete, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7529,6 +7548,7 @@ if (time_source)
 
     /* ... no new sample is requested ... */
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 100, &propvar);
+    todo_wine
     ok(hr == WAIT_TIMEOUT, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7548,6 +7568,7 @@ if (time_source)
     /* ... but the clock remains at zero */
     hr = IMFPresentationClock_GetTime(clock, &time);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    todo_wine_if(time != 0)
     ok(time == 0, "Unexpected time %I64d.\n", time);
 
     /* to start the playback, we pause ... */
@@ -7560,9 +7581,11 @@ if (time_source)
 
     /* ... set rate back to 1 ... */
     hr = IMFClockStateSink_OnClockSetRate(state_sink1, 0, 1.0);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRateChanged, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7571,14 +7594,17 @@ if (time_source)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkRequestSample, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
     hr = gen_wait_media_event_until_blocking((IMFMediaEventGenerator*)stream, callback, MEStreamSinkStarted, 1000, &propvar);
+    todo_wine
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     PropVariantClear(&propvar);
 
@@ -7618,8 +7644,9 @@ if (time_source)
     SET_EXPECT(presentation_clock_RemoveClockStateSink);
     hr = IMFMediaSink_Shutdown(sink);
     ok(hr == S_OK, "Failed to shut down, hr %#lx.\n", hr);
-    todo_wine
     CHECK_CALLED(presentation_clock_RemoveClockStateSink);
+
+    Sleep(20);
 
     ref = IMFMediaSink_Release(sink);
     ok(ref == 0, "Release returned %ld\n", ref);
