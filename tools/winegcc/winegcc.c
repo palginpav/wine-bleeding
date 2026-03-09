@@ -1174,7 +1174,6 @@ static void build(struct strarray input_files, const char *output)
     struct strarray link_args;
     char *output_file;
     const char *output_name, *spec_file, *lang;
-    const char *libgcc = NULL;
     int generate_app_loader = 1;
     const char *crt_lib = NULL;
 
@@ -1403,8 +1402,6 @@ static void build(struct strarray input_files, const char *output)
 	strarray_add(&link_args, "-lm");
 	strarray_add(&link_args, "-lc");
     }
-
-    if (libgcc) strarray_add(&link_args, libgcc);
 
     atexit( cleanup_output_files );
 
