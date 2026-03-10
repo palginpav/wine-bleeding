@@ -30,6 +30,17 @@
 WINE_DEFAULT_DEBUG_CHANNEL(wtsapi);
 
 
+struct wts_session_notification
+{
+    HANDLE server;
+    HWND hwnd;
+    DWORD flags;
+    BOOL ex;
+    struct wts_session_notification *next;
+};
+
+static struct wts_session_notification *wts_notify_list;
+
 /************************************************************
  *                WTSCloseServer  (WTSAPI32.@)
  */
@@ -684,7 +695,40 @@ BOOL WINAPI WTSQueryUserConfigW(LPWSTR pServerName, LPWSTR pUserName, WTS_CONFIG
  */
 BOOL WINAPI WTSRegisterSessionNotification(HWND hWnd, DWORD dwFlags)
 {
-    FIXME("Stub %p 0x%08lx\n", hWnd, dwFlags);
+    struct wts_session_notification *cur;
+
+    TRACE("(%p, 0x%08lx)\n", hWnd, dwFlags);
+
+    if (!hWnd)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    /* Update existing registration if present */
+    for (cur = wts_notify_list; cur; cur = cur->next)
+    {
+        if (cur->hwnd == hWnd && !cur->ex)
+        {
+            cur->flags = dwFlags;
+            return TRUE;
+        }
+    }
+
+    cur = HeapAlloc( GetProcessHeap(), 0, sizeof(*cur) );
+    if (!cur)
+    {
+        SetLastError( ERROR_OUTOFMEMORY );
+        return FALSE;
+    }
+
+    cur->server = NULL;
+    cur->hwnd   = hWnd;
+    cur->flags  = dwFlags;
+    cur->ex     = FALSE;
+    cur->next   = wts_notify_list;
+    wts_notify_list = cur;
+
     return TRUE;
 }
 
@@ -693,7 +737,39 @@ BOOL WINAPI WTSRegisterSessionNotification(HWND hWnd, DWORD dwFlags)
  */
 BOOL WINAPI WTSRegisterSessionNotificationEx(HANDLE hServer, HWND hWnd, DWORD dwFlags)
 {
-    FIXME("Stub %p %p 0x%08lx\n", hServer, hWnd, dwFlags);
+    struct wts_session_notification *cur;
+
+    TRACE("(%p, %p, 0x%08lx)\n", hServer, hWnd, dwFlags);
+
+    if (!hWnd)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    for (cur = wts_notify_list; cur; cur = cur->next)
+    {
+        if (cur->hwnd == hWnd && cur->ex && cur->server == hServer)
+        {
+            cur->flags = dwFlags;
+            return TRUE;
+        }
+    }
+
+    cur = HeapAlloc( GetProcessHeap(), 0, sizeof(*cur) );
+    if (!cur)
+    {
+        SetLastError( ERROR_OUTOFMEMORY );
+        return FALSE;
+    }
+
+    cur->server = hServer;
+    cur->hwnd   = hWnd;
+    cur->flags  = dwFlags;
+    cur->ex     = TRUE;
+    cur->next   = wts_notify_list;
+    wts_notify_list = cur;
+
     return TRUE;
 }
 
@@ -786,8 +862,32 @@ BOOL WINAPI WTSTerminateProcess(HANDLE hServer, DWORD ProcessId, DWORD ExitCode)
  */
 BOOL WINAPI WTSUnRegisterSessionNotification(HWND hWnd)
 {
-    FIXME("Stub %p\n", hWnd);
-    return FALSE;
+    struct wts_session_notification *cur, *prev = NULL;
+
+    TRACE("(%p)\n", hWnd);
+
+    if (!hWnd)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    cur = wts_notify_list;
+    while (cur)
+    {
+        if (cur->hwnd == hWnd && !cur->ex)
+        {
+            if (prev) prev->next = cur->next;
+            else wts_notify_list = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur );
+            return TRUE;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    /* Nothing to unregister; succeed as a no-op. */
+    return TRUE;
 }
 
 /************************************************************
@@ -795,8 +895,31 @@ BOOL WINAPI WTSUnRegisterSessionNotification(HWND hWnd)
  */
 BOOL WINAPI WTSUnRegisterSessionNotificationEx(HANDLE hServer, HWND hWnd)
 {
-    FIXME("Stub %p %p\n", hServer, hWnd);
-    return FALSE;
+    struct wts_session_notification *cur, *prev = NULL;
+
+    TRACE("(%p, %p)\n", hServer, hWnd);
+
+    if (!hWnd)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    cur = wts_notify_list;
+    while (cur)
+    {
+        if (cur->hwnd == hWnd && cur->ex && cur->server == hServer)
+        {
+            if (prev) prev->next = cur->next;
+            else wts_notify_list = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur );
+            return TRUE;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    return TRUE;
 }
 
 

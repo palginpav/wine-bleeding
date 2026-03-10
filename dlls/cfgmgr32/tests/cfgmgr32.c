@@ -30,9 +30,10 @@
 #include "winternl.h"
 #include "objbase.h"
 #include "devguid.h"
+/* propkey.h before initguid.h so PKEY_* are only declared here; definitions come from libuuid. */
+#include "propkey.h"
 #include "initguid.h"
 #include "devpkey.h"
-#include "propkey.h"
 #include "setupapi.h"
 #include "cfgmgr32.h"
 #include "ntddvdeo.h"

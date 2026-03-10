@@ -918,13 +918,19 @@ UINT WINAPI MsiFormatRecordW( MSIHANDLE hInstall, MSIHANDLE hRecord, WCHAR *szRe
     if (!package)
     {
         LPWSTR value = NULL;
+        struct wire_record *wire_rec;
         MSIHANDLE remote;
 
         if ((remote = msi_get_remote(hInstall)))
         {
+            if (!(wire_rec = marshal_record(hRecord)))
+            {
+                msiobj_release(&record->hdr);
+                return ERROR_OUTOFMEMORY;
+            }
             __TRY
             {
-                r = remote_FormatRecord(remote, (struct wire_record *)&record->count, &value);
+                r = remote_FormatRecord(remote, wire_rec, &value);
             }
             __EXCEPT(rpc_filter)
             {
@@ -932,6 +938,7 @@ UINT WINAPI MsiFormatRecordW( MSIHANDLE hInstall, MSIHANDLE hRecord, WCHAR *szRe
             }
             __ENDTRY
 
+            free_remote_record(wire_rec);
             if (!r)
                 r = msi_strncpyW(value, -1, szResult, sz);
 
@@ -975,13 +982,19 @@ UINT WINAPI MsiFormatRecordA(MSIHANDLE hinst, MSIHANDLE hrec, char *buf, DWORD *
     if (!package)
     {
         LPWSTR value = NULL;
+        struct wire_record *wire_rec;
         MSIHANDLE remote;
 
         if ((remote = msi_get_remote(hinst)))
         {
+            if (!(wire_rec = marshal_record(hrec)))
+            {
+                msiobj_release(&rec->hdr);
+                return ERROR_OUTOFMEMORY;
+            }
             __TRY
             {
-                r = remote_FormatRecord(remote, (struct wire_record *)&rec->count, &value);
+                r = remote_FormatRecord(remote, wire_rec, &value);
             }
             __EXCEPT(rpc_filter)
             {
@@ -989,6 +1002,7 @@ UINT WINAPI MsiFormatRecordA(MSIHANDLE hinst, MSIHANDLE hrec, char *buf, DWORD *
             }
             __ENDTRY
 
+            free_remote_record(wire_rec);
             if (!r)
                 r = msi_strncpyWtoA(value, -1, buf, sz, TRUE);
 

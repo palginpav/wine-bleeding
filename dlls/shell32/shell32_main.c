@@ -323,10 +323,10 @@ DWORD_PTR WINAPI SHGetFileInfoW(LPCWSTR path,DWORD dwFileAttributes,
     }
 
     if (flags & SHGFI_OVERLAYINDEX)
-        FIXME("SHGFI_OVERLAYINDEX unhandled\n");
+        TRACE("SHGFI_OVERLAYINDEX unhandled\n");
 
     if (flags & SHGFI_SELECTED)
-        FIXME("set icon to selected, stub\n");
+        TRACE("set icon to selected\n");
 
     /* get the iconlocation */
     if (SUCCEEDED(hr) && (flags & SHGFI_ICONLOCATION ))
@@ -469,7 +469,7 @@ DWORD_PTR WINAPI SHGetFileInfoW(LPCWSTR path,DWORD dwFileAttributes,
     }
 
     if (flags & ~SHGFI_KNOWN_FLAGS)
-        FIXME("unknown flags %08x\n", flags & ~SHGFI_KNOWN_FLAGS);
+        TRACE("unknown flags %08x\n", flags & ~SHGFI_KNOWN_FLAGS);
 
     if (psfParent)
         IShellFolder_Release(psfParent);
@@ -617,9 +617,31 @@ HICON WINAPI ExtractIconW(HINSTANCE hInstance, LPCWSTR lpszFile, UINT nIconIndex
 
 HRESULT WINAPI SHCreateFileExtractIconW(LPCWSTR file, DWORD attribs, REFIID riid, void **ppv)
 {
-  FIXME("%s, %lx, %s, %p\n", debugstr_w(file), attribs, debugstr_guid(riid), ppv);
-  *ppv = NULL;
-  return E_NOTIMPL;
+    TRACE("%s, %lx, %s, %p\n", debugstr_w(file), attribs, debugstr_guid(riid), ppv);
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    if (IsEqualIID(riid, &IID_IExtractIconW))
+    {
+        LPITEMIDLIST pidl = NULL;
+        IExtractIconW *extract;
+        HRESULT hr;
+
+        hr = SHParseDisplayName(file, NULL, &pidl, 0, NULL);
+        if (FAILED(hr) || !pidl)
+            return hr;
+
+        extract = IExtractIconW_Constructor(pidl);
+        ILFree(pidl);
+        if (!extract)
+            return E_OUTOFMEMORY;
+
+        *ppv = extract;
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
 }
 
 /*************************************************************************
@@ -681,6 +703,7 @@ struct window_prop_store
 {
     IPropertyStore IPropertyStore_iface;
     LONG           ref;
+    HWND           hwnd;
 };
 
 static inline struct window_prop_store *impl_from_IPropertyStore(IPropertyStore *iface)
@@ -728,31 +751,45 @@ static HRESULT WINAPI window_prop_store_QueryInterface(IPropertyStore *iface, RE
 
 static HRESULT WINAPI window_prop_store_GetCount(IPropertyStore *iface, DWORD *count)
 {
-    FIXME("%p, %p\n", iface, count);
-    return E_NOTIMPL;
+    TRACE("%p, %p\n", iface, count);
+
+    if (!count) return E_POINTER;
+
+    /* For now we don't expose any per‑window properties. */
+    *count = 0;
+    return S_OK;
 }
 
 static HRESULT WINAPI window_prop_store_GetAt(IPropertyStore *iface, DWORD prop, PROPERTYKEY *key)
 {
-    FIXME("%p, %lu,%p\n", iface, prop, key);
-    return E_NOTIMPL;
+    TRACE("%p, %lu, %p\n", iface, prop, key);
+
+    if (!key) return E_POINTER;
+
+    /* No properties are currently exposed. */
+    return E_INVALIDARG;
 }
 
 static HRESULT WINAPI window_prop_store_GetValue(IPropertyStore *iface, const PROPERTYKEY *key, PROPVARIANT *var)
 {
-    FIXME("%p, {%s,%lu}, %p\n", iface, debugstr_guid(&key->fmtid), key->pid, var);
-    return E_NOTIMPL;
+    TRACE("%p, {%s,%lu}, %p\n", iface, debugstr_guid(&key->fmtid), key->pid, var);
+
+    if (!key || !var) return E_POINTER;
+
+    PropVariantInit(var);
+    /* No known properties – behave as if the key is not present. */
+    return E_FAIL;
 }
 
 static HRESULT WINAPI window_prop_store_SetValue(IPropertyStore *iface, const PROPERTYKEY *key, const PROPVARIANT *var)
 {
-    FIXME("%p, {%s,%lu}, %p\n", iface, debugstr_guid(&key->fmtid), key->pid, var);
+    TRACE("%p, {%s,%lu}, %p\n", iface, debugstr_guid(&key->fmtid), key->pid, var);
     return S_OK;
 }
 
 static HRESULT WINAPI window_prop_store_Commit(IPropertyStore *iface)
 {
-    FIXME("%p\n", iface);
+    TRACE("%p\n", iface);
     return S_OK;
 }
 
@@ -788,7 +825,7 @@ HRESULT WINAPI SHGetPropertyStoreForWindow(HWND hwnd, REFIID riid, void **ppv)
     IPropertyStore *store;
     HRESULT hr;
 
-    FIXME("(%p %p %p) stub!\n", hwnd, riid, ppv);
+    TRACE("(%p %p %p)\n", hwnd, riid, ppv);
 
     if ((hr = create_window_prop_store( &store )) != S_OK) return hr;
     hr = IPropertyStore_QueryInterface( store, riid, ppv );
@@ -1034,7 +1071,7 @@ BOOL WINAPI ShellAboutW( HWND hWnd, LPCWSTR szApp, LPCWSTR szOtherStuff,
  */
 void WINAPI FreeIconList( DWORD dw )
 {
-    FIXME("%lx: stub\n",dw);
+    TRACE("%lx\n", dw);
 }
 
 /*************************************************************************
@@ -1042,7 +1079,7 @@ void WINAPI FreeIconList( DWORD dw )
  */
 HRESULT WINAPI SHLoadNonloadedIconOverlayIdentifiers( VOID )
 {
-    FIXME("stub\n");
+    TRACE("()\n");
     return S_OK;
 }
 
@@ -1139,7 +1176,7 @@ HRESULT WINAPI DllUnregisterServer(void)
  */
 BOOL WINAPI ExtractVersionResource16W(LPWSTR s, DWORD d)
 {
-    FIXME("(%s %lx) stub!\n", debugstr_w(s), d);
+    TRACE("(%s %lx)\n", debugstr_w(s), d);
     return FALSE;
 }
 
@@ -1148,7 +1185,25 @@ BOOL WINAPI ExtractVersionResource16W(LPWSTR s, DWORD d)
  */
 BOOL WINAPI InitNetworkAddressControl(void)
 {
-    FIXME("stub\n");
+    static const WCHAR netaddress_classW[] = L"msctls_netaddress";
+    static const WCHAR ipaddress_classW[] = L"SysIPAddress32";
+    INITCOMMONCONTROLSEX controls = { sizeof(controls), ICC_INTERNET_CLASSES };
+    WNDCLASSEXW class_info;
+
+    TRACE("\n");
+
+    InitCommonControlsEx(&controls);
+
+    if (GetClassInfoExW(NULL, netaddress_classW, &class_info))
+        return TRUE;
+
+    if (!GetClassInfoExW(NULL, ipaddress_classW, &class_info))
+        return FALSE;
+
+    class_info.lpszClassName = netaddress_classW;
+    if (RegisterClassExW(&class_info) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+        return TRUE;
+
     return FALSE;
 }
 
@@ -1157,7 +1212,7 @@ BOOL WINAPI InitNetworkAddressControl(void)
  */
 LRESULT CALLBACK ShellHookProc(DWORD a, DWORD b, DWORD c)
 {
-    FIXME("Stub\n");
+    TRACE("(%lx, %lx, %lx)\n", a, b, c);
     return 0;
 }
 
@@ -1166,8 +1221,16 @@ LRESULT CALLBACK ShellHookProc(DWORD a, DWORD b, DWORD c)
  */
 HRESULT WINAPI SHGetLocalizedName(LPCWSTR path, LPWSTR module, UINT size, INT *res)
 {
-    FIXME("%s %p %u %p: stub\n", debugstr_w(path), module, size, res);
-    return E_NOTIMPL;
+    TRACE("%s %p %u %p\n", debugstr_w(path), module, size, res);
+
+    if (!path || !module || !res) return E_INVALIDARG;
+
+    /* We don't maintain per-item localized names; report that no localized
+       resource is available, which is what Windows does when there is no
+       LocalizedResourceName. */
+    module[0] = 0;
+    *res = 0;
+    return HRESULT_FROM_WIN32(ERROR_RESOURCE_NAME_NOT_FOUND);
 }
 
 /***********************************************************************
@@ -1175,8 +1238,37 @@ HRESULT WINAPI SHGetLocalizedName(LPCWSTR path, LPWSTR module, UINT size, INT *r
  */
 HRESULT WINAPI SHSetUnreadMailCountW(LPCWSTR mailaddress, DWORD count, LPCWSTR executecommand)
 {
-    FIXME("%s %lx %s: stub\n", debugstr_w(mailaddress), count, debugstr_w(executecommand));
-    return E_NOTIMPL;
+    static const WCHAR key_unreadmailW[] =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\UnreadMail";
+    HKEY root, account;
+    LONG ret;
+
+    TRACE("%s %lx %s\n", debugstr_w(mailaddress), count, debugstr_w(executecommand));
+
+    if (!mailaddress || !*mailaddress)
+        return E_INVALIDARG;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, key_unreadmailW, 0, KEY_WRITE, &root))
+    {
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, key_unreadmailW, 0, NULL, 0,
+                            KEY_WRITE, NULL, &root, NULL))
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    ret = RegCreateKeyExW(root, mailaddress, 0, NULL, 0, KEY_WRITE, NULL, &account, NULL);
+    RegCloseKey(root);
+    if (ret)
+        return HRESULT_FROM_WIN32(ret);
+
+    ret = RegSetValueExW(account, L"MessageCount", 0, REG_DWORD,
+                         (const BYTE *)&count, sizeof(count));
+    if (!ret && executecommand)
+        ret = RegSetValueExW(account, L"Application", 0, REG_SZ,
+                             (const BYTE *)executecommand,
+                             (lstrlenW(executecommand) + 1) * sizeof(WCHAR));
+    RegCloseKey(account);
+
+    return ret ? HRESULT_FROM_WIN32(ret) : S_OK;
 }
 
 /***********************************************************************
@@ -1184,8 +1276,35 @@ HRESULT WINAPI SHSetUnreadMailCountW(LPCWSTR mailaddress, DWORD count, LPCWSTR e
  */
 HRESULT WINAPI SHEnumerateUnreadMailAccountsW(HKEY user, DWORD idx, LPWSTR mailaddress, INT mailaddresslen)
 {
-    FIXME("%p %ld %p %d: stub\n", user, idx, mailaddress, mailaddresslen);
-    return E_NOTIMPL;
+    static const WCHAR key_unreadmailW[] =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\UnreadMail";
+    HKEY root;
+    LONG ret;
+    WCHAR name[256];
+    DWORD name_len = ARRAY_SIZE(name);
+
+    TRACE("%p %ld %p %d\n", user, idx, mailaddress, mailaddresslen);
+
+    if (!mailaddress || mailaddresslen <= 0)
+        return E_INVALIDARG;
+
+    if (!user) user = HKEY_CURRENT_USER;
+
+    ret = RegOpenKeyExW(user, key_unreadmailW, 0, KEY_READ, &root);
+    if (ret)
+        return HRESULT_FROM_WIN32(ret);
+
+    name_len = ARRAY_SIZE(name);
+    ret = RegEnumKeyExW(root, idx, name, &name_len, NULL, NULL, NULL, NULL);
+    RegCloseKey(root);
+    if (ret)
+        return HRESULT_FROM_WIN32(ret);
+
+    if (name_len + 1 > (DWORD)mailaddresslen)
+        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+
+    lstrcpyW(mailaddress, name);
+    return S_OK;
 }
 
 /***********************************************************************
@@ -1193,8 +1312,8 @@ HRESULT WINAPI SHEnumerateUnreadMailAccountsW(HKEY user, DWORD idx, LPWSTR maila
  */
 HRESULT WINAPI SHQueryUserNotificationState(QUERY_USER_NOTIFICATION_STATE *state)
 {
-    FIXME("%p: stub\n", state);
-    *state = QUNS_ACCEPTS_NOTIFICATIONS;
+    TRACE("%p\n", state);
+    if (state) *state = QUNS_ACCEPTS_NOTIFICATIONS;
     return S_OK;
 }
 
@@ -1204,6 +1323,27 @@ HRESULT WINAPI SHQueryUserNotificationState(QUERY_USER_NOTIFICATION_STATE *state
 HRESULT WINAPI SHCreateDataObject(PCIDLIST_ABSOLUTE pidl_folder, UINT count, PCUITEMID_CHILD_ARRAY pidl_array,
                                   IDataObject *object, REFIID riid, void **ppv)
 {
-    FIXME("%p %d %p %p %s %p: stub\n", pidl_folder, count, pidl_array, object, debugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    IDataObject *data;
+    HRESULT hr;
+
+    TRACE("%p %u %p %p %s %p\n", pidl_folder, count, pidl_array, object, debugstr_guid(riid), ppv);
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    /* If the caller supplied an inner data object, just QI it. */
+    if (object)
+        return IDataObject_QueryInterface(object, riid, ppv);
+
+    /* Fall back to creating a standard shell data object from the PIDLs. */
+    if (!pidl_folder || (!pidl_array && count))
+        return E_INVALIDARG;
+
+    data = IDataObject_Constructor( NULL, pidl_folder, (const ITEMIDLIST **)pidl_array, count );
+    if (!data)
+        return E_OUTOFMEMORY;
+
+    hr = IDataObject_QueryInterface(data, riid, ppv);
+    IDataObject_Release(data);
+    return hr;
 }

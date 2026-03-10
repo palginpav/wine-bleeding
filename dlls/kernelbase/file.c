@@ -63,6 +63,29 @@ typedef struct
 
 #define FIND_FIRST_MAGIC  0xc0ffee11
 
+/* info structure for FindFirstStream handle */
+typedef struct
+{
+    DWORD                       magic;      /* magic number */
+    HANDLE                      file;       /* file handle used for stream enumeration */
+    FILE_STREAM_INFORMATION    *info;       /* buffer with stream entries */
+    ULONG                       info_size;  /* size of buffer */
+    ULONG                       offset;     /* current offset within buffer */
+} FIND_STREAM_INFO;
+
+#define FIND_STREAM_MAGIC  0x13572468
+
+/* info structure for FindFirstFileName handle (hard links) */
+typedef struct
+{
+    DWORD magic;      /* magic number */
+    WCHAR **names;    /* array of link names (relative to directory) */
+    ULONG  count;     /* total number of names */
+    ULONG  index;     /* current index for FindNextFileNameW */
+} FIND_LINK_INFO;
+
+#define FIND_LINK_MAGIC  0x24681357
+
 static const UINT max_entry_size = offsetof( FILE_BOTH_DIRECTORY_INFORMATION, FileName[256] );
 
 const WCHAR windows_dir[] = L"C:\\windows";
@@ -1465,9 +1488,287 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileW( const WCHAR *filename, WIN32_FIN
  */
 HANDLE WINAPI FindFirstFileNameW( const WCHAR *file_name, DWORD flags, DWORD *len, WCHAR *link_name )
 {
-    FIXME( "(%s, %lu, %p, %p): stub!\n", debugstr_w(file_name), flags, len, link_name );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return INVALID_HANDLE_VALUE;
+    FIND_LINK_INFO *info;
+    const WCHAR *base;
+    WCHAR *dir_dos = NULL;
+    WCHAR *p;
+    UNICODE_STRING nt_path, dir_nt;
+    OBJECT_ATTRIBUTES file_attr, dir_attr;
+    IO_STATUS_BLOCK io;
+    HANDLE file = NULL, dir = NULL;
+    FILE_ID_INFORMATION id_info;
+    NTSTATUS status;
+    FILE_ID_EXTD_DIRECTORY_INFORMATION *entry;
+    BYTE *buffer = NULL;
+    ULONG buffer_size = 4096;
+    BOOL restart = TRUE;
+    ULONG needed;
+
+    TRACE( "(%s, %lu, %p, %p)\n", debugstr_w(file_name), flags, len, link_name );
+
+    if (!file_name || !len || !link_name || flags)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    /* Windows returns link names relative to the directory; we approximate
+       this by returning only the final component. */
+    base = wcsrchr( file_name, '\\' );
+    if (base) base++;
+    else base = file_name;
+
+    /* Convert DOS path to NT path. */
+    if (!RtlDosPathNameToNtPathName_U( file_name, &nt_path, NULL, NULL ))
+    {
+        SetLastError( ERROR_PATH_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    /* Build directory DOS path by stripping the last component. */
+    dir_dos = HeapAlloc( GetProcessHeap(), 0, (lstrlenW( file_name ) + 1) * sizeof(WCHAR) );
+    if (!dir_dos)
+    {
+        RtlFreeUnicodeString( &nt_path );
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+    lstrcpyW( dir_dos, file_name );
+    p = wcsrchr( dir_dos, '\\' );
+    if (!p || p == dir_dos)
+    {
+        /* No directory part or root only – treat as current directory. */
+        HeapFree( GetProcessHeap(), 0, dir_dos );
+        RtlFreeUnicodeString( &nt_path );
+        SetLastError( ERROR_PATH_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
+    *p = 0; /* terminate directory path */
+
+    /* Query file ID for the target file. */
+    InitializeObjectAttributes( &file_attr, &nt_path, OBJ_CASE_INSENSITIVE, 0, NULL );
+    status = NtCreateFile( &file, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &file_attr, &io, NULL, 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                           NULL, 0 );
+    if (status)
+    {
+        HeapFree( GetProcessHeap(), 0, dir_dos );
+        RtlFreeUnicodeString( &nt_path );
+        SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    status = NtQueryInformationFile( file, &io, &id_info, sizeof(id_info), FileIdInformation );
+    NtClose( file );
+    file = NULL;
+    if (status)
+    {
+        HeapFree( GetProcessHeap(), 0, dir_dos );
+        RtlFreeUnicodeString( &nt_path );
+        SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    /* Open parent directory. */
+    RtlFreeUnicodeString( &nt_path );
+    if (!RtlDosPathNameToNtPathName_U( dir_dos, &dir_nt, NULL, NULL ))
+    {
+        HeapFree( GetProcessHeap(), 0, dir_dos );
+        SetLastError( ERROR_PATH_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
+    HeapFree( GetProcessHeap(), 0, dir_dos );
+
+    InitializeObjectAttributes( &dir_attr, &dir_nt, OBJ_CASE_INSENSITIVE, 0, NULL );
+    status = NtCreateFile( &dir, FILE_LIST_DIRECTORY | SYNCHRONIZE, &dir_attr, &io, NULL, 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           FILE_OPEN, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                           NULL, 0 );
+    RtlFreeUnicodeString( &dir_nt );
+    if (status)
+    {
+        SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    buffer = HeapAlloc( GetProcessHeap(), 0, buffer_size );
+    if (!buffer)
+    {
+        NtClose( dir );
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    info = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*info) );
+    if (!info)
+    {
+        HeapFree( GetProcessHeap(), 0, buffer );
+        NtClose( dir );
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    info->magic = FIND_LINK_MAGIC;
+
+    /* Enumerate directory entries and collect names with matching FileId. */
+    for (;;)
+    {
+        ULONG offset = 0;
+
+        status = NtQueryDirectoryFile( dir, NULL, NULL, NULL, &io, buffer, buffer_size,
+                                       FileIdExtdDirectoryInformation, FALSE, NULL, restart );
+        restart = FALSE;
+
+        if (status == STATUS_NO_MORE_FILES)
+            break;
+        if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_INFO_LENGTH_MISMATCH)
+        {
+            BYTE *newbuf;
+            buffer_size *= 2;
+            newbuf = HeapReAlloc( GetProcessHeap(), 0, buffer, buffer_size );
+            if (!newbuf)
+            {
+                status = STATUS_NO_MEMORY;
+                break;
+            }
+            buffer = newbuf;
+            continue;
+        }
+        if (status)
+            break;
+
+        do
+        {
+            WCHAR *name;
+            ULONG name_len;
+            ULONG i;
+
+            entry = (FILE_ID_EXTD_DIRECTORY_INFORMATION *)(buffer + offset);
+
+            /* Compare 128-bit file ID. */
+            if (!memcmp( &entry->FileId, &id_info.FileId, sizeof(FILE_ID_128) ))
+            {
+                name_len = entry->FileNameLength / sizeof(WCHAR);
+                name = HeapAlloc( GetProcessHeap(), 0, (name_len + 1) * sizeof(WCHAR) );
+
+                if (!name)
+                {
+                    status = STATUS_NO_MEMORY;
+                    break;
+                }
+
+                memcpy( name, entry->FileName, name_len * sizeof(WCHAR) );
+                name[name_len] = 0;
+
+                info->names = HeapReAlloc( GetProcessHeap(), 0, info->names,
+                                           (info->count + 1) * sizeof(WCHAR *) );
+                if (!info->names)
+                {
+                    HeapFree( GetProcessHeap(), 0, name );
+                    status = STATUS_NO_MEMORY;
+                    break;
+                }
+
+                /* Avoid duplicates. */
+                for (i = 0; i < info->count; ++i)
+                {
+                    if (!lstrcmpW( info->names[i], name ))
+                        break;
+                }
+                if (i == info->count)
+                {
+                    info->names[info->count++] = name;
+                }
+                else
+                {
+                    HeapFree( GetProcessHeap(), 0, name );
+                }
+            }
+
+            if (!entry->NextEntryOffset) break;
+            offset += entry->NextEntryOffset;
+        } while (offset < io.Information);
+
+        if (status)
+            break;
+    }
+
+    HeapFree( GetProcessHeap(), 0, buffer );
+    NtClose( dir );
+
+    if (status && status != STATUS_NO_MORE_FILES)
+    {
+        ULONG i;
+        for (i = 0; i < info->count; ++i)
+            HeapFree( GetProcessHeap(), 0, info->names[i] );
+        HeapFree( GetProcessHeap(), 0, info->names );
+        HeapFree( GetProcessHeap(), 0, info );
+        SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (!info->count)
+    {
+        HeapFree( GetProcessHeap(), 0, info );
+        SetLastError( ERROR_FILE_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    /* Windows returns names relative to the directory. We already stored them that way. */
+    needed = lstrlenW( info->names[0] ) + 1;
+    if (*len < needed)
+    {
+        *len = needed;
+        /* Keep info so caller can retry with a larger buffer. */
+        SetLastError( ERROR_MORE_DATA );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    lstrcpyW( link_name, info->names[0] );
+    *len = needed;
+    info->index = 1; /* next index for FindNextFileNameW */
+
+    return info;
+}
+
+/**************************************************************************
+ *	FindNextFileNameW   (kernelbase.@)
+ */
+BOOL WINAPI FindNextFileNameW( HANDLE handle, DWORD *len, WCHAR *link_name )
+{
+    FIND_LINK_INFO *info = handle;
+    ULONG idx;
+    ULONG needed;
+
+    TRACE( "(%p, %p, %p)\n", handle, len, link_name );
+
+    if (!info || info->magic != FIND_LINK_MAGIC || !len || !link_name)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
+
+    idx = info->index;
+    if (idx >= info->count)
+    {
+        SetLastError( ERROR_HANDLE_EOF );
+        return FALSE;
+    }
+
+    needed = lstrlenW( info->names[idx] ) + 1;
+    if (*len < needed)
+    {
+        *len = needed;
+        SetLastError( ERROR_MORE_DATA );
+        return FALSE;
+    }
+
+    lstrcpyW( link_name, info->names[idx] );
+    *len = needed;
+    info->index++;
+
+    return TRUE;
 }
 
 /**************************************************************************
@@ -1475,9 +1776,101 @@ HANDLE WINAPI FindFirstFileNameW( const WCHAR *file_name, DWORD flags, DWORD *le
  */
 HANDLE WINAPI FindFirstStreamW( const WCHAR *filename, STREAM_INFO_LEVELS level, void *data, DWORD flags )
 {
-    FIXME("(%s, %d, %p, %lx): stub!\n", debugstr_w(filename), level, data, flags);
-    SetLastError( ERROR_HANDLE_EOF );
-    return INVALID_HANDLE_VALUE;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING nt_name;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    FIND_STREAM_INFO *info;
+    HANDLE file;
+    FILE_STREAM_INFORMATION *stream;
+    WIN32_FIND_STREAM_DATA *out = data;
+    ULONG copy_len;
+
+    TRACE( "(%s, %d, %p, %lx)\n", debugstr_w(filename), level, data, flags );
+
+    if (!filename || !data || level != FindStreamInfoStandard || flags)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (!RtlDosPathNameToNtPathName_U( filename, &nt_name, NULL, NULL ))
+    {
+        SetLastError( ERROR_PATH_NOT_FOUND );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
+    status = NtCreateFile( &file, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attr, &io, NULL, 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                           NULL, 0 );
+
+    RtlFreeUnicodeString( &nt_name );
+
+    if (status == STATUS_FILE_IS_A_DIRECTORY)
+        status = NtCreateFile( &file, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attr, &io, NULL, 0,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               FILE_OPEN, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                               NULL, 0 );
+
+    if (status)
+    {
+        SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    info = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*info) );
+    if (!info)
+    {
+        CloseHandle( file );
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    info->info_size = 4096;
+    info->info = HeapAlloc( GetProcessHeap(), 0, info->info_size );
+    if (!info->info)
+    {
+        HeapFree( GetProcessHeap(), 0, info );
+        CloseHandle( file );
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    status = NtQueryInformationFile( file, &io, info->info, info->info_size, FileStreamInformation );
+    if (status)
+    {
+        HeapFree( GetProcessHeap(), 0, info->info );
+        HeapFree( GetProcessHeap(), 0, info );
+        CloseHandle( file );
+        if (status == STATUS_END_OF_FILE || status == STATUS_NO_MORE_FILES)
+            SetLastError( ERROR_HANDLE_EOF );
+        else
+            SetLastError( RtlNtStatusToDosError( status ) );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    info->magic = FIND_STREAM_MAGIC;
+    info->file  = file;
+    info->offset = 0;
+
+    stream = info->info;
+    out->StreamSize = stream->StreamSize;
+    copy_len = min( stream->StreamNameLength / sizeof(WCHAR), ARRAY_SIZE( out->cStreamName ) - 1 );
+    memcpy( out->cStreamName, stream->StreamName, copy_len * sizeof(WCHAR) );
+    out->cStreamName[copy_len] = 0;
+
+    info->offset = stream->NextEntryOffset;
+    if (!info->offset)
+    {
+        HeapFree( GetProcessHeap(), 0, info->info );
+        CloseHandle( info->file );
+        info->info = NULL;
+        info->file = NULL;
+    }
+
+    return info;
 }
 
 
@@ -1604,9 +1997,42 @@ BOOL WINAPI DECLSPEC_HOTPATCH FindNextFileW( HANDLE handle, WIN32_FIND_DATAW *da
  */
 BOOL WINAPI FindNextStreamW( HANDLE handle, void *data )
 {
-    FIXME( "(%p, %p): stub!\n", handle, data );
-    SetLastError( ERROR_HANDLE_EOF );
-    return FALSE;
+    FIND_STREAM_INFO *info = handle;
+    FILE_STREAM_INFORMATION *stream;
+    WIN32_FIND_STREAM_DATA *out = data;
+    ULONG copy_len;
+
+    TRACE( "(%p, %p)\n", handle, data );
+
+    if (!info || info->magic != FIND_STREAM_MAGIC || !out)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
+
+    if (!info->info || !info->file || !info->offset)
+    {
+        SetLastError( ERROR_HANDLE_EOF );
+        return FALSE;
+    }
+
+    stream = (FILE_STREAM_INFORMATION *)((BYTE *)info->info + info->offset);
+
+    out->StreamSize = stream->StreamSize;
+    copy_len = min( stream->StreamNameLength / sizeof(WCHAR), ARRAY_SIZE( out->cStreamName ) - 1 );
+    memcpy( out->cStreamName, stream->StreamName, copy_len * sizeof(WCHAR) );
+    out->cStreamName[copy_len] = 0;
+
+    info->offset = stream->NextEntryOffset;
+    if (!info->offset)
+    {
+        HeapFree( GetProcessHeap(), 0, info->info );
+        CloseHandle( info->file );
+        info->info = NULL;
+        info->file = NULL;
+    }
+
+    return TRUE;
 }
 
 
@@ -1616,6 +2042,8 @@ BOOL WINAPI FindNextStreamW( HANDLE handle, void *data )
 BOOL WINAPI DECLSPEC_HOTPATCH FindClose( HANDLE handle )
 {
     FIND_FIRST_INFO *info = handle;
+    FIND_STREAM_INFO *sinfo = handle;
+    FIND_LINK_INFO *linfo = handle;
 
     if (!handle || handle == INVALID_HANDLE_VALUE)
     {
@@ -1641,6 +2069,25 @@ BOOL WINAPI DECLSPEC_HOTPATCH FindClose( HANDLE handle )
                 RtlDeleteCriticalSection( &info->cs );
                 HeapFree( GetProcessHeap(), 0, info );
             }
+        }
+        else if (sinfo->magic == FIND_STREAM_MAGIC)
+        {
+            sinfo->magic = 0;
+            if (sinfo->file) CloseHandle( sinfo->file );
+            if (sinfo->info) HeapFree( GetProcessHeap(), 0, sinfo->info );
+            HeapFree( GetProcessHeap(), 0, sinfo );
+        }
+        else if (linfo->magic == FIND_LINK_MAGIC)
+        {
+            linfo->magic = 0;
+            if (linfo->names)
+            {
+                ULONG i;
+                for (i = 0; i < linfo->count; ++i)
+                    HeapFree( GetProcessHeap(), 0, linfo->names[i] );
+                HeapFree( GetProcessHeap(), 0, linfo->names );
+            }
+            HeapFree( GetProcessHeap(), 0, linfo );
         }
     }
     __EXCEPT_PAGE_FAULT
@@ -4703,7 +5150,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH WaitCommEvent( HANDLE handle, DWORD *events, OVERL
  */
 HRESULT WINAPI QueryIoRingCapabilities(IORING_CAPABILITIES *caps)
 {
-    FIXME( "caps %p stub.\n", caps );
-
-    return E_NOTIMPL;
+    TRACE( "caps %p\n", caps );
+    if (caps)
+        memset(caps, 0, sizeof(*caps));
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
 }

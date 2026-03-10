@@ -2979,6 +2979,10 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL bEmulateVersion10)
   ed->nEventMask = 0;
   ed->nModifyStep = 0;
   ed->nTextLimit = TEXT_LIMIT_DEFAULT;
+  ed->lang_options = IMF_AUTOKEYBOARD | IMF_AUTOFONT | IMF_IMECANCELCOMPLETE |
+                     IMF_IMEALWAYSSENDNOTIFY | IMF_AUTOFONTSIZEADJUST | IMF_DUALFONT;
+  ed->left_margin = 0;
+  ed->right_margin = 0;
   list_init( &ed->undo_stack );
   list_init( &ed->redo_stack );
   ed->nUndoStackSize = 0;
@@ -3271,15 +3275,12 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
   UNSUPPORTED_MSG(EM_GETIMECOMPMODE)
   UNSUPPORTED_MSG(EM_GETIMESTATUS)
   UNSUPPORTED_MSG(EM_SETIMESTATUS)
-  UNSUPPORTED_MSG(EM_GETLANGOPTIONS)
   UNSUPPORTED_MSG(EM_GETREDONAME)
   UNSUPPORTED_MSG(EM_GETTYPOGRAPHYOPTIONS)
   UNSUPPORTED_MSG(EM_GETUNDONAME)
   UNSUPPORTED_MSG(EM_GETWORDBREAKPROCEX)
   UNSUPPORTED_MSG(EM_SETBIDIOPTIONS)
   UNSUPPORTED_MSG(EM_SETEDITSTYLE)
-  UNSUPPORTED_MSG(EM_SETLANGOPTIONS)
-  UNSUPPORTED_MSG(EM_SETMARGINS)
   UNSUPPORTED_MSG(EM_SETPALETTE)
   UNSUPPORTED_MSG(EM_SETTABSTOPS)
   UNSUPPORTED_MSG(EM_SETTYPOGRAPHYOPTIONS)
@@ -3291,6 +3292,39 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
    return ME_StreamIn(editor, wParam, (EDITSTREAM*)lParam, TRUE);
   case EM_STREAMOUT:
    return ME_StreamOut(editor, wParam, (EDITSTREAM *)lParam);
+  case EM_GETLANGOPTIONS:
+    return editor->lang_options;
+  case EM_SETLANGOPTIONS:
+  {
+    DWORD mask = (DWORD)wParam;
+    DWORD options = (DWORD)lParam;
+    DWORD old = editor->lang_options;
+
+    if (!mask) mask = ~0u;
+    editor->lang_options = (old & ~mask) | (options & mask);
+    return old;
+  }
+  case EM_SETMARGINS:
+  {
+    INT action = (INT)wParam;
+    WORD left = LOWORD(lParam), right = HIWORD(lParam);
+    LONG old = MAKELONG( editor->left_margin, editor->right_margin );
+
+    if (action & EC_LEFTMARGIN)
+    {
+        editor->left_margin = (left == EC_USEFONTINFO) ? 0 : (SHORT)left;
+    }
+    if (action & EC_RIGHTMARGIN)
+    {
+        editor->right_margin = (right == EC_USEFONTINFO) ? 0 : (SHORT)right;
+    }
+
+    /* Layout code currently ignores editor margins; for now we just store them
+       so EM_GETMARGINS and similar callers see consistent values. */
+    return old;
+  }
+  case EM_GETMARGINS:
+    return MAKELONG( editor->left_margin, editor->right_margin );
   case EM_EMPTYUNDOBUFFER:
     ME_EmptyUndoStack(editor);
     return 0;

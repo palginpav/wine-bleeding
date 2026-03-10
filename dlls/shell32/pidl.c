@@ -1464,14 +1464,48 @@ HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
 {
     IPersistIDList *ppersidl;
     IPersistFolder2 *ppf2;
+    IFolderView2 *pfv2;
+    IShellItemArray *psia;
     IDataObject *pdo;
+    IParentAndItem *pparent;
     IFolderView *pfv;
+    PIDLIST_ABSOLUTE parent;
+    PITEMID_CHILD child;
     HRESULT ret;
 
     if(!punk)
         return E_NOINTERFACE;
 
     *ppidl = NULL;
+
+    /* Try IShellItemArray */
+    ret = IUnknown_QueryInterface(punk, &IID_IShellItemArray, (void **)&psia);
+    if (SUCCEEDED(ret))
+    {
+        IShellItem *psi;
+        DWORD count;
+
+        TRACE("IShellItemArray (%p)\n", psia);
+        ret = IShellItemArray_GetCount(psia, &count);
+        if (SUCCEEDED(ret))
+        {
+            if (count == 1)
+            {
+                ret = IShellItemArray_GetItemAt(psia, 0, &psi);
+                if (SUCCEEDED(ret))
+                {
+                    ret = SHGetIDListFromObject((IUnknown *)psi, ppidl);
+                    IShellItem_Release(psi);
+                }
+            }
+            else
+                ret = E_FAIL;
+        }
+        IShellItemArray_Release(psia);
+
+        if (SUCCEEDED(ret))
+            return ret;
+    }
 
     /* Try IPersistIDList */
     ret = IUnknown_QueryInterface(punk, &IID_IPersistIDList, (void**)&ppersidl);
@@ -1511,6 +1545,66 @@ HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
         IDataObject_Release(pdo);
 
         if(SUCCEEDED(ret))
+            return ret;
+    }
+
+    /* Try IParentAndItem */
+    ret = IUnknown_QueryInterface(punk, &IID_IParentAndItem, (void **)&pparent);
+    if (SUCCEEDED(ret))
+    {
+        IShellFolder *folder;
+
+        TRACE("IParentAndItem (%p)\n", pparent);
+        parent = NULL;
+        child = NULL;
+        folder = NULL;
+        ret = IParentAndItem_GetParentAndItem(pparent, &parent, &folder, &child);
+        if (SUCCEEDED(ret))
+        {
+            if (parent && child)
+            {
+                *ppidl = ILCombine(parent, child);
+                ret = *ppidl ? S_OK : E_OUTOFMEMORY;
+            }
+            else if (parent)
+            {
+                *ppidl = ILClone(parent);
+                ret = *ppidl ? S_OK : E_OUTOFMEMORY;
+            }
+            else
+                ret = E_FAIL;
+        }
+
+        ILFree(parent);
+        ILFree(child);
+        if (folder) IShellFolder_Release(folder);
+        IParentAndItem_Release(pparent);
+
+        if (SUCCEEDED(ret))
+            return ret;
+    }
+
+    /* Try IFolderView2 selection */
+    ret = IUnknown_QueryInterface(punk, &IID_IFolderView2, (void **)&pfv2);
+    if (SUCCEEDED(ret))
+    {
+        IShellItem *psi;
+
+        TRACE("IFolderView2 (%p)\n", pfv2);
+        ret = IFolderView2_GetSelection(pfv2, FALSE, &psia);
+        if (SUCCEEDED(ret))
+        {
+            ret = SHGetItemFromObject((IUnknown *)psia, &IID_IShellItem, (void **)&psi);
+            if (SUCCEEDED(ret))
+            {
+                ret = SHGetIDListFromObject((IUnknown *)psi, ppidl);
+                IShellItem_Release(psi);
+            }
+            IShellItemArray_Release(psia);
+        }
+        IFolderView2_Release(pfv2);
+
+        if (SUCCEEDED(ret))
             return ret;
     }
 

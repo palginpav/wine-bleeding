@@ -757,8 +757,10 @@ BOOL WINAPI DECLSPEC_HOTPATCH DuplicateHandle( HANDLE source_process, HANDLE sou
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ GetApplicationRestartSettings( HANDLE process, WCHAR *cmdline,
                                                                       DWORD *size, DWORD *flags )
 {
-    FIXME( "%p, %p, %p, %p)\n", process, cmdline, size, flags );
-    return E_NOTIMPL;
+    TRACE( "%p, %p, %p, %p\n", process, cmdline, size, flags );
+    if (size) *size = 0;
+    if (flags) *flags = 0;
+    return E_FAIL;
 }
 
 
@@ -856,8 +858,9 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetPriorityClass( HANDLE process )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetProcessGroupAffinity( HANDLE process, USHORT *count, USHORT *array )
 {
-    FIXME( "(%p,%p,%p): stub\n", process, count, array );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+    TRACE( "(%p,%p,%p)\n", process, count, array );
+    if (count) *count = 0;
+    SetLastError( ERROR_NOT_SUPPORTED );
     return FALSE;
 }
 
@@ -901,8 +904,10 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetProcessId( HANDLE process )
 BOOL WINAPI /* DECLSPEC_HOTPATCH */ GetProcessMitigationPolicy( HANDLE process, PROCESS_MITIGATION_POLICY policy,
                                                           void *buffer, SIZE_T length )
 {
-    FIXME( "(%p, %u, %p, %Iu): stub\n", process, policy, buffer, length );
-    return TRUE;
+    TRACE( "(%p, %u, %p, %Iu)\n", process, policy, buffer, length );
+    if (buffer && length) memset( buffer, 0, length );
+    SetLastError( ERROR_NOT_SUPPORTED );
+    return FALSE;
 }
 
 
@@ -978,7 +983,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetProcessVersion( DWORD pid )
 BOOL WINAPI DECLSPEC_HOTPATCH GetProcessWorkingSetSizeEx( HANDLE process, SIZE_T *minset,
                                                           SIZE_T *maxset, DWORD *flags)
 {
-    FIXME( "(%p,%p,%p,%p): stub\n", process, minset, maxset, flags );
+    TRACE( "(%p,%p,%p,%p)\n", process, minset, maxset, flags );
     /* 32 MB working set size */
     if (minset) *minset = 32*1024*1024;
     if (maxset) *maxset = 32*1024*1024;
@@ -1221,8 +1226,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetPriorityClass( HANDLE process, DWORD class )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetProcessAffinityUpdateMode( HANDLE process, DWORD flags )
 {
-    FIXME( "(%p,0x%08lx): stub\n", process, flags );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+    TRACE( "(%p,0x%08lx)\n", process, flags );
+    SetLastError( ERROR_NOT_SUPPORTED );
     return FALSE;
 }
 
@@ -1233,8 +1238,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetProcessAffinityUpdateMode( HANDLE process, DWOR
 BOOL WINAPI DECLSPEC_HOTPATCH SetProcessGroupAffinity( HANDLE process, const GROUP_AFFINITY *new,
                                                        GROUP_AFFINITY *old )
 {
-    FIXME( "(%p,%p,%p): stub\n", process, new, old );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+    TRACE( "(%p,%p,%p)\n", process, new, old );
+    SetLastError( ERROR_NOT_SUPPORTED );
     return FALSE;
 }
 
@@ -1245,8 +1250,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetProcessGroupAffinity( HANDLE process, const GRO
 BOOL WINAPI /* DECLSPEC_HOTPATCH */ SetProcessMitigationPolicy( PROCESS_MITIGATION_POLICY policy,
                                                           void *buffer, SIZE_T length )
 {
-    FIXME( "(%d, %p, %Iu): stub\n", policy, buffer, length );
-    return TRUE;
+    TRACE( "(%d, %p, %Iu)\n", policy, buffer, length );
+    SetLastError( ERROR_NOT_SUPPORTED );
+    return FALSE;
 }
 
 
@@ -1264,7 +1270,7 @@ BOOL WINAPI /* DECLSPEC_HOTPATCH */ SetProcessPriorityBoost( HANDLE process, BOO
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetProcessShutdownParameters( DWORD level, DWORD flags )
 {
-    FIXME( "(%08lx, %08lx): partial stub.\n", level, flags );
+    TRACE( "(%08lx, %08lx)\n", level, flags );
     shutdown_flags = flags;
     shutdown_priority = level;
     return TRUE;
@@ -1320,9 +1326,8 @@ void init_startup_info( RTL_USER_PROCESS_PARAMETERS *params )
  */
 BOOL WINAPI BaseFlushAppcompatCache(void)
 {
-    FIXME( "stub\n" );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    TRACE( "() - no-op\n" );
+    return TRUE;
 }
 
 

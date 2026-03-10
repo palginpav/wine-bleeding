@@ -825,6 +825,31 @@ static void create_dynamic_registry_keys(void)
         RegCloseKey( key );
 }
 
+/* Ensure WPF uses software rendering by default.
+ * This creates HKCU\\Software\\Microsoft\\Avalon.Graphics with DisableHWAcceleration = 1
+ * if the value is missing or of a wrong type, but does not override an explicit user setting. */
+static void create_avalon_graphics_key(void)
+{
+    static const WCHAR avalon_keyW[] = L"Software\\Microsoft\\Avalon.Graphics";
+    static const WCHAR disableW[] = L"DisableHWAcceleration";
+    DWORD value, type, size;
+    HKEY key;
+
+    if (RegCreateKeyExW( HKEY_CURRENT_USER, avalon_keyW, 0, NULL, 0,
+                         KEY_ALL_ACCESS, NULL, &key, NULL ))
+        return;
+
+    size = sizeof(value);
+    if (RegQueryValueExW( key, disableW, NULL, &type, (BYTE *)&value, &size ) ||
+        type != REG_DWORD)
+    {
+        value = 1;
+        set_reg_value_dword( key, disableW, value );
+    }
+
+    RegCloseKey( key );
+}
+
 /* create the ComputerName registry keys */
 static void create_computer_name_keys(void)
 {
@@ -910,6 +935,13 @@ static void create_volatile_environment_registry_key(void)
     }
 
     set_reg_value( hkey, L"SESSIONNAME", L"Console" );
+
+    /* Force .NET (Core) to use Windows NLS globalization instead of ICU.
+     * This avoids pseudo-locales like "en-us-posix" that some runtimes
+     * expose via ICU-only culture enumeration APIs, which then blow up
+     * in CultureInfo.GetCultureInfo().  Processes can still override this
+     * per-process by setting DOTNET_SYSTEM_GLOBALIZATION_USENLS themselves. */
+    set_reg_value( hkey, L"DOTNET_SYSTEM_GLOBALIZATION_USENLS", L"1" );
     RegCloseKey( hkey );
 }
 
@@ -1903,6 +1935,7 @@ int __cdecl main( int argc, char *argv[] )
     if (init || update) update_wineprefix( update );
 
     create_volatile_environment_registry_key();
+    create_avalon_graphics_key();
     create_known_dlls();
     initialize_internet();
 

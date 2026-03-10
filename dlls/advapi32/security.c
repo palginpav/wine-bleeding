@@ -109,6 +109,8 @@ static const AccountSid ACCOUNT_SIDS[] = {
     { WinOtherOrganizationSid, L"Other Organization", L"NT AUTHORITY", SidTypeWellKnownGroup },
     { WinBuiltinPerfMonitoringUsersSid, L"Performance Monitor Users", L"BUILTIN", SidTypeAlias },
     { WinBuiltinPerfLoggingUsersSid, L"Performance Log Users", L"BUILTIN", SidTypeAlias },
+    { WinBuiltinIUsersSid, L"IIS_IUSRS", L"BUILTIN", SidTypeAlias },
+    { WinBuiltinCryptoOperatorsSid, L"Cryptographic Operators", L"BUILTIN", SidTypeAlias },
     { WinBuiltinAnyPackageSid, L"ALL APPLICATION PACKAGES", L"APPLICATION PACKAGE AUTHORITY", SidTypeWellKnownGroup },
 };
 

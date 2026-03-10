@@ -4153,6 +4153,7 @@ unsigned char * WINAPI NdrComplexArrayMarshall(PMIDL_STUB_MESSAGE pStubMsg,
       return NULL;
   }
 
+  TRACE("complex array marshall: IsClient=%d\n", pStubMsg->IsClient);
   if (!pStubMsg->PointerBufferMark)
   {
     /* save buffer fields that may be changed by buffer sizer functions
@@ -4181,6 +4182,7 @@ unsigned char * WINAPI NdrComplexArrayMarshall(PMIDL_STUB_MESSAGE pStubMsg,
     pStubMsg->MaxCount = saved_max_count;
     pStubMsg->BufferLength = saved_buffer_length;
   }
+  TRACE("complex array marshall: IsClient=%d, pointer_buffer_mark_set=%d\n", pStubMsg->IsClient, pointer_buffer_mark_set);
 
   array_compute_and_write_conformance(FC_BOGUS_ARRAY, pStubMsg, pMemory, pFormat);
   array_write_variance_and_marshall(FC_BOGUS_ARRAY, pStubMsg,
@@ -4228,13 +4230,14 @@ unsigned char * WINAPI NdrComplexArrayUnmarshall(PMIDL_STUB_MESSAGE pStubMsg,
   NdrComplexArrayMemorySize(pStubMsg, pFormat);
   pStubMsg->IgnoreEmbeddedPointers = saved_ignore_embedded;
 
-  TRACE("difference = 0x%Ix\n", pStubMsg->Buffer - saved_buffer);
+  TRACE("difference = 0x%Ix IsClient=%d\n", pStubMsg->Buffer - saved_buffer, pStubMsg->IsClient);
   if (!pStubMsg->PointerBufferMark)
   {
     /* save it for use by embedded pointer code later */
     pStubMsg->PointerBufferMark = pStubMsg->Buffer;
     pointer_buffer_mark_set = TRUE;
   }
+  TRACE("complex array unmarshall: IsClient=%d, pointer_buffer_mark_set=%d\n", pStubMsg->IsClient, pointer_buffer_mark_set);
   /* restore the original buffer */
   pStubMsg->Buffer = saved_buffer;
 
@@ -5833,6 +5836,23 @@ static unsigned char *union_arm_unmarshall(PMIDL_STUB_MESSAGE pStubMsg,
                   pStubMsg->PointerBufferMark = pStubMsg->Buffer;
                   pStubMsg->Buffer = saved_buffer + 4;
                 }
+                else if (discriminant == 5)
+                {
+                  /* MSIFIELD_STREAM_BLOB: struct { ULONG size; [size_is(size)] byte *data }.
+                   * Wire layout: 4 (ptr) + 4 (size) + 4 (pad) + 4 (inner ptr) + size (data).
+                   * Force-advance buffer by full inline size so next wire_field reads correct type. */
+                  if (saved_buffer + 8 <= pStubMsg->BufferEnd)
+                  {
+                    ULONG ptr_id = *(ULONG *)saved_buffer;
+                    if (ptr_id != 0)
+                    {
+                      ULONG sz = *(ULONG *)(saved_buffer + 4);
+                      unsigned char *new_buf = saved_buffer + 4 + 16 + sz;
+                      if (new_buf <= pStubMsg->BufferEnd)
+                        pStubMsg->Buffer = new_buf;
+                    }
+                  }
+                }
                 break;
             case FC_IP:
                 /* must be dereferenced first */
@@ -5944,7 +5964,7 @@ static ULONG union_arm_memory_size(PMIDL_STUB_MESSAGE pStubMsg,
                 align_length(&pStubMsg->MemorySize, sizeof(void *));
                 pStubMsg->MemorySize += sizeof(void *);
                 if (!pStubMsg->IgnoreEmbeddedPointers)
-                    PointerMemorySize(pStubMsg, saved_buffer, pFormat);
+                    PointerMemorySize(pStubMsg, saved_buffer, desc);
                 break;
             default:
                 return m(pStubMsg, desc);

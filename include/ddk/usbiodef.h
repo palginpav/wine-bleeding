@@ -19,8 +19,13 @@
 #ifndef __DDK_USBIODEF_H__
 #define __DDK_USBIODEF_H__
 
+#include <guiddef.h>
+
 #define USB_SUBMIT_URB 0
 
 #define FILE_DEVICE_USB FILE_DEVICE_UNKNOWN
+
+/* Device interface GUID for USB devices (used with SetupAPI / CreateFile) */
+DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xa5dcbf10, 0x6530, 0x11d2, 0x90, 0x1f, 0x00, 0xc0, 0x4f, 0xb9, 0x51, 0xed);
 
 #endif /* __DDK_USBIODEF_H__ */

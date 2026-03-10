@@ -215,7 +215,7 @@ mismatch:
  */
 BOOL WINAPI TermsrvAppInstallMode(void)
 {
-    FIXME("stub\n");
+    TRACE("()\n");
     return FALSE;
 }
 
@@ -231,6 +231,6 @@ BOOL WINAPI TermsrvAppInstallMode(void)
  */
 DWORD WINAPI SetTermsrvAppInstallMode(BOOL bInstallMode)
 {
-    FIXME("(%d): stub\n", bInstallMode);
+    TRACE("(%d)\n", bInstallMode);
     return 0;
 }

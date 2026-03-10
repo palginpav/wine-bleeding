@@ -393,7 +393,10 @@ HRESULT WINAPI CorGetSvc(void *unk)
 {
     ERR_(winediag)("If this function is called, it is likely the result of a broken .NET installation\n");
 
-    return E_NOTIMPL;
+    /* No COM service object is exposed in Wine; report interface not available
+     * rather than E_NOTIMPL so callers don't treat this as "method not implemented". */
+    (void)unk;
+    return E_NOINTERFACE;
 }
 
 HRESULT WINAPI GetRequestedRuntimeInfo(LPCWSTR pExe, LPCWSTR pwszVersion, LPCWSTR pConfigurationFile,
@@ -503,26 +506,39 @@ HRESULT WINAPI LoadLibraryShim( LPCWSTR szDllName, LPCWSTR szVersion, LPVOID pvR
 
 HRESULT WINAPI LockClrVersion(FLockClrVersionCallback hostCallback, FLockClrVersionCallback *pBeginHostSetup, FLockClrVersionCallback *pEndHostSetup)
 {
-    FIXME("(%p %p %p): stub\n", hostCallback, pBeginHostSetup, pEndHostSetup);
+    TRACE("(%p %p %p): no-op\n", hostCallback, pBeginHostSetup, pEndHostSetup);
     return S_OK;
 }
 
 HRESULT WINAPI CoInitializeCor(DWORD fFlags)
 {
-    FIXME("(0x%08lx): stub\n", fFlags);
+    TRACE("(0x%08lx): no-op\n", fFlags);
     return S_OK;
 }
 
 HRESULT WINAPI GetAssemblyMDImport(LPCWSTR szFileName, REFIID riid, IUnknown **ppIUnk)
 {
-    FIXME("(%p %s, %s, %p): stub\n", szFileName, debugstr_w(szFileName), debugstr_guid(riid), *ppIUnk);
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    TRACE("(%s, %s, %p)\n", debugstr_w(szFileName), debugstr_guid(riid), ppIUnk);
+    if (ppIUnk)
+        *ppIUnk = NULL;
+    /* Metadata import API not wired to Mono; return CLR HRESULT not Win32. */
+    return COR_E_NOTSUPPORTED;
 }
 
 HRESULT WINAPI GetVersionFromProcess(HANDLE hProcess, LPWSTR pVersion, DWORD cchBuffer, DWORD *dwLength)
 {
-    FIXME("(%p, %p, %ld, %p): stub\n", hProcess, pVersion, cchBuffer, dwLength);
-    return E_NOTIMPL;
+    TRACE("(%p, %p, %ld, %p)\n", hProcess, pVersion, cchBuffer, dwLength);
+
+    if (!pVersion || !dwLength)
+        return E_POINTER;
+
+    /* Only the current process is supported; other processes would require
+     * reading the target's CLR headers. NULL handle is treated as current. */
+    if (hProcess && hProcess != GetCurrentProcess())
+        return HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);
+
+    *dwLength = cchBuffer;
+    return GetCORVersion(pVersion, cchBuffer, dwLength);
 }
 
 HRESULT WINAPI LoadStringRCEx(LCID culture, UINT resId, LPWSTR pBuffer, int iBufLen, int bQuiet, int* pBufLen)
@@ -532,8 +548,11 @@ HRESULT WINAPI LoadStringRCEx(LCID culture, UINT resId, LPWSTR pBuffer, int iBuf
         return E_INVALIDARG;
     pBuffer[0] = 0;
     if (resId) {
-        FIXME("(%ld, %x, %p, %d, %d, %p): semi-stub\n", culture, resId, pBuffer, iBufLen, bQuiet, pBufLen);
-        res = E_NOTIMPL;
+        TRACE("(%ld, %x, %p, %d, %d, %p): no resource strings\n", culture, resId, pBuffer, iBufLen, bQuiet, pBufLen);
+        /* No string resources are shipped with mscoree; return a CLR-style
+         * "not supported" so managed interop doesn't map E_NOTIMPL to
+         * PlatformNotSupportedException where possible. */
+        res = COR_E_NOTSUPPORTED;
     }
     else
         res = E_FAIL;

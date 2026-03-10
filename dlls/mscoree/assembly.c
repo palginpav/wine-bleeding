@@ -296,6 +296,12 @@ HRESULT assembly_get_vtable_fixups(ASSEMBLY *assembly, VTableFixup **fixups, DWO
 
     size = assembly_datadir_get_data(assembly, &assembly->corhdr->VTableFixups, (void**)fixups);
     *count = size / sizeof(VTableFixup);
+    /* Some mixed-mode binaries carry a trailing zeroed sentinel entry. */
+    while (*count &&
+           !(*fixups)[*count - 1].rva &&
+           !(*fixups)[*count - 1].count &&
+           !(*fixups)[*count - 1].type)
+        --*count;
 
     return S_OK;
 }

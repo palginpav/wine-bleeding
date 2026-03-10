@@ -985,8 +985,11 @@ NTSTATUS WINAPI IoSetDeviceInterfaceState( UNICODE_STRING *name, BOOLEAN enable 
     struct wine_rb_entry *entry;
     UNICODE_STRING control = RTL_CONSTANT_STRING( L"Control" );
     UNICODE_STRING linked = RTL_CONSTANT_STRING( L"Linked" );
+    static const WCHAR device_instanceW[] = {'D','e','v','i','c','e','I','n','s','t','a','n','c','e',0};
+    WCHAR device_instance_id[MAX_DEVICE_ID_LEN];
     WCHAR *path, *refstr, *p;
     UNICODE_STRING string;
+    UNICODE_STRING device_instance_name;
     DWORD data = enable;
     NTSTATUS ret;
     ULONG len;
@@ -1028,10 +1031,20 @@ NTSTATUS WINAPI IoSetDeviceInterfaceState( UNICODE_STRING *name, BOOLEAN enable 
     attr.Length = sizeof(attr);
     attr.ObjectName = &string;
     RtlInitUnicodeString( &string, path );
-    ret = NtOpenKey( &iface_key, KEY_CREATE_SUB_KEY, &attr );
+    ret = NtOpenKey( &iface_key, KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &attr );
+    if (ret == STATUS_OBJECT_NAME_NOT_FOUND)
+        ret = NtCreateKey( &iface_key, KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &attr, 0, NULL, REG_OPTION_NON_VOLATILE, NULL );
     free(path);
     if (ret)
         return ret;
+
+    /* SetupAPI enumerates interfaces by reading DeviceInstance from this key */
+    if (enable && !get_device_instance_id( iface->device, device_instance_id ))
+    {
+        RtlInitUnicodeString( &device_instance_name, device_instanceW );
+        NtSetValueKey( iface_key, &device_instance_name, 0, REG_SZ,
+                device_instance_id, (lstrlenW( device_instance_id ) + 1) * sizeof(WCHAR) );
+    }
 
     attr.RootDirectory = iface_key;
     attr.ObjectName = &control;

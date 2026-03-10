@@ -509,8 +509,8 @@
 @ stdcall -import FindNextFileW(long ptr)
 @ stdcall -import FindNextStreamW(long ptr)
 @ stdcall FindNextVolumeA(long ptr long)
-@ stub FindNextVolumeMountPointA
-@ stub FindNextVolumeMountPointW
+@ stdcall FindNextVolumeMountPointA(ptr ptr long)
+@ stdcall FindNextVolumeMountPointW(ptr ptr long)
 @ stdcall -import FindNextVolumeW(long ptr long)
 @ stdcall -import FindNLSString(long long wstr long wstr long ptr)
 @ stdcall -import FindNLSStringEx(wstr long wstr long wstr long ptr ptr ptr long)

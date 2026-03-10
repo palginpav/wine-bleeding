@@ -42,6 +42,25 @@
 WINE_DEFAULT_DEBUG_CHANNEL(seh);
 WINE_DECLARE_DEBUG_CHANNEL(winedbg);
 
+struct wer_memory_block
+{
+    void *block;
+    DWORD size;
+    struct wer_memory_block *next;
+};
+
+struct wer_file
+{
+    WCHAR *path;
+    WER_REGISTER_FILE_TYPE type;
+    DWORD flags;
+    struct wer_file *next;
+};
+
+static struct wer_memory_block *wer_blocks;
+static struct wer_file *wer_files;
+static DWORD wer_process_flags;
+
 typedef INT (WINAPI *MessageBoxA_funcptr)(HWND,LPCSTR,LPCSTR,UINT);
 typedef INT (WINAPI *MessageBoxW_funcptr)(HWND,LPCWSTR,LPCWSTR,UINT);
 
@@ -793,8 +812,15 @@ LONG WINAPI UnhandledExceptionFilter( EXCEPTION_POINTERS *epointers )
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerGetFlags( HANDLE process, DWORD *flags )
 {
-    FIXME( "(%p, %p) stub\n", process, flags );
-    return E_NOTIMPL;
+    TRACE( "(%p, %p)\n", process, flags );
+
+    if (!flags)
+        return E_INVALIDARG;
+
+    /* Windows documents the handle but commonly only the current process is used.
+       For now we ignore the handle and return per-process flags. */
+    *flags = wer_process_flags;
+    return S_OK;
 }
 
 
@@ -803,7 +829,7 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerGetFlags( HANDLE process, DWORD *flags
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterCustomMetadata( const WCHAR *key, const WCHAR *value )
 {
-    FIXME( "(%s, %s) stub\n", debugstr_w(key), debugstr_w(value) );
+    TRACE( "(%s, %s)\n", debugstr_w(key), debugstr_w(value) );
     return S_OK;
 }
 
@@ -814,8 +840,34 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterCustomMetadata( const WCHAR *k
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterFile( const WCHAR *file, WER_REGISTER_FILE_TYPE type,
                                                         DWORD flags )
 {
-    FIXME( "(%s, %d, %ld) stub\n", debugstr_w(file), type, flags );
-    return E_NOTIMPL;
+    struct wer_file *entry;
+    size_t len;
+
+    TRACE( "(%s, %d, %ld)\n", debugstr_w(file), type, flags );
+
+    if (!file || !*file)
+        return E_INVALIDARG;
+
+    /* Simple per-process registry of additional WER files. */
+    entry = HeapAlloc( GetProcessHeap(), 0, sizeof(*entry) );
+    if (!entry)
+        return E_OUTOFMEMORY;
+
+    len = lstrlenW( file ) + 1;
+    entry->path = HeapAlloc( GetProcessHeap(), 0, len * sizeof(WCHAR) );
+    if (!entry->path)
+    {
+        HeapFree( GetProcessHeap(), 0, entry );
+        return E_OUTOFMEMORY;
+    }
+    memcpy( entry->path, file, len * sizeof(WCHAR) );
+    entry->type  = type;
+    entry->flags = flags;
+
+    entry->next = wer_files;
+    wer_files   = entry;
+
+    return S_OK;
 }
 
 
@@ -824,8 +876,23 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterFile( const WCHAR *file, WER_R
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterMemoryBlock( void *block, DWORD size )
 {
-    FIXME( "(%p %ld) stub\n", block, size );
-    return E_NOTIMPL;
+    struct wer_memory_block *entry;
+
+    TRACE( "(%p %ld)\n", block, size );
+
+    if (!block || !size)
+        return E_INVALIDARG;
+
+    entry = HeapAlloc( GetProcessHeap(), 0, sizeof(*entry) );
+    if (!entry)
+        return E_OUTOFMEMORY;
+
+    entry->block = block;
+    entry->size  = size;
+    entry->next  = wer_blocks;
+    wer_blocks   = entry;
+
+    return S_OK;
 }
 
 
@@ -834,7 +901,7 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterMemoryBlock( void *block, DWOR
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterRuntimeExceptionModule( const WCHAR *dll, void *context )
 {
-    FIXME( "(%s, %p) stub\n", debugstr_w(dll), context );
+    TRACE( "(%s, %p)\n", debugstr_w(dll), context );
     return S_OK;
 }
 
@@ -844,7 +911,8 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerRegisterRuntimeExceptionModule( const 
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerSetFlags( DWORD flags )
 {
-    FIXME("(%ld) stub\n", flags);
+    TRACE("(%ld)\n", flags);
+    wer_process_flags = flags;
     return S_OK;
 }
 
@@ -854,7 +922,7 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerSetFlags( DWORD flags )
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterCustomMetadata( const WCHAR *key )
 {
-    FIXME( "(%s) stub\n", debugstr_w(key));
+    TRACE( "(%s)\n", debugstr_w(key) );
     return S_OK;
 }
 
@@ -864,8 +932,29 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterCustomMetadata( const WCHAR 
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterFile( const WCHAR *file )
 {
-    FIXME( "(%s) stub\n", debugstr_w(file) );
-    return E_NOTIMPL;
+    struct wer_file *cur = wer_files, *prev = NULL;
+
+    TRACE( "(%s)\n", debugstr_w(file) );
+
+    if (!file || !*file)
+        return E_INVALIDARG;
+
+    while (cur)
+    {
+        if (!lstrcmpW( cur->path, file ))
+        {
+            if (prev) prev->next = cur->next;
+            else wer_files = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur->path );
+            HeapFree( GetProcessHeap(), 0, cur );
+            return S_OK;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    /* File not registered; treat as success to match common expectations. */
+    return S_OK;
 }
 
 
@@ -874,8 +963,28 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterFile( const WCHAR *file )
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterMemoryBlock( void *block )
 {
-    FIXME( "(%p) stub\n", block );
-    return E_NOTIMPL;
+    struct wer_memory_block *cur = wer_blocks, *prev = NULL;
+
+    TRACE( "(%p)\n", block );
+
+    if (!block)
+        return E_INVALIDARG;
+
+    while (cur)
+    {
+        if (cur->block == block)
+        {
+            if (prev) prev->next = cur->next;
+            else wer_blocks = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur );
+            return S_OK;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    /* Block not registered; succeed as a no-op. */
+    return S_OK;
 }
 
 
@@ -884,7 +993,7 @@ HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterMemoryBlock( void *block )
  */
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ WerUnregisterRuntimeExceptionModule( const WCHAR *dll, void *context )
 {
-    FIXME( "(%s, %p) stub\n", debugstr_w(dll), context );
+    TRACE( "(%s, %p)\n", debugstr_w(dll), context );
     return S_OK;
 }
 

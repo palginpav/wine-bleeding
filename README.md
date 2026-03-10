@@ -1,171 +1,144 @@
-## INTRODUCTION
+# wine-bleeding
 
-Wine is a program which allows running Microsoft Windows programs
-(including DOS, Windows 3.x, Win32, and Win64 executables) on Unix.
-It consists of a program loader which loads and executes a Microsoft
-Windows binary, and a library (called Winelib) that implements Windows
-API calls using their Unix, X11 or Mac equivalents.  The library may also
-be used for porting Windows code into native Unix executables.
+`wine-bleeding` is a Wine fork aimed at one practical result: a standalone, ready-to-run compatibility runtime rather than a bare upstream source checkout. It carries targeted compatibility work for real-world Windows software, including WinRT USB, shell/file dialogs, MSI, Mono/.NET, WPF, and related integration paths, then packages the result into a Proton-style `dist/WINE-BLEEDING-*` layout with DXVK, VKD3D-Proton, DXVK-NVAPI, optional native Linux libraries, and optional `wine-icu`. In short: upstream Wine is the base, `wine-bleeding` is the runtime product built on top of it.
 
-Wine is free software, released under the GNU LGPL; see the file
-LICENSE for the details.
+## Quick start (recommended)
 
+From the **root of the Wine source tree** (where `configure` and `tools/` are):
 
-## QUICK START
-
-From the top-level directory of the Wine source (which contains this file),
-run:
-
-```
-./configure
-make
+```bash
+./tools/full-build.sh
 ```
 
-Then either install Wine:
+This script will:
 
-```
-make install
-```
+1. Check that required tools are installed (meson, ninja, gcc, make, flex, bison, pkg-config, etc.).
+2. Prepare **MinGW** (download from musl.cc or use system/build-deps; optionally build from source).
+3. **Configure** Wine with maximum features (WoW64 when both MinGW arches are available).
+4. **Build** Wine.
+5. Build **DXVK**, **VKD3D-Proton**, **DXVK-NVAPI** (x64 and x32).
+6. Create the **dist** under `dist/WINE-BLEEDING-DDMMYYYY/`: install Wine from this tree, copy DXVK/VKD3D/NVAPI DLLs, and optionally copy native libs from the system.
+7. Build and install **wine-icu** (under system libicu) into `dist/.../lib/wine/icu/` so installers and .NET apps that need ICU work without libicu68 (use `--no-wine-icu` to skip).
 
-Or run Wine directly from the build directory:
+After a successful run, use:
 
-```
-./wine notepad
-```
-
-Run programs as `wine program`. For more information and problem
-resolution, read the rest of this file, the Wine man page, and
-especially the wealth of information found at https://www.winehq.org.
-
-
-## REQUIREMENTS
-
-To compile and run Wine, you must have one of the following:
-
-- Linux version 2.6.22 or later
-- FreeBSD 12.4 or later
-- Solaris x86 9 or later
-- NetBSD-current
-- macOS 10.12 or later
-
-As Wine requires kernel-level thread support to run, only the operating
-systems mentioned above are supported.  Other operating systems which
-support kernel threads may be supported in the future.
-
-**FreeBSD info**:
-  See https://wiki.freebsd.org/Wine for more information.
-
-**Solaris info**:
-  You will most likely need to build Wine with the GNU toolchain
-  (gcc, gas, etc.). Warning : installing gas does *not* ensure that it
-  will be used by gcc. Recompiling gcc after installing gas or
-  symlinking cc, as and ld to the gnu tools is said to be necessary.
-
-**NetBSD info**:
-  Make sure you have the USER_LDT, SYSVSHM, SYSVSEM, and SYSVMSG options
-  turned on in your kernel.
-
-**macOS info**:
-  You need Xcode/Xcode Command Line Tools or Apple cctools.  The
-  minimum requirements for compiling Wine are clang 3.8 with the
-  MacOSX10.13.sdk and mingw-w64 v12 for 32-bit wine.  The
-  MacOSX10.14.sdk and later can build 64-bit wine.
-
-**Supported file systems**:
-  Wine should run on most file systems. A few compatibility problems
-  have also been reported using files accessed through Samba. Also,
-  NTFS does not provide all the file system features needed by some
-  applications.  Using a native Unix file system is recommended.
-
-**Basic requirements**:
-  You need to have the X11 development include files installed
-  (called xorg-dev in Debian and libX11-devel in Red Hat).
-  Of course you also need make (most likely GNU make).
-  You also need flex version 2.5.33 or later and bison.
-
-**Optional support libraries**:
-  Configure will display notices when optional libraries are not found
-  on your system. See https://gitlab.winehq.org/wine/wine/-/wikis/Building-Wine
-  for hints about the packages you should install. On 64-bit
-  platforms, you have to make sure to install the 32-bit versions of
-  these libraries.
-
-
-## COMPILATION
-
-To build Wine, do:
-
-```
-./configure
-make
+```bash
+./dist/WINE-BLEEDING-*/bin/wine --version
 ```
 
-This will build the program "wine" and numerous support libraries/binaries.
-The program "wine" will load and run Windows executables.
-The library "libwine" ("Winelib") can be used to compile and link
-Windows source code under Unix.
+---
 
-To see compile configuration options, do `./configure --help`.
+## Commands overview
 
-For more information, see https://gitlab.winehq.org/wine/wine/-/wikis/Building-Wine
+| Command | Purpose |
+|--------|---------|
+| `./tools/full-build.sh` | Full pipeline: env check → MinGW → configure Wine → build Wine → build deps → create dist. |
+| `./tools/configure-wine-full.sh` | Configure Wine with max features (WoW64, X, build-id; no optional features disabled). |
+| `./tools/build-full-wine-deps.sh` | Build DXVK, VKD3D-Proton, DXVK-NVAPI and create dist; install Wine into dist if already built. |
 
+All commands are meant to be run from the **wine-bleeding tree root**.
 
-## SETUP
+---
 
-Once Wine has been built correctly, you can do `make install`; this
-will install the wine executable and libraries, the Wine man page, and
-other needed files.
+## full-build.sh options
 
-Don't forget to uninstall any conflicting previous Wine installation
-first.  Try either `dpkg -r wine` or `rpm -e wine` or `make uninstall`
-before installing.
+Same options as `build-full-wine-deps.sh`:
 
-Once installed, you can run the `winecfg` configuration tool. See the
-Support area at https://www.winehq.org/ for configuration hints.
+| Option | Effect |
+|--------|--------|
+| `--build-mingw-from-source` | Build MinGW from source (Zeranoe script; 30–60 min). Use when the distro has no MinGW and you prefer not to use the musl.cc tarball. |
+| `--no-install-wine` | Do not install Wine into the dist (only DXVK/VKD3D/NVAPI and layout). |
+| `--no-bundle-system-libs` | Do not copy native libs (Vulkan, GStreamer, etc.) from the system into the dist. |
+| `--copy-native-from=DIR` | Copy native libs from an existing dist (e.g. another Proton) instead of the system. Implies no system bundling. |
+| `--force-rebuild` | Always rebuild DXVK, VKD3D-Proton, DXVK-NVAPI (ignore saved rev). |
+| `--no-wine-icu` | Do not build/install wine-icu (system libicu) into the dist. Use if you have libicu68 or do not need ICU for installers. |
 
+Examples:
 
-## RUNNING PROGRAMS
-
-When invoking Wine, you may specify the entire path to the executable,
-or a filename only.
-
-For example, to run Notepad:
-
-```
-wine notepad            (using the search Path as specified in
-wine notepad.exe         the registry to locate the file)
-
-wine c:\\windows\\notepad.exe      (using DOS filename syntax)
-
-wine ~/.wine/drive_c/windows/notepad.exe  (using Unix filename syntax)
-
-wine notepad.exe readme.txt          (calling program with parameters)
+```bash
+./tools/full-build.sh --build-mingw-from-source
+./tools/full-build.sh --no-bundle-system-libs
+DIST_NAME=MyWine ./tools/full-build.sh
 ```
 
-Wine is not perfect, so some programs may crash. If that happens you
-will get a crash log that you should attach to your report when filing
-a bug.
+---
 
+## Step-by-step (without full-build.sh)
 
-## GETTING MORE INFORMATION
+If you prefer to run steps manually:
 
-- **WWW**: A great deal of information about Wine is available from WineHQ at
-	https://www.winehq.org/ : various Wine Guides, application database,
-	bug tracking. This is probably the best starting point.
+1. **MinGW in PATH**  
+   Either install mingw-w64 (e.g. `mingw64-gcc` / `mingw-w64`) or run once:
+   ```bash
+   ./tools/build-full-wine-deps.sh --only-mingw
+   ```
+   then ensure `build-deps/.mingw-path` is sourced or add `build-deps/mingw64-cross/bin` (and `mingw32-cross/bin` if present) to `PATH`.
 
-- **FAQ**: The Wine FAQ is located at https://gitlab.winehq.org/wine/wine/-/wikis/FAQ
+2. **Configure Wine**
+   ```bash
+   ./tools/configure-wine-full.sh
+   ```
 
-- **Wiki**: The Wine Wiki is located at https://gitlab.winehq.org/wine/wine/-/wikis/
+3. **Build Wine**
+   ```bash
+   make -j$(nproc)
+   ```
 
-- **Gitlab**: Wine development is hosted at https://gitlab.winehq.org
+4. **Build deps and create dist**
+   ```bash
+   ./tools/build-full-wine-deps.sh
+   ```
 
-- **Mailing lists**:
-	There are several mailing lists for Wine users and developers; see
-	https://gitlab.winehq.org/wine/wine/-/wikis/Forums for more
-	information.
+---
 
-- **Bugs**: Report bugs to Wine Bugzilla at https://bugs.winehq.org
-	Please search the bugzilla database to check whether your
-	problem is already known or fixed before posting a bug report.
+## Requirements
 
-- **IRC**: Online help is available at channel `#WineHQ` on irc.libera.chat.
+- **Build tools:** gcc, g++, make, flex, bison, pkg-config, **meson**, **ninja**.
+- **For DXVK/VKD3D:** **glslang** (glslangValidator), **Vulkan** (vulkan-headers, vulkan-loader).
+- **MinGW:** Either from the system (e.g. `mingw-w64`), or the scripts will download a prebuilt cross-compiler from [musl.cc](https://musl.cc) into `build-deps/`, or you can use `--build-mingw-from-source` to build MinGW (needs gcc, g++, make, bison, flex, git, texinfo, etc.).
+
+More optional packages (X11, Pulse, GStreamer, FFmpeg, libusb, udev, etc.) enable more Wine features; `configure` will report what is missing. See your distro’s Wine build docs for package names (e.g. Fedora: `libX11-devel`, `vulkan-headers`; Debian: `libx11-dev`, `libvulkan-dev`, `mingw-w64`).
+
+---
+
+## Dist layout
+
+The output lives under `dist/WINE-BLEEDING-DDMMYYYY/` (or `DIST_NAME` if set):
+
+| Path | Content |
+|------|--------|
+| `bin/` | Wine executables (wine, wineserver, winecfg, etc.). |
+| `bin-wow64/` | Symlink/copy of the Wine launcher for GE-Proton–style layout. |
+| `lib64` | Symlink to `lib/wine`. |
+| `lib/wine/` | Wine DLLs and loaders; subdirs `dxvk`, `vkd3d-proton`, `nvapi`, and (if built) `icu` with DXVK, D3D12, NVAPI and wine-icu DLLs. Standalone libvkd3d is not built. |
+| `lib/$(uname -m)-linux-gnu/` | Native libs copied from the system (if not disabled). |
+| `share/` | Wine data (fonts, nls, etc.). |
+
+Use this dist as a standalone Wine runtime or drop it into PortProton-style launchers.
+
+---
+
+## USB (Windows.Devices.Usb)
+
+This tree contains active implementation work for **Windows.Devices.Usb** (WinRT). The intended stack is:
+
+- `Windows.Devices.Usb`
+- `winusb.dll`
+- `wineusb.sys`
+- native `libusb` backend
+
+For USB to work at runtime you need **libusb** and **udev**, plus appropriate device permissions on the host system.
+
+---
+
+## Scope note
+
+This repository still contains the normal upstream Wine source layout, and upstream Wine documentation remains relevant for many low-level build and runtime details.
+
+What this README describes is the **fork-specific purpose** of `wine-bleeding`: the extra compatibility work and the standalone runtime build flow layered on top of Wine.
+
+---
+
+## Upstream Wine
+
+For general Wine build and usage, see the [Wine HQ wiki](https://gitlab.winehq.org/wine/wine/-/wikis/Building-Wine) and [winehq.org](https://www.winehq.org). This README describes only the **extra** scripts and the Proton-style dist build used in this tree.

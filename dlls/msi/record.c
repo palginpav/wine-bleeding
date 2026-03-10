@@ -45,6 +45,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(msidb);
 #define MSIFIELD_INT    1
 #define MSIFIELD_WSTR   3
 #define MSIFIELD_STREAM 4
+#define MSIFIELD_STREAM_BLOB 5
 
 static void MSI_FreeField( MSIFIELD *field )
 {
@@ -506,6 +507,44 @@ static UINT get_stream_size( IStream *stm )
     if( FAILED(r) )
         return 0;
     return stat.cbSize.QuadPart;
+}
+
+/* Max stream size to send as blob over RPC. */
+#define STREAM_BLOB_MAX_SIZE  (512 * 1024 * 1024)  /* 512 MB */
+
+/* Read stream into a buffer for cross-process marshalling (avoids broken IStream proxy) */
+static byte *stream_to_blob( IStream *stm, ULONG *out_size )
+{
+    STATSTG stat;
+    LARGE_INTEGER pos;
+    ULONG read_count;
+    byte *buf;
+    HRESULT hr;
+
+    *out_size = 0;
+    hr = IStream_Stat( stm, &stat, STATFLAG_NONAME );
+    if (FAILED( hr ) || (stat.cbSize.QuadPart >> 32))
+        return NULL;
+    *out_size = (ULONG)stat.cbSize.QuadPart;
+    if (*out_size > STREAM_BLOB_MAX_SIZE)
+    {
+        WARN( "stream too large to marshal over RPC (%lu bytes)\n", *out_size );
+        return NULL;  /* too large for RPC / allocation */
+    }
+    if (!*out_size)
+        return midl_user_allocate( 1 ); /* empty stream: valid 0-byte blob */
+    buf = midl_user_allocate( *out_size );
+    if (!buf)
+        return NULL;
+    pos.QuadPart = 0;
+    IStream_Seek( stm, pos, STREAM_SEEK_SET, NULL );
+    hr = IStream_Read( stm, buf, *out_size, &read_count );
+    if (FAILED( hr ) || read_count != *out_size)
+    {
+        midl_user_free( buf );
+        return NULL;
+    }
+    return buf;
 }
 
 static UINT MSI_RecordDataSize(MSIRECORD *rec, UINT iField)
@@ -1076,6 +1115,41 @@ UINT copy_remote_record(const struct wire_record *in, MSIHANDLE out)
         case MSIFIELD_STREAM:
             r = MSI_RecordSetIStream(rec, i, in->fields[i].u.stream);
             break;
+        case MSIFIELD_STREAM_BLOB:
+            {
+                HGLOBAL hglob;
+                IStream *stm = NULL;
+                void *ptr;
+                ULONG size = in->fields[i].u.stream_blob.size;
+                byte *data = in->fields[i].u.stream_blob.data;
+
+                hglob = GlobalAlloc( GMEM_MOVEABLE, size ? size : 1 );
+                if (hglob && size)
+                {
+                    ptr = GlobalLock( hglob );
+                    if (ptr)
+                    {
+                        memcpy( ptr, data, size );
+                        GlobalUnlock( hglob );
+                    }
+                    else
+                    {
+                        GlobalFree( hglob );
+                        hglob = NULL;
+                    }
+                }
+                if (hglob && SUCCEEDED( CreateStreamOnHGlobal( hglob, TRUE, &stm ) ))
+                {
+                    r = MSI_RecordSetIStream( rec, i, stm );
+                    IStream_Release( stm );
+                }
+                else
+                {
+                    if (hglob) GlobalFree( hglob );
+                    r = ERROR_OUTOFMEMORY;
+                }
+            }
+            break;
         default:
             ERR("invalid field type %d\n", in->fields[i].type);
             break;
@@ -1116,11 +1190,20 @@ struct wire_record *marshal_record(MSIHANDLE handle)
         return NULL;
 
     ret = midl_user_allocate(sizeof(*ret) + rec->count * sizeof(ret->fields[0]));
+    if (!ret)
+    {
+        msiobj_release(&rec->hdr);
+        return NULL;
+    }
+
     ret->count = rec->count;
     ret->cookie = rec->cookie;
 
     for (i = 0; i <= rec->count; i++)
     {
+        memset(&ret->fields[i], 0, sizeof(ret->fields[i]));
+        ret->fields[i].type = rec->fields[i].type;
+
         switch (rec->fields[i].type)
         {
         case MSIFIELD_NULL:
@@ -1132,14 +1215,26 @@ struct wire_record *marshal_record(MSIHANDLE handle)
             ret->fields[i].u.szwVal = wcsdup(rec->fields[i].u.szwVal);
             break;
         case MSIFIELD_STREAM:
-            IStream_AddRef(rec->fields[i].u.stream);
-            ret->fields[i].u.stream = rec->fields[i].u.stream;
+            {
+                byte *blob = stream_to_blob( rec->fields[i].u.stream, &ret->fields[i].u.stream_blob.size );
+                if (blob)
+                {
+                    ret->fields[i].type = MSIFIELD_STREAM_BLOB;
+                    ret->fields[i].u.stream_blob.data = blob;
+                }
+                else
+                {
+                    /* Never send IStream over RPC (proxy fails in other process). Send NULL. */
+                    ret->fields[i].type = MSIFIELD_NULL;
+                }
+            }
             break;
         default:
             ERR("invalid field type %d\n", rec->fields[i].type);
             break;
         }
-        ret->fields[i].type = rec->fields[i].type;
+        /* NDR marshals wire_field.len; uninitialized value caused buffer overflow on unmarshal */
+        ret->fields[i].len = 0;
     }
 
     msiobj_release(&rec->hdr);
@@ -1150,12 +1245,17 @@ void free_remote_record(struct wire_record *rec)
 {
     int i;
 
+    if (!rec)
+        return;
+
     for (i = 0; i <= rec->count; i++)
     {
         if (rec->fields[i].type == MSIFIELD_WSTR)
             midl_user_free(rec->fields[i].u.szwVal);
         else if (rec->fields[i].type == MSIFIELD_STREAM)
             IStream_Release(rec->fields[i].u.stream);
+        else if (rec->fields[i].type == MSIFIELD_STREAM_BLOB)
+            midl_user_free(rec->fields[i].u.stream_blob.data);
     }
 
     midl_user_free(rec);

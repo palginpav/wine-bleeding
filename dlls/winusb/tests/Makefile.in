@@ -1,0 +1,5 @@
+TESTDLL = winusb.dll
+IMPORTS = setupapi
+
+SOURCES = \
+	winusb.c

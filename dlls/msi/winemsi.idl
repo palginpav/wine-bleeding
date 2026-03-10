@@ -38,18 +38,23 @@ typedef int MSIDBERROR;
 #define MSIFIELD_INT    1
 #define MSIFIELD_WSTR   3
 #define MSIFIELD_STREAM 4
+#define MSIFIELD_STREAM_BLOB 5
 cpp_quote("#endif")
 cpp_quote("#include \"msiquery.h\"")
 
 struct wire_field {
     unsigned int type;
+    int len;
     [switch_is(type)] union {
         [case(MSIFIELD_NULL)] ;
         [case(MSIFIELD_INT)] int iVal;
         [case(MSIFIELD_WSTR), string] LPWSTR szwVal;
         [case(MSIFIELD_STREAM)] IStream *stream;
+        [case(MSIFIELD_STREAM_BLOB)] struct {
+            ULONG size;
+            [size_is(size)] byte *data;
+        } stream_blob;
     } u;
-    int len;
 };
 
 /* compatible with MSIRECORD minus header */

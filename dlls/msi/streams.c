@@ -496,6 +496,11 @@ static UINT load_streams( MSIDATABASE *db )
     return r;
 }
 
+UINT msi_load_database_streams( MSIDATABASE *db )
+{
+    return load_streams( db );
+}
+
 UINT msi_get_stream( MSIDATABASE *db, const WCHAR *name, IStream **ret )
 {
     MSISTREAM *stream;
@@ -523,7 +528,16 @@ UINT msi_get_stream( MSIDATABASE *db, const WCHAR *name, IStream **ret )
     hr = open_stream( db, encname, ret );
     free( encname );
     if (FAILED( hr ))
-        return ERROR_FUNCTION_FAILED;
+    {
+        /* Some MSIs use unencoded stream names; try opening by logical name */
+        hr = open_stream( db, name, ret );
+        if (FAILED( hr ))
+        {
+            ERR( "stream %s not found (encoded and logical name open failed)\n", debugstr_w( name ) );
+            return ERROR_FUNCTION_FAILED;
+        }
+        TRACE("stream %s opened by logical name (encoded open failed)\n", debugstr_w( name ));
+    }
 
     r = append_stream( db, name, *ret );
     if (r != ERROR_SUCCESS)

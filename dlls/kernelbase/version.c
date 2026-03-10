@@ -248,7 +248,9 @@ done:
         if (current_version.dwMajorVersion > 10)
             FIXME("Unsupported current_version.dwMajorVersion %lu.\n", current_version.dwMajorVersion);
 
-        ver = nt->OptionalHeader.MajorOperatingSystemVersion >= 10 ? NULL : &windows8_1_version_info;
+        /* When registry reports 10+, always report it to the app. Otherwise installers
+         * that refuse to run on Vista/7/8/8.1 (e.g. BarTender) see 6.3 and fail. */
+        ver = NULL;
     }
 
     if (ver)
@@ -1552,7 +1554,8 @@ BOOL WINAPI GetVersionExW( OSVERSIONINFOW *info )
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *length, WCHAR *id )
 {
-    FIXME( "(%p %p): stub\n", length, id );
+    TRACE( "(%p %p)\n", length, id );
+    if (length) *length = 0;
     return APPMODEL_ERROR_NO_APPLICATION;
 }
 
@@ -1561,7 +1564,8 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *le
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p): stub\n", length, name );
+    TRACE( "(%p %p)\n", length, name );
+    if (length) *length = 0;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1571,7 +1575,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length,
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p): stub\n", length, name );
+    TRACE( "(%p %p)\n", length, name );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1581,7 +1585,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, W
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buffer )
 {
-    FIXME( "(%p %p): stub\n", len, buffer );
+    TRACE( "(%p %p)\n", len, buffer );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1590,7 +1594,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buff
  */
 LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE *buffer, UINT32 *count )
 {
-    FIXME( "(%#x %p %p %p): stub\n", flags, buffer_size, buffer, count );
+    TRACE( "(%#x %p %p %p)\n", flags, buffer_size, buffer, count );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1599,7 +1603,7 @@ LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackagePath( UINT32 *length, WCHAR *path )
 {
-    FIXME( "(%p %p): stub\n", length, path );
+    TRACE( "(%p %p)\n", length, path );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1609,7 +1613,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackagePath( UINT32 *length, WCHAR
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFullName( HANDLE process, UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p %p): stub\n", process, length, name );
+    TRACE( "(%p %p %p)\n", process, length, name );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1619,7 +1623,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFullName( HANDLE process, UINT32 *
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p %p): stub\n", process, length, name );
+    TRACE( "(%p %p %p)\n", process, length, name );
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 
@@ -1629,7 +1633,7 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32
 LONG WINAPI DECLSPEC_HOTPATCH GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count,
                                                          WCHAR *full_names, UINT32 *buffer_len, WCHAR *buffer)
 {
-    FIXME( "(%s %p %p %p %p): stub\n", debugstr_w(family_name), count, full_names, buffer_len, buffer );
+    TRACE( "(%s %p %p %p %p)\n", debugstr_w(family_name), count, full_names, buffer_len, buffer );
 
     if (!count || !buffer_len)
         return ERROR_INVALID_PARAMETER;
@@ -1647,7 +1651,7 @@ LONG WINAPI GetPackagePathByFullName(const WCHAR *name, UINT32 *len, WCHAR *path
     if (!len || !name)
         return ERROR_INVALID_PARAMETER;
 
-    FIXME( "(%s %p %p): stub\n", debugstr_w(name), len, path );
+    TRACE( "(%s %p %p)\n", debugstr_w(name), len, path );
 
     return APPMODEL_ERROR_NO_PACKAGE;
 }

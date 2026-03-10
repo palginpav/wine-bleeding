@@ -641,6 +641,10 @@ static struct strarray get_link_args( const char *output_name )
         strarray_add( &link_args, strmake( "-Wl,-filealign:%s,-align:%s,-driver", file_align, section_align ));
         strarray_add( &link_args, "-Wl,-merge:.CRT=.rdata" );
 
+        /* With clang+lld, i386 objects use DWARF unwinding; disable safeseh to avoid link errors. */
+        if (target.cpu == CPU_i386 && cc_cmd && strstr( cc_cmd, "clang" ))
+            strarray_add( &link_args, "-Wl,-safeseh:no" );
+
         strarray_addall( &link_args, flags );
         return link_args;
 
@@ -1108,7 +1112,9 @@ static void build_spec_obj( const char *spec_file, const char *output_file,
 
     if (!is_shared && large_address_aware) strarray_add( &spec_args, "--large-address-aware" );
 
-    if (target.platform == PLATFORM_WINDOWS && target.cpu == CPU_i386)
+    /* With clang+lld, i386 object files use DWARF unwinding and are not SEH-compatible;
+     * passing --safeseh causes lld to reject them. Only enable safeseh when not using clang. */
+    if (target.platform == PLATFORM_WINDOWS && target.cpu == CPU_i386 && (!cc_cmd || strstr( cc_cmd, "clang" ) == NULL))
         strarray_add(&spec_args, "--safeseh");
 
     if (entry_point)

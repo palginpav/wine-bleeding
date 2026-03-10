@@ -1063,25 +1063,27 @@ BOOLEAN WINAPI GetComputerObjectNameW(
 SECURITY_STATUS WINAPI AddSecurityPackageA(LPSTR name, SECURITY_PACKAGE_OPTIONS *options)
 {
     FIXME("(%s %p)\n", debugstr_a(name), options);
-    return E_NOTIMPL;
+    /* Dynamic security packages are not supported; behave as on systems
+       without SSP interface support and report not supported. */
+    return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
 SECURITY_STATUS WINAPI AddSecurityPackageW(LPWSTR name, SECURITY_PACKAGE_OPTIONS *options)
 {
     FIXME("(%s %p)\n", debugstr_w(name), options);
-    return E_NOTIMPL;
+    return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
 SECURITY_STATUS WINAPI DeleteSecurityPackageA(LPSTR name)
 {
     FIXME("(%s)\n", debugstr_a(name));
-    return E_NOTIMPL;
+    return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
 SECURITY_STATUS WINAPI DeleteSecurityPackageW(LPWSTR name)
 {
     FIXME("(%s)\n", debugstr_w(name));
-    return E_NOTIMPL;
+    return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
 /***********************************************************************
@@ -1158,9 +1160,28 @@ BOOLEAN WINAPI GetUserNameExW(
             return FALSE;
         }
 
+    case NameDisplay:
+        {
+            WCHAR username[UNLEN + 1];
+            DWORD len = ARRAY_SIZE(username);
+
+            if (!GetUserNameW(username, &len))
+                return FALSE;
+
+            if (lstrlenW(username) < *nSize)
+            {
+                lstrcpyW(lpNameBuffer, username);
+                *nSize = lstrlenW(username);
+                return TRUE;
+            }
+
+            SetLastError(ERROR_MORE_DATA);
+            *nSize = lstrlenW(username) + 1;
+            return FALSE;
+        }
+
     case NameUnknown:
     case NameFullyQualifiedDN:
-    case NameDisplay:
     case NameUniqueId:
     case NameCanonical:
     case NameUserPrincipal:
@@ -1182,9 +1203,52 @@ BOOLEAN WINAPI TranslateNameA(
   EXTENDED_NAME_FORMAT DesiredNameFormat, LPSTR lpTranslatedName,
   PULONG nSize)
 {
-    FIXME("%p %s %s %p %p\n", lpAccountName, debugstr_NameFormat(AccountNameFormat),
+    WCHAR *accountW = NULL;
+    WCHAR bufferW[UNLEN + 1 + MAX_COMPUTERNAME_LENGTH + 1];
+    ULONG sizeW = ARRAY_SIZE(bufferW);
+    BOOL ret;
+
+    TRACE("%p %s %s %p %p\n", lpAccountName, debugstr_NameFormat(AccountNameFormat),
           debugstr_NameFormat(DesiredNameFormat), lpTranslatedName, nSize);
-    return FALSE;
+
+    if (!lpTranslatedName || !nSize)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (lpAccountName)
+    {
+        int len = MultiByteToWideChar(CP_ACP, 0, lpAccountName, -1, NULL, 0);
+        accountW = malloc(len * sizeof(WCHAR));
+        if (!accountW)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        MultiByteToWideChar(CP_ACP, 0, lpAccountName, -1, accountW, len);
+    }
+
+    /* Delegate to the W-version; current implementation ignores lpAccountName
+       and returns the current user's name in the desired format when possible. */
+    ret = TranslateNameW(accountW, AccountNameFormat, DesiredNameFormat, bufferW, &sizeW);
+    free(accountW);
+
+    if (!ret)
+        return FALSE;
+
+    if (sizeW > *nSize)
+    {
+        *nSize = sizeW;
+        SetLastError(ERROR_MORE_DATA);
+        return FALSE;
+    }
+
+    if (!WideCharToMultiByte(CP_ACP, 0, bufferW, -1, lpTranslatedName, *nSize, NULL, NULL))
+        return FALSE;
+
+    *nSize = strlen(lpTranslatedName);
+    return TRUE;
 }
 
 BOOLEAN WINAPI TranslateNameW(
@@ -1192,9 +1256,33 @@ BOOLEAN WINAPI TranslateNameW(
   EXTENDED_NAME_FORMAT DesiredNameFormat, LPWSTR lpTranslatedName,
   PULONG nSize)
 {
-    FIXME("%p %s %s %p %p\n", lpAccountName, debugstr_NameFormat(AccountNameFormat),
+    WCHAR buffer[UNLEN + 1 + MAX_COMPUTERNAME_LENGTH + 1];
+    ULONG size = ARRAY_SIZE(buffer);
+
+    TRACE("%p %s %s %p %p\n", lpAccountName, debugstr_NameFormat(AccountNameFormat),
           debugstr_NameFormat(DesiredNameFormat), lpTranslatedName, nSize);
-    return FALSE;
+
+    if (!lpTranslatedName || !nSize)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    /* For now, ignore lpAccountName/AccountNameFormat and return the current
+       user's name in the desired format when supported by GetUserNameExW. */
+    if (!GetUserNameExW(DesiredNameFormat, buffer, &size))
+        return FALSE;
+
+    if (size > *nSize)
+    {
+        *nSize = size;
+        SetLastError(ERROR_MORE_DATA);
+        return FALSE;
+    }
+
+    lstrcpyW(lpTranslatedName, buffer);
+    *nSize = lstrlenW(buffer);
+    return TRUE;
 }
 
 /***********************************************************************

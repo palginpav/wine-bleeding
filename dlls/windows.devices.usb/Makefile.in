@@ -1,7 +1,8 @@
 MODULE = windows.devices.usb.dll
-IMPORTS = combase
+IMPORTS = combase winusb
 
 SOURCES = \
 	classes.idl \
 	main.c \
-	usbdevice.c
+	usbdevice.c \
+	async_uint32.c

@@ -26,6 +26,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winstring.h"
+#include "objbase.h"
 
 #include "activation.h"
 
@@ -33,9 +34,24 @@
 #define WIDL_using_Windows_Foundation_Collections
 #include "windows.foundation.h"
 #define WIDL_using_Windows_Devices_Usb
+#define WIDL_using_Windows_Storage_Streams
 #include "windows.devices.usb.h"
+#include "winusb.h"
+#include <winusbioctl.h>
+#include "asyncinfo.h"
+#include "windows.storage.streams.h"
+#include "robuffer.h"
 
 extern IActivationFactory *usb_device_factory;
+
+HRESULT async_uint32_create( UINT32 value, __FIAsyncOperation_1_UINT32 **operation );
+HRESULT async_buffer_from_existing( IBuffer *buffer,
+                                    __FIAsyncOperation_1_Windows__CStorage__CStreams__CIBuffer **operation );
+HRESULT async_boolean_create( BOOLEAN value, IAsyncOperation_boolean **operation );
+HRESULT async_action_completed_create( HRESULT hr, IAsyncAction **operation );
+HRESULT Buffer_Create( UINT32 size, IBuffer **buffer );
+
+typedef struct _USB_DEVICE_DESCRIPTOR USB_DEVICE_DESCRIPTOR;
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \
     static inline impl_type *impl_from( iface_type *iface )                                        \

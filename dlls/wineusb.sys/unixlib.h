@@ -31,6 +31,7 @@ enum usb_event_type
     USB_EVENT_ADD_DEVICE,
     USB_EVENT_REMOVE_DEVICE,
     USB_EVENT_TRANSFER_COMPLETE,
+    USB_EVENT_IOCTL_COMPLETE,
 };
 
 struct usb_event
@@ -49,6 +50,12 @@ struct usb_event
         } added_device;
         struct unix_device *removed_device;
         IRP *completed_irp;
+        struct usb_ioctl_complete
+        {
+            IRP *irp;
+            ULONG actual_length;
+            NTSTATUS status;
+        } ioctl_complete;
     } u;
 };
 
@@ -74,6 +81,66 @@ struct usb_destroy_device_params
     struct unix_device *device;
 };
 
+struct usb_control_transfer_sync_params
+{
+    struct unix_device *device;
+    UCHAR setup[8];
+    void *buffer;
+    ULONG length;
+    ULONG *actual_length;
+};
+
+struct usb_bulk_transfer_sync_params
+{
+    struct unix_device *device;
+    UCHAR endpoint;
+    void *buffer;
+    ULONG length;
+    BOOL in;
+    ULONG *actual_length;
+};
+
+struct usb_control_transfer_async_params
+{
+    struct unix_device *device;
+    UCHAR setup[8];
+    void *buffer;
+    ULONG length;
+    IRP *irp;
+};
+
+struct usb_bulk_transfer_async_params
+{
+    struct unix_device *device;
+    UCHAR endpoint;
+    void *buffer;
+    ULONG length;
+    BOOL in;
+    IRP *irp;
+    ULONG timeout_ms;  /* 0 = use default 5000 */
+};
+
+struct usb_set_interface_alt_setting_params
+{
+    struct unix_device *device;
+    UCHAR interface_number;
+    UCHAR alternate_setting;
+};
+
+struct usb_get_device_speed_params
+{
+    struct unix_device *device;
+    ULONG speed;
+};
+
+#define USB_SERIAL_BUFFER_SIZE 256
+
+struct usb_get_serial_params
+{
+    struct unix_device *device;
+    char serial[USB_SERIAL_BUFFER_SIZE];
+};
+
 enum unix_funcs
 {
     unix_usb_main_loop,
@@ -82,6 +149,13 @@ enum unix_funcs
     unix_usb_submit_urb,
     unix_usb_cancel_transfer,
     unix_usb_destroy_device,
+    unix_usb_control_transfer_sync,
+    unix_usb_bulk_transfer_sync,
+    unix_usb_control_transfer_async,
+    unix_usb_bulk_transfer_async,
+    unix_usb_set_interface_alt_setting,
+    unix_usb_get_device_speed,
+    unix_usb_get_serial_number,
 };
 
 #endif

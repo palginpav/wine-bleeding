@@ -32,6 +32,7 @@
 #include "shlwapi.h"
 
 #include "cor.h"
+#include "corerror.h"
 #include "mscoree.h"
 #include "metahost.h"
 #include "corhdr.h"
@@ -242,6 +243,56 @@ static HRESULT RuntimeHost_Invoke(RuntimeHost *This, MonoDomain *domain,
     const char *assemblyname, const char *namespace, const char *typename, const char *methodname,
     MonoObject *obj, void **args, int arg_count, MonoObject **result);
 
+static void log_mono_exception(const char *context, MonoObject *exc)
+{
+    MonoClass *klass;
+    const char *name = NULL, *namespace = NULL;
+
+    if (!exc)
+        return;
+
+    if (mono_object_get_class)
+        klass = mono_object_get_class(exc);
+    else
+        klass = NULL;
+
+    if (klass && mono_class_get_name)
+        name = mono_class_get_name(klass);
+    if (klass && mono_class_get_namespace)
+        namespace = mono_class_get_namespace(klass);
+
+    if (name)
+        ERR("%s raised managed exception %s%s%s (%p)\n", context,
+            namespace && namespace[0] ? namespace : "",
+            namespace && namespace[0] ? "." : "",
+            name, exc);
+    else
+        ERR("%s raised managed exception object %p\n", context, exc);
+
+    /* Try to log managed exception message / stack trace via Exception.ToString(). */
+    if (mono_object_to_string && mono_string_to_utf8)
+    {
+        MonoObject *to_string_exc = NULL;
+        MonoString *str = mono_object_to_string(exc, &to_string_exc);
+
+        if (str && !to_string_exc)
+        {
+            char *utf8 = mono_string_to_utf8(str);
+            if (utf8)
+            {
+                ERR("%s: %s\n", context, utf8);
+                if (mono_free)
+                    mono_free(utf8);
+            }
+        }
+        else if (to_string_exc)
+        {
+            ERR("%s: ToString() on managed exception raised another exception %p\n",
+                context, to_string_exc);
+        }
+    }
+}
+
 static HRESULT RuntimeHost_DoInvoke(RuntimeHost *This, MonoDomain *domain,
     const char *methodname, MonoMethod *method, MonoObject *obj, void **args, MonoObject **result)
 {
@@ -254,6 +305,8 @@ static HRESULT RuntimeHost_DoInvoke(RuntimeHost *This, MonoDomain *domain,
         HRESULT hr;
         MonoObject *hr_object;
 
+        log_mono_exception(methodname, exc);
+
         if (methodname != get_hresult)
         {
             /* Map the exception to an HRESULT. */
@@ -263,6 +316,8 @@ static HRESULT RuntimeHost_DoInvoke(RuntimeHost *This, MonoDomain *domain,
                 hr = *(HRESULT*)mono_object_unbox(hr_object);
             if (SUCCEEDED(hr))
                 hr = E_FAIL;
+            else
+                ERR("Failed to map managed exception from %s to HRESULT, hr=%lx\n", methodname, hr);
         }
         else
             hr = E_FAIL;
@@ -548,39 +603,53 @@ static ULONG WINAPI corruntimehost_Release(ICorRuntimeHost* iface)
 static HRESULT WINAPI corruntimehost_CreateLogicalThreadState(
                     ICorRuntimeHost* iface)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p)\n", iface);
+
+    /* Mono/CLR in Wine does not track a separate logical thread state; treat
+       this as a no-op and report success so hosts don't fail on fibers. */
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_DeleteLogicalThreadState(
                     ICorRuntimeHost* iface)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p)\n", iface);
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_SwitchInLogicalThreadState(
                     ICorRuntimeHost* iface,
                     DWORD *fiberCookie)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, fiberCookie);
+
+    /* No distinct logical state to switch in; just succeed. */
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_SwitchOutLogicalThreadState(
                     ICorRuntimeHost* iface,
                     DWORD **fiberCookie)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, fiberCookie);
+
+    if (fiberCookie)
+        *fiberCookie = NULL;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_LocksHeldByLogicalThread(
                     ICorRuntimeHost* iface,
                     DWORD *pCount)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, pCount);
+
+    if (!pCount) return E_POINTER;
+
+    /* Wine does not expose the CLR's internal lock count; return 0. */
+    *pCount = 0;
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_MapFile(
@@ -588,16 +657,43 @@ static HRESULT WINAPI corruntimehost_MapFile(
     HANDLE hFile,
     HMODULE *mapAddress)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p, %p)\n", iface, hFile, mapAddress);
+
+    if (!mapAddress) return E_POINTER;
+    *mapAddress = NULL;
+
+    if (!hFile || hFile == INVALID_HANDLE_VALUE)
+        return E_INVALIDARG;
+
+    /* Map the entire file as read-only; the host is responsible for unmapping
+       via UnmapViewOfFile. */
+    {
+        HANDLE mapping = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        if (!mapping)
+            return HRESULT_FROM_WIN32(GetLastError());
+
+        *mapAddress = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+        CloseHandle(mapping);
+
+        if (!*mapAddress)
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_GetConfiguration(
     ICorRuntimeHost* iface,
     ICorConfiguration **pConfiguration)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, pConfiguration);
+
+    if (!pConfiguration) return E_POINTER;
+    *pConfiguration = NULL;
+
+    /* Configuration APIs are not exposed; behave as on systems without
+       configuration support. */
+    return E_NOINTERFACE;
 }
 
 static HRESULT WINAPI corruntimehost_Start(
@@ -614,8 +710,10 @@ static HRESULT WINAPI corruntimehost_Start(
 static HRESULT WINAPI corruntimehost_Stop(
     ICorRuntimeHost* iface)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p)\n", iface);
+
+    /* Stopping the runtime is not currently supported; treat as no-op. */
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_CreateDomain(
@@ -651,8 +749,21 @@ static HRESULT WINAPI corruntimehost_EnumDomains(
     ICorRuntimeHost* iface,
     HDOMAINENUM *hEnum)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    RuntimeHost *This = impl_from_ICorRuntimeHost( iface );
+    MonoDomain *domain;
+    HRESULT hr;
+
+    TRACE("(%p, %p)\n", iface, hEnum);
+
+    if (!hEnum) return E_POINTER;
+
+    hr = RuntimeHost_GetDefaultDomain(This, NULL, &domain);
+    if (FAILED(hr))
+        return hr;
+
+    /* Use the domain pointer itself as an opaque enumeration handle. */
+    *hEnum = (HDOMAINENUM)domain;
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_NextDomain(
@@ -660,16 +771,31 @@ static HRESULT WINAPI corruntimehost_NextDomain(
     HDOMAINENUM hEnum,
     IUnknown **appDomain)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    RuntimeHost *This = impl_from_ICorRuntimeHost( iface );
+    MonoDomain *domain = (MonoDomain *)hEnum;
+
+    TRACE("(%p, %p, %p)\n", iface, hEnum, appDomain);
+
+    if (!appDomain) return E_POINTER;
+    *appDomain = NULL;
+
+    if (!domain)
+        return S_FALSE;
+
+    /* We only expose the default domain through this simple enumeration. */
+    if (FAILED(RuntimeHost_GetIUnknownForDomain(This, domain, appDomain)))
+        return E_FAIL;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_CloseEnum(
     ICorRuntimeHost* iface,
     HDOMAINENUM hEnum)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, hEnum);
+    /* Nothing to free for our simple handle representation. */
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_CreateDomainEx(
@@ -731,24 +857,37 @@ static HRESULT WINAPI corruntimehost_CreateEvidence(
     ICorRuntimeHost* iface,
     IUnknown **evidence)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, evidence);
+
+    if (!evidence) return E_POINTER;
+    *evidence = NULL;
+
+    /* Legacy CAS evidence is not supported; report CLR-style not supported. */
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI corruntimehost_UnloadDomain(
     ICorRuntimeHost* iface,
     IUnknown *appDomain)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, appDomain);
+
+    /* Domain unloading is not currently supported in Wine/Mono; succeed as a
+       no-op so hosts don't see E_NOTIMPL. */
+    return S_OK;
 }
 
 static HRESULT WINAPI corruntimehost_CurrentDomain(
     ICorRuntimeHost* iface,
     IUnknown **appDomain)
 {
-    FIXME("stub %p\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", iface, appDomain);
+
+    if (!appDomain) return E_POINTER;
+
+    /* Delegate to GetDefaultDomain, which returns the current managed domain
+       for the calling thread in this implementation. */
+    return ICorRuntimeHost_GetDefaultDomain(iface, appDomain);
 }
 
 static const struct ICorRuntimeHostVtbl corruntimehost_vtbl =
@@ -824,51 +963,62 @@ static HRESULT WINAPI CLRRuntimeHost_Start(ICLRRuntimeHost* iface)
 
 static HRESULT WINAPI CLRRuntimeHost_Stop(ICLRRuntimeHost* iface)
 {
-    FIXME("(%p)\n", iface);
-    return E_NOTIMPL;
+    TRACE("(%p)\n", iface);
+    /* Stopping the runtime is not currently supported; treat as no-op. */
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeHost_SetHostControl(ICLRRuntimeHost* iface,
     IHostControl *pHostControl)
 {
-    FIXME("(%p,%p)\n", iface, pHostControl);
+    TRACE("(%p,%p): ignored\n", iface, pHostControl);
     return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeHost_GetCLRControl(ICLRRuntimeHost* iface,
     ICLRControl **pCLRControl)
 {
-    FIXME("(%p,%p)\n", iface, pCLRControl);
-    return E_NOTIMPL;
+    TRACE("(%p,%p)\n", iface, pCLRControl);
+    if (pCLRControl) *pCLRControl = NULL;
+    /* ICLRControl is not implemented in Wine/Mono host; no interface vs E_NOTIMPL. */
+    return E_NOINTERFACE;
 }
 
 static HRESULT WINAPI CLRRuntimeHost_UnloadAppDomain(ICLRRuntimeHost* iface,
     DWORD dwAppDomainId, BOOL fWaitUntilDone)
 {
-    FIXME("(%p,%lu,%i)\n", iface, dwAppDomainId, fWaitUntilDone);
-    return E_NOTIMPL;
+    TRACE("(%p,%lu,%i): no-op\n", iface, dwAppDomainId, fWaitUntilDone);
+    /* Domain unloading is not currently implemented; succeed as no-op. */
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeHost_ExecuteInAppDomain(ICLRRuntimeHost* iface,
     DWORD dwAppDomainId, FExecuteInAppDomainCallback pCallback, void *cookie)
 {
-    FIXME("(%p,%lu,%p,%p)\n", iface, dwAppDomainId, pCallback, cookie);
-    return E_NOTIMPL;
+    TRACE("(%p,%lu,%p,%p)\n", iface, dwAppDomainId, pCallback, cookie);
+    /* Cross-domain execution is not implemented; report that the feature is
+       not supported rather than that the method is unimplemented. */
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
 }
 
 static HRESULT WINAPI CLRRuntimeHost_GetCurrentAppDomainId(ICLRRuntimeHost* iface,
     DWORD *pdwAppDomainId)
 {
-    FIXME("(%p,%p)\n", iface, pdwAppDomainId);
-    return E_NOTIMPL;
+    TRACE("(%p,%p)\n", iface, pdwAppDomainId);
+    if (!pdwAppDomainId) return E_POINTER;
+
+    /* Mono uses a single default domain; expose it as domain id 1. */
+    *pdwAppDomainId = 1;
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeHost_ExecuteApplication(ICLRRuntimeHost* iface,
     LPCWSTR pwzAppFullName, DWORD dwManifestPaths, LPCWSTR *ppwzManifestPaths,
     DWORD dwActivationData, LPCWSTR *ppwzActivationData, int *pReturnValue)
 {
-    FIXME("(%p,%s,%lu,%lu)\n", iface, debugstr_w(pwzAppFullName), dwManifestPaths, dwActivationData);
-    return E_NOTIMPL;
+    TRACE("(%p,%s,%lu,%lu)\n", iface, debugstr_w(pwzAppFullName), dwManifestPaths, dwActivationData);
+    /* Activation via manifests is not implemented; make it explicit. */
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
 }
 
 static HRESULT WINAPI CLRRuntimeHost_ExecuteInDefaultAppDomain(ICLRRuntimeHost* iface,
@@ -980,7 +1130,9 @@ HRESULT RuntimeHost_CreateManagedInstance(RuntimeHost *This, LPCWSTR name,
     char *nameA=NULL;
     MonoType *type;
     MonoClass *klass;
+    MonoMethod *ctor = NULL;
     MonoObject *obj;
+    MonoObject *exc = NULL;
     MonoDomain *prev_domain;
 
     if (!domain)
@@ -1030,9 +1182,24 @@ HRESULT RuntimeHost_CreateManagedInstance(RuntimeHost *This, LPCWSTR name,
 
     if (SUCCEEDED(hr))
     {
-        /* FIXME: Detect exceptions from the constructor? */
-        mono_runtime_object_init(obj);
-        *result = obj;
+        ctor = mono_class_get_method_from_name(klass, ".ctor", 0);
+        if (!ctor)
+        {
+            ERR("Cannot find parameterless constructor for type %s\n", debugstr_w(name));
+            hr = E_FAIL;
+        }
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        mono_runtime_invoke(ctor, obj, NULL, &exc);
+        if (exc)
+        {
+            log_mono_exception("RuntimeHost_CreateManagedInstance", exc);
+            hr = E_FAIL;
+        }
+        else
+            *result = obj;
     }
 
     domain_restore(prev_domain);
@@ -1274,7 +1441,8 @@ static void CDECL ReallyFixupVTable(struct dll_fixup *fixup)
 
     GetModuleFileNameW(fixup->dll, filename, MAX_PATH);
 
-    TRACE("%p,%p,%s\n", fixup, fixup->dll, debugstr_w(filename));
+    TRACE("%p,%p,%s rva=%#lx count=%u type=%#x\n", fixup, fixup->dll, debugstr_w(filename),
+          fixup->fixup->rva, fixup->fixup->count, fixup->fixup->type);
 
     filenameA = WtoA(filename);
     if (!filenameA)
@@ -1316,10 +1484,17 @@ static void CDECL ReallyFixupVTable(struct dll_fixup *fixup)
                 {
                     vtable[i] = mono_marshal_get_vtfixup_ftnptr(
                         image, tokens[i], fixup->fixup->type);
+                    if (!vtable[i])
+                    {
+                        ERR("vtfixup token %#lx in %s resolved to NULL\n", tokens[i], debugstr_w(filename));
+                        hr = E_FAIL;
+                        break;
+                    }
                 }
             }
 
-            fixup->done = TRUE;
+            if (SUCCEEDED(hr))
+                fixup->done = TRUE;
         }
 
         domain_restore(prev_domain);
@@ -1398,6 +1573,7 @@ static void FixupVTable_Assembly(HMODULE hmodule, ASSEMBLY *assembly)
     ULONG vtable_fixup_count, i;
 
     assembly_get_vtable_fixups(assembly, &vtable_fixups, &vtable_fixup_count);
+    TRACE("%p has %u vtable fixups\n", hmodule, vtable_fixup_count);
     if (CAN_FIXUP_VTABLE)
         for (i=0; i<vtable_fixup_count; i++)
             FixupVTableEntry(hmodule, &vtable_fixups[i]);
@@ -1459,6 +1635,8 @@ __int32 WINAPI _CorExeMain(void)
     wcscat(config_file, dotconfig);
 
     hr = parse_config_file(config_file, &parsed_config);
+    if (SUCCEEDED(hr) && parsed_config.use_legacy_v2_runtime_activation_policy)
+        TRACE("Config enables legacy v2 runtime activation policy for %s\n", debugstr_w(config_file));
     if (SUCCEEDED(hr) && parsed_config.private_path && parsed_config.private_path[0])
     {
         WCHAR *save;

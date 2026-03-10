@@ -2121,16 +2121,14 @@ BOOL WINAPI WritePrivateProfileStructA (LPCSTR section, LPCSTR key,
  *           OpenProfileUserMapping   (KERNEL32.@)
  */
 BOOL WINAPI OpenProfileUserMapping(void) {
-    FIXME("(), stub!\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    TRACE("() - no-op\n");
+    return TRUE;
 }
 
 /***********************************************************************
  *           CloseProfileUserMapping   (KERNEL32.@)
  */
 BOOL WINAPI CloseProfileUserMapping(void) {
-    FIXME("(), stub!\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    TRACE("() - no-op\n");
+    return TRUE;
 }

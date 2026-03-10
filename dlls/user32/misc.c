@@ -142,6 +142,25 @@ WORD WINAPI UserSignalProc( UINT uCode, DWORD dwThreadOrProcessID,
 }
 
 
+struct power_setting_notification
+{
+    HANDLE recipient;
+    GUID guid;
+    DWORD flags;
+    struct power_setting_notification *next;
+};
+
+struct suspend_resume_notification
+{
+    HANDLE recipient;
+    DWORD flags;
+    struct suspend_resume_notification *next;
+};
+
+static struct power_setting_notification *power_setting_list;
+static struct suspend_resume_notification *suspend_resume_list;
+
+
 /**********************************************************************
  * SetLastErrorEx [USER32.@]
  *
@@ -409,8 +428,30 @@ BOOL WINAPI UserHandleGrantAccess(HANDLE handle, HANDLE job, BOOL grant)
  */
 HPOWERNOTIFY WINAPI RegisterPowerSettingNotification(HANDLE recipient, const GUID *guid, DWORD flags)
 {
-    FIXME("(%p,%s,%lx): stub\n", recipient, debugstr_guid(guid), flags);
-    return (HPOWERNOTIFY)0xdeadbeef;
+    struct power_setting_notification *notify;
+
+    TRACE("(%p,%s,%lx)\n", recipient, debugstr_guid(guid), flags);
+
+    if (!recipient || !guid)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return NULL;
+    }
+
+    notify = HeapAlloc( GetProcessHeap(), 0, sizeof(*notify) );
+    if (!notify)
+    {
+        SetLastError( ERROR_OUTOFMEMORY );
+        return NULL;
+    }
+
+    notify->recipient = recipient;
+    notify->guid      = *guid;
+    notify->flags     = flags;
+    notify->next      = power_setting_list;
+    power_setting_list = notify;
+
+    return (HPOWERNOTIFY)notify;
 }
 
 /**********************************************************************
@@ -418,7 +459,30 @@ HPOWERNOTIFY WINAPI RegisterPowerSettingNotification(HANDLE recipient, const GUI
  */
 BOOL WINAPI UnregisterPowerSettingNotification(HPOWERNOTIFY handle)
 {
-    FIXME("(%p): stub\n", handle);
+    struct power_setting_notification *prev = NULL, *cur = power_setting_list;
+
+    TRACE("(%p)\n", handle);
+
+    if (!handle)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
+
+    while (cur)
+    {
+        if ((HPOWERNOTIFY)cur == handle)
+        {
+            if (prev) prev->next = cur->next;
+            else power_setting_list = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur );
+            return TRUE;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    /* Nothing to unregister; treat as no-op success to match common expectations. */
     return TRUE;
 }
 
@@ -427,8 +491,29 @@ BOOL WINAPI UnregisterPowerSettingNotification(HPOWERNOTIFY handle)
  */
 HPOWERNOTIFY WINAPI RegisterSuspendResumeNotification(HANDLE recipient, DWORD flags)
 {
-    FIXME("%p, %#lx: stub.\n", recipient, flags);
-    return (HPOWERNOTIFY)0xdeadbeef;
+    struct suspend_resume_notification *notify;
+
+    TRACE("(%p, %#lx)\n", recipient, flags);
+
+    if (!recipient)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return NULL;
+    }
+
+    notify = HeapAlloc( GetProcessHeap(), 0, sizeof(*notify) );
+    if (!notify)
+    {
+        SetLastError( ERROR_OUTOFMEMORY );
+        return NULL;
+    }
+
+    notify->recipient = recipient;
+    notify->flags     = flags;
+    notify->next      = suspend_resume_list;
+    suspend_resume_list = notify;
+
+    return (HPOWERNOTIFY)notify;
 }
 
 /**********************************************************************
@@ -436,7 +521,30 @@ HPOWERNOTIFY WINAPI RegisterSuspendResumeNotification(HANDLE recipient, DWORD fl
  */
 BOOL WINAPI UnregisterSuspendResumeNotification(HPOWERNOTIFY handle)
 {
-    FIXME("%p: stub.\n", handle);
+    struct suspend_resume_notification *prev = NULL, *cur = suspend_resume_list;
+
+    TRACE("(%p)\n", handle);
+
+    if (!handle)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
+
+    while (cur)
+    {
+        if ((HPOWERNOTIFY)cur == handle)
+        {
+            if (prev) prev->next = cur->next;
+            else suspend_resume_list = cur->next;
+            HeapFree( GetProcessHeap(), 0, cur );
+            return TRUE;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    /* Nothing to unregister; treat as no-op success. */
     return TRUE;
 }
 

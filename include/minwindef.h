@@ -50,7 +50,7 @@ extern "C" {
 # endif
 #endif
 
-#if !defined(_MSC_VER) && !defined(__MINGW32__)
+#if !defined(_MSC_VER) && (!defined(__MINGW32__) || defined(__WINESRC__))
 
 #undef __stdcall
 #undef __cdecl

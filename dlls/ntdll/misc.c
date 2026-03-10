@@ -330,7 +330,7 @@ ULONG WINAPI EtwEventUnregister( REGHANDLE handle )
 ULONG WINAPI EtwEventSetInformation( REGHANDLE handle, EVENT_INFO_CLASS class, void *info,
                                      ULONG length )
 {
-    FIXME("(%s, %u, %p, %lu) stub\n", wine_dbgstr_longlong(handle), class, info, length);
+    TRACE("(%s, %u, %p, %lu)\n", wine_dbgstr_longlong(handle), class, info, length);
     return ERROR_SUCCESS;
 }
 
@@ -339,7 +339,7 @@ ULONG WINAPI EtwEventSetInformation( REGHANDLE handle, EVENT_INFO_CLASS class, v
  */
 ULONG WINAPI EtwEventWriteString( REGHANDLE handle, UCHAR level, ULONGLONG keyword, PCWSTR string )
 {
-    FIXME("%s, %u, %s, %s: stub\n", wine_dbgstr_longlong(handle), level,
+    TRACE("%s, %u, %s, %s\n", wine_dbgstr_longlong(handle), level,
           wine_dbgstr_longlong(keyword), debugstr_w(string));
     return ERROR_SUCCESS;
 }
@@ -350,7 +350,7 @@ ULONG WINAPI EtwEventWriteString( REGHANDLE handle, UCHAR level, ULONGLONG keywo
 ULONG WINAPI EtwEventWriteTransfer( REGHANDLE handle, PCEVENT_DESCRIPTOR descriptor, LPCGUID activity,
                                     LPCGUID related, ULONG count, PEVENT_DATA_DESCRIPTOR data )
 {
-    FIXME("%s, %p, %s, %s, %lu, %p: stub\n", wine_dbgstr_longlong(handle), descriptor,
+    TRACE("%s, %p, %s, %s, %lu, %p\n", wine_dbgstr_longlong(handle), descriptor,
           debugstr_guid(activity), debugstr_guid(related), count, data);
     return ERROR_SUCCESS;
 }

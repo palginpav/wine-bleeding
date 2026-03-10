@@ -109,6 +109,69 @@ static void test_UsbDevicesStatics(void)
     WindowsDeleteString( str );
     WindowsDeleteString( wine_str );
 
+    /* ActivateInstance is not supported for statics class */
+    hr = IActivationFactory_ActivateInstance( factory, NULL );
+    ok( hr == E_INVALIDARG, "ActivateInstance(NULL) got hr %#lx.\n", hr );
+    if (hr == E_INVALIDARG)
+    {
+        IInspectable *instance = (IInspectable *)0xdeadbeef;
+        hr = IActivationFactory_ActivateInstance( factory, &instance );
+        ok( hr == E_ILLEGAL_METHOD_CALL, "ActivateInstance got hr %#lx.\n", hr );
+        ok( instance == (IInspectable *)0xdeadbeef, "instance was overwritten %p.\n", instance );
+    }
+
+    /* GetDeviceSelector with full params */
+    {
+        static const GUID zero_guid = { 0 };
+        hr = IUsbDeviceStatics_GetDeviceSelector( usb_device_statics, 0x1234, 0x5678, zero_guid, NULL );
+    }
+    ok( hr == E_INVALIDARG, "GetDeviceSelector NULL value got hr %#lx.\n", hr );
+    if (hr == E_INVALIDARG)
+    {
+        static const GUID test_guid = { 0xdee824ef, 0x729b, 0x4a0e, { 0x9c, 0x14, 0xb7, 0x11, 0x7d, 0x33, 0xa8, 0x17 } };
+        hr = IUsbDeviceStatics_GetDeviceSelector( usb_device_statics, 0x1234, 0x5678, test_guid, &str );
+        ok( hr == S_OK, "GetDeviceSelector got hr %#lx.\n", hr );
+        if (hr == S_OK)
+        {
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"dee824ef" ) != NULL, "selector should contain GUID.\n" );
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"UsbVendorId:=4660" ) != NULL, "selector should contain vendor 0x1234.\n" );
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"UsbProductId:=22136" ) != NULL, "selector should contain product 0x5678.\n" );
+            WindowsDeleteString( str );
+        }
+    }
+
+    /* GetDeviceSelector with vendor 0, product 0 */
+    {
+        static const GUID winusb_guid = { 0xdee824ef, 0x729b, 0x4a0e, { 0x9c, 0x14, 0xb7, 0x11, 0x7d, 0x33, 0xa8, 0x17 } };
+        hr = IUsbDeviceStatics_GetDeviceSelector( usb_device_statics, 0, 0, winusb_guid, &str );
+        ok( hr == S_OK, "GetDeviceSelector(0,0) got hr %#lx.\n", hr );
+        if (hr == S_OK)
+        {
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"UsbVendorId:=0" ) != NULL, "selector should contain vendor 0.\n" );
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"UsbProductId:=0" ) != NULL, "selector should contain product 0.\n" );
+            WindowsDeleteString( str );
+        }
+    }
+
+    /* GetDeviceSelectorGuidOnly */
+    {
+        static const GUID zero_guid = { 0 };
+        hr = IUsbDeviceStatics_GetDeviceSelectorGuidOnly( usb_device_statics, zero_guid, NULL );
+    }
+    ok( hr == E_INVALIDARG, "GetDeviceSelectorGuidOnly NULL value got hr %#lx.\n", hr );
+    if (hr == E_INVALIDARG)
+    {
+        static const GUID hid_guid = { 0x4d1e55b2, 0xf16f, 0x11cf, { 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };
+        hr = IUsbDeviceStatics_GetDeviceSelectorGuidOnly( usb_device_statics, hid_guid, &str );
+        ok( hr == S_OK, "GetDeviceSelectorGuidOnly got hr %#lx.\n", hr );
+        if (hr == S_OK)
+        {
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"4d1e55b2" ) != NULL, "selector should contain HID GUID.\n" );
+            ok( wcsstr( WindowsGetStringRawBuffer( str, NULL ), L"InterfaceEnabled" ) != NULL, "selector should contain InterfaceEnabled.\n" );
+            WindowsDeleteString( str );
+        }
+    }
+
     ref = IUsbDeviceStatics_Release( usb_device_statics );
     ok( ref == 2, "got ref %ld.\n", ref );
     ref = IActivationFactory_Release( factory );

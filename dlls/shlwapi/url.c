@@ -21,6 +21,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#define COBJMACROS
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
@@ -28,8 +29,12 @@
 #include "wininet.h"
 #include "winreg.h"
 #include "winternl.h"
+#include "objbase.h"
 #define NO_SHLWAPI_STREAM
 #include "shlwapi.h"
+#include "shlobj.h"
+#include "shldisp.h"
+#include "shlguid.h"
 #include "intshcut.h"
 #include "wine/debug.h"
 
@@ -54,8 +59,72 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
  */
 HRESULT WINAPI SHAutoComplete(HWND hwndEdit, DWORD dwFlags)
 {
-  FIXME("stub\n");
-  return S_FALSE;
+  IAutoComplete2 *autocomplete = NULL;
+  IObjMgr *objmgr = NULL;
+  IUnknown *source = NULL;
+  IUnknown *enum_source = NULL;
+  DWORD options = 0;
+  HRESULT hr;
+
+  TRACE("(%p, %#lx)\n", hwndEdit, dwFlags);
+
+  if (!hwndEdit || !IsWindow(hwndEdit))
+      return E_INVALIDARG;
+
+  hr = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER,
+                        &IID_IAutoComplete2, (void **)&autocomplete);
+  if (FAILED(hr))
+      return hr;
+
+  if (!(dwFlags & SHACF_AUTOSUGGEST_FORCE_OFF))
+      options |= ACO_AUTOSUGGEST;
+  if (!(dwFlags & SHACF_AUTOAPPEND_FORCE_OFF))
+      options |= ACO_AUTOAPPEND;
+  if (dwFlags & SHACF_USETAB)
+      options |= ACO_USETAB;
+
+  if ((dwFlags & SHACF_AUTOSUGGEST_FORCE_ON) && !(options & ACO_AUTOSUGGEST))
+      options |= ACO_AUTOSUGGEST;
+  if ((dwFlags & SHACF_AUTOAPPEND_FORCE_ON) && !(options & ACO_AUTOAPPEND))
+      options |= ACO_AUTOAPPEND;
+
+  hr = IAutoComplete2_SetOptions(autocomplete, options);
+  if (FAILED(hr))
+      goto done;
+
+  if (!(dwFlags & (SHACF_FILESYSTEM | SHACF_FILESYS_ONLY | SHACF_FILESYS_DIRS |
+                   SHACF_URLHISTORY | SHACF_URLMRU | SHACF_URLALL)))
+      dwFlags |= SHACF_FILESYSTEM;
+
+  if (dwFlags & (SHACF_FILESYSTEM | SHACF_FILESYS_ONLY | SHACF_FILESYS_DIRS))
+  {
+      hr = CoCreateInstance(&CLSID_ACLMulti, NULL, CLSCTX_INPROC_SERVER,
+                            &IID_IObjMgr, (void **)&objmgr);
+      if (FAILED(hr))
+          goto done;
+
+      hr = CoCreateInstance(&CLSID_ACListISF, NULL, CLSCTX_INPROC_SERVER,
+                            &IID_IUnknown, (void **)&source);
+      if (FAILED(hr))
+          goto done;
+
+      hr = IObjMgr_Append(objmgr, source);
+      if (FAILED(hr))
+          goto done;
+
+      hr = IObjMgr_QueryInterface(objmgr, &IID_IUnknown, (void **)&enum_source);
+      if (FAILED(hr))
+          goto done;
+  }
+
+  hr = IAutoComplete2_Init(autocomplete, hwndEdit, enum_source, NULL, NULL);
+
+done:
+  if (enum_source) IUnknown_Release(enum_source);
+  if (source) IUnknown_Release(source);
+  if (objmgr) IObjMgr_Release(objmgr);
+  if (autocomplete) IAutoComplete2_Release(autocomplete);
+  return hr;
 }
 
 /*************************************************************************

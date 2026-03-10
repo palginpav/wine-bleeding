@@ -478,10 +478,19 @@ void version_init(void)
     BOOL got_win_ver = FALSE;
     const WCHAR *p, *appname = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
     WCHAR appversion[MAX_PATH+20];
+    static RTL_OSVERSIONINFOEXW registry_version;
 
     NtQuerySystemInformation( SystemWineVersionInformation, wine_version, sizeof(wine_version), NULL );
 
     current_version = &VersionData[WIN10];
+
+    /* Prefer HKLM version when it reports 10+ so installers that refuse Vista/7/8/8.1
+     * (e.g. BarTender) pass even when HKCU\\Software\\Wine\\Version is winxp. */
+    if (get_nt_registry_version( &registry_version ) && registry_version.dwMajorVersion >= 10)
+    {
+        current_version = &registry_version;
+        goto set_peb;
+    }
 
     RtlOpenCurrentUser( KEY_ALL_ACCESS, &root );
     InitializeObjectAttributes( &attr, &nameW, OBJ_CASE_INSENSITIVE, root, NULL );
@@ -520,13 +529,13 @@ void version_init(void)
 done:
     if (!got_win_ver)
     {
-        static RTL_OSVERSIONINFOEXW registry_version;
-
         TRACE( "getting registry version\n" );
         if (get_nt_registry_version( &registry_version ) ||
             get_win9x_registry_version( &registry_version ))
             current_version = &registry_version;
     }
+
+set_peb:
 
 
     NtCurrentTeb()->Peb->OSMajorVersion = current_version->dwMajorVersion;

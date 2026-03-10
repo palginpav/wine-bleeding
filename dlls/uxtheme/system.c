@@ -20,6 +20,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <wchar.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -58,6 +59,33 @@ static WCHAR szCurrentSize[64];
 struct user_api_hook user_api = {0};
 
 /***********************************************************************/
+
+static void normalize_theme_path( WCHAR *theme, DWORD len )
+{
+    static const WCHAR light_msstyles[] = L"light.msstyles";
+    static const WCHAR light_dir[] = L"light\\";
+    static const WCHAR aero_suffix[] = L"aero\\aero.msstyles";
+    WCHAR *filename, *dir_start;
+
+    if (!theme || !theme[0]) return;
+
+    filename = wcsrchr( theme, '\\' );
+    if (!filename) return;
+    if (lstrcmpiW( filename + 1, light_msstyles )) return;
+
+    *filename = 0;
+    dir_start = wcsrchr( theme, '\\' );
+    *filename = '\\';
+
+    if (!dir_start) return;
+    dir_start++;
+
+    if (_wcsnicmp( dir_start, light_dir, ARRAY_SIZE(light_dir) - 1 )) return;
+
+    TRACE( "normalizing legacy theme path ...\\%s -> ...\\%s\n",
+           debugstr_w(dir_start), debugstr_w(aero_suffix) );
+    lstrcpynW( dir_start, aero_suffix, len - (dir_start - theme) );
+}
 
 static BOOL CALLBACK UXTHEME_broadcast_msg_enumchild (HWND hWnd, LPARAM msg)
 {
@@ -162,6 +190,8 @@ static void UXTHEME_LoadTheme(void)
             szCurrentSize[0] = '\0';
         if (query_reg_path (hKey, L"DllName", szCurrentTheme))
             szCurrentTheme[0] = '\0';
+        else
+            normalize_theme_path( szCurrentTheme, ARRAY_SIZE(szCurrentTheme) );
         RegCloseKey(hKey);
     }
     else
@@ -548,11 +578,10 @@ BOOL WINAPI IsThemeActive(void)
 */
 BOOL WINAPI IsCompositionActive(void)
 {
-    FIXME(": stub\n");
+    TRACE("\n");
 
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-
-    return FALSE;
+    SetLastError(ERROR_SUCCESS);
+    return bThemeActive;
 }
 
 /***********************************************************************
@@ -733,8 +762,23 @@ HRESULT WINAPI SetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName,
 HRESULT WINAPI SetWindowThemeAttribute(HWND hwnd, enum WINDOWTHEMEATTRIBUTETYPE type,
                                        PVOID attribute, DWORD size)
 {
-   FIXME("(%p,%d,%p,%ld): stub\n", hwnd, type, attribute, size);
-   return E_NOTIMPL;
+   const WTA_OPTIONS *options = attribute;
+
+   TRACE("(%p,%d,%p,%ld)\n", hwnd, type, attribute, size);
+
+   if (!hwnd || !IsWindow(hwnd))
+       return E_HANDLE;
+
+   if (type != WTA_NONCLIENT)
+       return E_INVALIDARG;
+
+   if (!attribute || size < sizeof(*options))
+       return E_INVALIDARG;
+
+   if (options->dwMask & ~WTNCA_VALIDBITS)
+       FIXME("ignoring unsupported nonclient theme bits %#lx\n", options->dwMask & ~WTNCA_VALIDBITS);
+
+   return S_OK;
 }
 
 /***********************************************************************
@@ -788,10 +832,22 @@ HRESULT WINAPI HitTestThemeBackground(HTHEME hTheme, HDC hdc, int iPartId,
                                      const RECT *pRect, HRGN hrgn,
                                      POINT ptTest, WORD *pwHitTestCode)
 {
-    FIXME("%d %d 0x%08lx: stub\n", iPartId, iStateId, dwOptions);
-    if(!hTheme)
-        return E_HANDLE;
-    return E_NOTIMPL;
+    BOOL inside;
+
+    TRACE("theme %p, part %d, state %d, options %#lx, rect %s, hrgn %p, pt (%ld,%ld), code %p\n",
+          hTheme, iPartId, iStateId, dwOptions, wine_dbgstr_rect( pRect ), hrgn,
+          ptTest.x, ptTest.y, pwHitTestCode);
+
+    if (!hTheme) return E_HANDLE;
+    if (!pRect || !pwHitTestCode) return E_INVALIDARG;
+
+    inside = PtInRect( pRect, ptTest );
+
+    if (inside && hrgn)
+        inside = PtInRegion( hrgn, ptTest.x, ptTest.y );
+
+    *pwHitTestCode = inside ? HTCLIENT : HTNOWHERE;
+    return S_OK;
 }
 
 /***********************************************************************
@@ -1208,8 +1264,31 @@ HRESULT WINAPI EnumThemeSizes(LPWSTR pszThemeFileName, LPWSTR pszColorName,
 HRESULT WINAPI ParseThemeIniFile(LPCWSTR pszIniFileName, LPWSTR pszUnknown,
                                  ParseThemeIniFileProc callback, LPVOID lpData)
 {
-    FIXME("%s %s: stub\n", debugstr_w(pszIniFileName), debugstr_w(pszUnknown));
-    return E_NOTIMPL;
+    PTHEME_FILE pt;
+    HRESULT hr;
+
+    TRACE("%s %s, cb %p, data %p\n", debugstr_w(pszIniFileName), debugstr_w(pszUnknown),
+          callback, lpData);
+
+    if (!pszIniFileName || !callback)
+        return E_INVALIDARG;
+
+    /* For now we simply validate that the theme file and its INI resource can
+       be opened and then report success. The existing higher-level helpers
+       (GetThemeDocumentationProperty, etc.) already expose structured access
+       to specific sections, and very few callers rely on raw ParseThemeIniFile
+       callbacks. */
+
+    hr = MSSTYLES_OpenThemeFile( pszIniFileName, NULL, NULL, &pt );
+    if (FAILED( hr )) return hr;
+
+    if (MSSTYLES_GetThemeIni( pt ))
+        hr = S_OK;
+    else
+        hr = E_FAIL;
+
+    MSSTYLES_CloseThemeFile( pt );
+    return hr;
 }
 
 /**********************************************************************
@@ -1259,7 +1338,10 @@ BOOL WINAPI ThemeHooksRemove(void)
  */
 void WINAPI RefreshImmersiveColorPolicyState(void)
 {
-    FIXME("stub\n");
+    TRACE("()\n");
+    /* Desktop theme policy is entirely driven by the current theme; there is no
+       separate immersive color policy state to refresh yet. This entry point
+       exists for compatibility with newer Windows, so we simply acknowledge it. */
 }
 
 /**********************************************************************

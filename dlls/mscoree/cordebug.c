@@ -30,6 +30,7 @@
 #include "ole2.h"
 #include "shellapi.h"
 #include "mscoree.h"
+#include "corerror.h"
 #include "corhdr.h"
 #include "metahost.h"
 #include "cordebug.h"
@@ -130,8 +131,8 @@ static ULONG WINAPI cordebugprocess_Release(ICorDebugProcess *iface)
 static HRESULT WINAPI cordebugprocess_Stop(ICorDebugProcess *iface, DWORD dwTimeoutIgnored)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_Continue(ICorDebugProcess *iface, BOOL fIsOutOfBand)
@@ -148,39 +149,39 @@ static HRESULT WINAPI cordebugprocess_Continue(ICorDebugProcess *iface, BOOL fIs
 static HRESULT WINAPI cordebugprocess_IsRunning(ICorDebugProcess *iface, BOOL *pbRunning)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_HasQueuedCallbacks(ICorDebugProcess *iface,
                 ICorDebugThread *pThread, BOOL *pbQueued)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_EnumerateThreads(ICorDebugProcess *iface,
                 ICorDebugThreadEnum **ppThreads)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_SetAllThreadsDebugState(ICorDebugProcess *iface,
                 CorDebugThreadState state, ICorDebugThread *pExceptThisThread)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_Detach(ICorDebugProcess *iface)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_Terminate(ICorDebugProcess *iface, UINT exitCode)
@@ -204,8 +205,8 @@ static HRESULT WINAPI cordebugprocess_CanCommitChanges(ICorDebugProcess *iface,
                 ICorDebugErrorInfoEnum **pError)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_CommitChanges(ICorDebugProcess *iface,
@@ -213,8 +214,8 @@ static HRESULT WINAPI cordebugprocess_CommitChanges(ICorDebugProcess *iface,
                 ICorDebugErrorInfoEnum **pError)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_GetID(ICorDebugProcess *iface, DWORD *pdwProcessId)
@@ -247,48 +248,48 @@ static HRESULT WINAPI cordebugprocess_GetThread(ICorDebugProcess *iface, DWORD d
                 ICorDebugThread **ppThread)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_EnumerateObjects(ICorDebugProcess *iface,
                 ICorDebugObjectEnum **ppObjects)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_IsTransitionStub(ICorDebugProcess *iface,
                 CORDB_ADDRESS address, BOOL *pbTransitionStub)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_IsOSSuspended(ICorDebugProcess *iface,
                 DWORD threadID, BOOL *pbSuspended)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_GetThreadContext(ICorDebugProcess *iface,
                 DWORD threadID, ULONG32 contextSize, BYTE context[])
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_SetThreadContext(ICorDebugProcess *iface,
                 DWORD threadID, ULONG32 contextSize, BYTE context[])
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_ReadMemory(ICorDebugProcess *iface,
@@ -296,8 +297,8 @@ static HRESULT WINAPI cordebugprocess_ReadMemory(ICorDebugProcess *iface,
                 SIZE_T *read)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_WriteMemory(ICorDebugProcess *iface,
@@ -305,64 +306,64 @@ static HRESULT WINAPI cordebugprocess_WriteMemory(ICorDebugProcess *iface,
                 SIZE_T *written)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_ClearCurrentException(ICorDebugProcess *iface,
                 DWORD threadID)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_EnableLogMessages(ICorDebugProcess *iface,
                 BOOL fOnOff)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_ModifyLogSwitch(ICorDebugProcess *iface,
                 WCHAR *pLogSwitchName, LONG lLevel)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_EnumerateAppDomains(ICorDebugProcess *iface,
                 ICorDebugAppDomainEnum **ppAppDomains)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_GetObject(ICorDebugProcess *iface,
                 ICorDebugValue **ppObject)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_ThreadForFiberCookie(ICorDebugProcess *iface,
                 DWORD fiberCookie, ICorDebugThread **ppThread)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI cordebugprocess_GetHelperThreadID(ICorDebugProcess *iface,
                 DWORD *pThreadID)
 {
     DebugProcess *This = impl_from_ICorDebugProcess(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 
@@ -482,22 +483,22 @@ static ULONG WINAPI process_enum_Release(ICorDebugProcessEnum *iface)
 static HRESULT WINAPI process_enum_Skip(ICorDebugProcessEnum *iface, ULONG celt)
 {
     CorDebug *This = impl_from_ICorDebugProcessEnum(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI process_enum_Reset(ICorDebugProcessEnum *iface)
 {
     CorDebug *This = impl_from_ICorDebugProcessEnum(iface);
-    FIXME("stub %p\n", This);
-    return E_NOTIMPL;
+    TRACE("stub %p\n", This);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI process_enum_Clone(ICorDebugProcessEnum *iface, ICorDebugEnum **ppEnum)
 {
     CorDebug *This = impl_from_ICorDebugProcessEnum(iface);
-    FIXME("stub %p %p\n", This, ppEnum);
-    return E_NOTIMPL;
+    TRACE("stub %p %p\n", This, ppEnum);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI process_enum_GetCount(ICorDebugProcessEnum *iface, ULONG *pcelt)
@@ -517,8 +518,8 @@ static HRESULT WINAPI process_enum_Next(ICorDebugProcessEnum *iface, ULONG celt,
             ICorDebugProcess * processes[], ULONG *pceltFetched)
 {
     CorDebug *This = impl_from_ICorDebugProcessEnum(iface);
-    FIXME("stub %p %ld %p %p\n", This, celt, processes, pceltFetched);
-    return E_NOTIMPL;
+    TRACE("stub %p %ld %p %p\n", This, celt, processes, pceltFetched);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static const struct ICorDebugProcessEnumVtbl processenum_vtbl =
@@ -597,7 +598,7 @@ static ULONG WINAPI CorDebug_Release(ICorDebug *iface)
 static HRESULT WINAPI CorDebug_Initialize(ICorDebug *iface)
 {
     CorDebug *This = impl_from_ICorDebug( iface );
-    FIXME("stub %p\n", This);
+    TRACE("stub %p\n", This);
     return S_OK;
 }
 
@@ -658,8 +659,8 @@ static HRESULT WINAPI CorDebug_SetManagedHandler(ICorDebug *iface, ICorDebugMana
 static HRESULT WINAPI CorDebug_SetUnmanagedHandler(ICorDebug *iface, ICorDebugUnmanagedCallback *pCallback)
 {
     CorDebug *This = impl_from_ICorDebug( iface );
-    FIXME("stub %p %p\n", This, pCallback);
-    return E_NOTIMPL;
+    TRACE("stub %p %p\n", This, pCallback);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI CorDebug_CreateProcess(ICorDebug *iface, LPCWSTR lpApplicationName,
@@ -711,8 +712,8 @@ static HRESULT WINAPI CorDebug_DebugActiveProcess(ICorDebug *iface, DWORD id, BO
             ICorDebugProcess **ppProcess)
 {
     CorDebug *This = impl_from_ICorDebug( iface );
-    FIXME("stub %p %ld %d %p\n", This, id, win32Attach, ppProcess);
-    return E_NOTIMPL;
+    TRACE("stub %p %ld %d %p\n", This, id, win32Attach, ppProcess);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI CorDebug_EnumerateProcesses( ICorDebug *iface, ICorDebugProcessEnum **ppProcess)
@@ -732,15 +733,15 @@ static HRESULT WINAPI CorDebug_EnumerateProcesses( ICorDebug *iface, ICorDebugPr
 static HRESULT WINAPI CorDebug_GetProcess(ICorDebug *iface, DWORD dwProcessId, ICorDebugProcess **ppProcess)
 {
     CorDebug *This = impl_from_ICorDebug( iface );
-    FIXME("stub %p %ld %p\n", This, dwProcessId, ppProcess);
-    return E_NOTIMPL;
+    TRACE("stub %p %ld %p\n", This, dwProcessId, ppProcess);
+    return CORDBG_E_INPROC_NOT_IMPL;
 }
 
 static HRESULT WINAPI CorDebug_CanLaunchOrAttach(ICorDebug *iface, DWORD dwProcessId,
             BOOL win32DebuggingEnabled)
 {
     CorDebug *This = impl_from_ICorDebug( iface );
-    FIXME("stub %p %ld %d\n", This, dwProcessId, win32DebuggingEnabled);
+    TRACE("stub %p %ld %d\n", This, dwProcessId, win32DebuggingEnabled);
     return S_OK;
 }
 

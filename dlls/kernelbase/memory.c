@@ -1593,9 +1593,34 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetNumaHighestNodeNumber( ULONG *node )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetNumaNodeProcessorMaskEx( USHORT node, GROUP_AFFINITY *mask )
 {
-    FIXME( "stub: %hu %p\n", node, mask );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    SYSTEM_INFO info;
+    ULONG count;
+
+    TRACE( "node %hu, mask %p.\n", node, mask );
+
+    if (!mask)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    /* Wine currently exposes a single NUMA node (0) via GetNumaHighestNodeNumber(). */
+    if (node != 0)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    GetSystemInfo( &info );
+    /* dwNumberOfProcessors is limited by the mask width. */
+    count = info.dwNumberOfProcessors;
+    if (count >= sizeof(mask->Mask) * 8) count = sizeof(mask->Mask) * 8;
+
+    memset( mask, 0, sizeof(*mask) );
+    mask->Group = 0;
+    if (count) mask->Mask = ((KAFFINITY)1 << count) - 1;
+
+    return TRUE;
 }
 
 
@@ -1604,8 +1629,17 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetNumaNodeProcessorMaskEx( USHORT node, GROUP_AFF
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetNumaProximityNodeEx( ULONG proximity_id, USHORT *node )
 {
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    TRACE( "proximity_id %#lx, node %p.\n", proximity_id, node );
+
+    if (!node)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    /* Single-node topology: any valid proximity id maps to node 0. */
+    *node = 0;
+    return TRUE;
 }
 
 

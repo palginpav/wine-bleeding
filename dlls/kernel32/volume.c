@@ -502,14 +502,46 @@ BOOL WINAPI FindNextVolumeA( HANDLE handle, LPSTR volume, DWORD len )
     return ret;
 }
 
+/* Find volume mount point enumeration: we use a small struct as handle;
+ * when there are no mount points we still return a valid handle and
+ * FindNext returns FALSE with ERROR_NO_MORE_ITEMS.
+ */
+struct volume_mount_point_find
+{
+    DWORD magic;  /* VOLUME_MOUNT_POINT_FIND_MAGIC */
+    int   done;   /* 1 = no more items */
+};
+#define VOLUME_MOUNT_POINT_FIND_MAGIC 0x7654ab01
+
 /***********************************************************************
  *           FindFirstVolumeMountPointA   (KERNEL32.@)
  */
 HANDLE WINAPI FindFirstVolumeMountPointA(LPCSTR root, LPSTR mount_point, DWORD len)
 {
-    FIXME("(%s, %p, %ld), stub!\n", debugstr_a(root), mount_point, len);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return INVALID_HANDLE_VALUE;
+    WCHAR *rootW, *mountW;
+    HANDLE ret = INVALID_HANDLE_VALUE;
+
+    if (!root || !mount_point || len == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+    rootW = FILE_name_AtoW( root, TRUE );
+    if (!rootW) return INVALID_HANDLE_VALUE;
+    mountW = HeapAlloc( GetProcessHeap(), 0, len * sizeof(WCHAR) );
+    if (!mountW)
+    {
+        HeapFree( GetProcessHeap(), 0, rootW );
+        return INVALID_HANDLE_VALUE;
+    }
+    ret = FindFirstVolumeMountPointW( rootW, mountW, len );
+    HeapFree( GetProcessHeap(), 0, rootW );
+    if (ret != INVALID_HANDLE_VALUE && mountW[0])
+        WideCharToMultiByte( CP_ACP, 0, mountW, -1, mount_point, len, NULL, NULL );
+    else if (ret != INVALID_HANDLE_VALUE)
+        mount_point[0] = 0;
+    HeapFree( GetProcessHeap(), 0, mountW );
+    return ret;
 }
 
 /***********************************************************************
@@ -517,9 +549,61 @@ HANDLE WINAPI FindFirstVolumeMountPointA(LPCSTR root, LPSTR mount_point, DWORD l
  */
 HANDLE WINAPI FindFirstVolumeMountPointW(LPCWSTR root, LPWSTR mount_point, DWORD len)
 {
-    FIXME("(%s, %p, %ld), stub!\n", debugstr_w(root), mount_point, len);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return INVALID_HANDLE_VALUE;
+    struct volume_mount_point_find *find;
+
+    TRACE("(%s, %p, %ld)\n", debugstr_w(root), mount_point, len);
+    if (!root || !mount_point || len == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+    find = HeapAlloc( GetProcessHeap(), 0, sizeof(*find) );
+    if (!find)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
+    find->magic = VOLUME_MOUNT_POINT_FIND_MAGIC;
+    find->done = 1;  /* no mount points enumerated; first "result" is none */
+    mount_point[0] = 0;
+    return (HANDLE)find;
+}
+
+/***********************************************************************
+ *           FindNextVolumeMountPointA   (KERNEL32.@)
+ */
+BOOL WINAPI FindNextVolumeMountPointA(HANDLE handle, LPSTR mount_point, DWORD len)
+{
+    WCHAR *mountW;
+    BOOL ret;
+
+    if (!mount_point || len == 0) return FALSE;
+    mountW = HeapAlloc( GetProcessHeap(), 0, len * sizeof(WCHAR) );
+    if (!mountW) return FALSE;
+    ret = FindNextVolumeMountPointW( handle, mountW, len );
+    if (ret && mountW[0])
+        WideCharToMultiByte( CP_ACP, 0, mountW, -1, mount_point, len, NULL, NULL );
+    else if (ret)
+        mount_point[0] = 0;
+    HeapFree( GetProcessHeap(), 0, mountW );
+    return ret;
+}
+
+/***********************************************************************
+ *           FindNextVolumeMountPointW   (KERNEL32.@)
+ */
+BOOL WINAPI FindNextVolumeMountPointW(HANDLE handle, LPWSTR mount_point, DWORD len)
+{
+    struct volume_mount_point_find *find = (struct volume_mount_point_find *)handle;
+
+    TRACE("(%p, %p, %ld)\n", handle, mount_point, len);
+    if (!find || find->magic != VOLUME_MOUNT_POINT_FIND_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    SetLastError(ERROR_NO_MORE_ITEMS);
+    return FALSE;
 }
 
 /***********************************************************************
@@ -527,8 +611,17 @@ HANDLE WINAPI FindFirstVolumeMountPointW(LPCWSTR root, LPWSTR mount_point, DWORD
  */
 BOOL WINAPI FindVolumeMountPointClose(HANDLE h)
 {
-    FIXME("(%p), stub!\n", h);
-    return FALSE;
+    struct volume_mount_point_find *find = (struct volume_mount_point_find *)h;
+
+    TRACE("(%p)\n", h);
+    if (!find || find->magic != VOLUME_MOUNT_POINT_FIND_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    find->magic = 0;
+    HeapFree( GetProcessHeap(), 0, find );
+    return TRUE;
 }
 
 /***********************************************************************
@@ -536,7 +629,8 @@ BOOL WINAPI FindVolumeMountPointClose(HANDLE h)
  */
 BOOL WINAPI DeleteVolumeMountPointA(LPCSTR mountpoint)
 {
-    FIXME("(%s), stub!\n", debugstr_a(mountpoint));
+    TRACE("(%s)\n", debugstr_a(mountpoint));
+    SetLastError(ERROR_ACCESS_DENIED);
     return FALSE;
 }
 

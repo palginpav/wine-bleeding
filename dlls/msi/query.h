@@ -134,6 +134,7 @@ UINT DELETE_CreateView( MSIDATABASE *db, MSIVIEW **view, MSIVIEW *table );
 UINT ALTER_CreateView( MSIDATABASE *db, MSIVIEW **view, LPCWSTR name, column_info *colinfo, int hold );
 
 UINT STREAMS_CreateView( MSIDATABASE *db, MSIVIEW **view );
+UINT msi_load_database_streams( MSIDATABASE *db );
 
 UINT STORAGES_CreateView( MSIDATABASE *db, MSIVIEW **view );
 

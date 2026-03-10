@@ -20,6 +20,7 @@
 #ifndef _INC_SETUPAPI
 #define _INC_SETUPAPI
 
+#include <winreg.h>
 #include <commctrl.h>
 #include <devpropdef.h>
 

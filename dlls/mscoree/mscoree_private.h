@@ -118,6 +118,7 @@ typedef struct parsed_config_file
 {
     struct list supported_runtimes;
     LPWSTR private_path;
+    BOOL use_legacy_v2_runtime_activation_policy;
 } parsed_config_file;
 
 typedef struct supported_runtime
@@ -177,6 +178,7 @@ extern void (CDECL *mono_callspec_set_assembly)(MonoAssembly *assembly);
 extern MonoClass* (CDECL *mono_class_from_mono_type)(MonoType *type);
 extern MonoClass* (CDECL *mono_class_from_name)(MonoImage *image, const char* name_space, const char *name);
 extern MonoMethod* (CDECL *mono_class_get_method_from_name)(MonoClass *klass, const char *name, int param_count);
+extern MonoString* (CDECL *mono_object_to_string)(MonoObject *obj, MonoObject **exc);
 extern MonoDomain* (CDECL *mono_domain_get)(void);
 extern MonoDomain* (CDECL *mono_domain_get_by_id)(int id);
 extern BOOL (CDECL *mono_domain_set)(MonoDomain *domain, BOOL force);
@@ -187,18 +189,23 @@ extern MonoDomain* (CDECL *mono_jit_init_version)(const char *domain_name, const
 extern MonoImage* (CDECL *mono_image_open_from_module_handle)(HMODULE module_handle, char* fname, UINT has_entry_point, MonoImageOpenStatus* status);
 extern void* (CDECL *mono_marshal_get_vtfixup_ftnptr)(MonoImage *image, DWORD token, WORD type);
 extern MonoDomain* (CDECL *mono_object_get_domain)(MonoObject *obj);
+extern MonoClass* (CDECL *mono_object_get_class)(MonoObject *obj);
 extern MonoMethod* (CDECL *mono_object_get_virtual_method)(MonoObject *obj, MonoMethod *method);
 extern MonoObject* (CDECL *mono_object_new)(MonoDomain *domain, MonoClass *klass);
 extern void* (CDECL *mono_object_unbox)(MonoObject *obj);
+extern const char* (CDECL *mono_class_get_name)(MonoClass *klass);
+extern const char* (CDECL *mono_class_get_namespace)(MonoClass *klass);
 extern MonoType* (CDECL *mono_reflection_type_from_name)(char *name, MonoImage *image);
 extern MonoObject* (CDECL *mono_runtime_invoke)(MonoMethod *method, void *obj, void **params, MonoObject **exc);
 extern void (CDECL *mono_runtime_object_init)(MonoObject *this_obj);
 extern void (CDECL *mono_runtime_quit)(void);
 extern MonoString* (CDECL *mono_string_new)(MonoDomain *domain, const char *str);
+extern char* (CDECL *mono_string_to_utf8)(MonoString *string_obj);
 extern MonoThread* (CDECL *mono_thread_attach)(MonoDomain *domain);
 extern void (CDECL *mono_thread_manage)(void);
 extern void (CDECL *mono_trace_set_print_handler)(MonoPrintCallback callback);
 extern void (CDECL *mono_trace_set_printerr_handler)(MonoPrintCallback callback);
+extern void (CDECL *mono_free)(void *ptr);
 
 /* loaded runtime interfaces */
 extern void expect_no_runtimes(void);

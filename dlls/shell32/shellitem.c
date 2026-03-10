@@ -24,6 +24,10 @@
 #define COBJMACROS
 #include "windef.h"
 #include "winbase.h"
+#include "propidl.h"
+#include "propkey.h"
+#include "propvarutil.h"
+#include "shlwapi.h"
 #include "wine/debug.h"
 
 #include "pidl.h"
@@ -31,6 +35,9 @@
 #include "debughlp.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
+#define SHELLITEM_URL_LENGTH 2084
+#define SHELLITEM_GUID_STRING_LENGTH 39
 
 struct shell_item {
     IShellItem2             IShellItem2_iface;
@@ -44,6 +51,352 @@ typedef struct _CustomDestinationList {
     ICustomDestinationList ICustomDestinationList_iface;
     LONG ref;
 } CustomDestinationList;
+
+struct empty_property_store
+{
+    IPropertyStore IPropertyStore_iface;
+    LONG ref;
+};
+
+struct empty_property_description_list
+{
+    IPropertyDescriptionList IPropertyDescriptionList_iface;
+    LONG ref;
+};
+
+static inline struct empty_property_store *impl_from_empty_IPropertyStore(IPropertyStore *iface)
+{
+    return CONTAINING_RECORD(iface, struct empty_property_store, IPropertyStore_iface);
+}
+
+static inline struct empty_property_description_list *impl_from_empty_IPropertyDescriptionList(IPropertyDescriptionList *iface)
+{
+    return CONTAINING_RECORD(iface, struct empty_property_description_list, IPropertyDescriptionList_iface);
+}
+
+static HRESULT create_empty_property_store(REFIID riid, void **ppv);
+static HRESULT create_empty_property_description_list(REFIID riid, void **ppv);
+HRESULT WINAPI SHCreateDataObject(PCIDLIST_ABSOLUTE pidl_folder, UINT count, PCUITEMID_CHILD_ARRAY pidl_array,
+                                  IDataObject *object, REFIID riid, void **ppv);
+
+static HRESULT WINAPI empty_property_store_QueryInterface(IPropertyStore *iface, REFIID riid, void **ppv)
+{
+    struct empty_property_store *store = impl_from_empty_IPropertyStore(iface);
+
+    TRACE("(%p, %s, %p)\n", store, debugstr_guid(riid), ppv);
+
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IPropertyStore))
+        *ppv = &store->IPropertyStore_iface;
+    else
+    {
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI empty_property_store_AddRef(IPropertyStore *iface)
+{
+    struct empty_property_store *store = impl_from_empty_IPropertyStore(iface);
+    return InterlockedIncrement(&store->ref);
+}
+
+static ULONG WINAPI empty_property_store_Release(IPropertyStore *iface)
+{
+    struct empty_property_store *store = impl_from_empty_IPropertyStore(iface);
+    LONG ref = InterlockedDecrement(&store->ref);
+
+    if (!ref)
+        free(store);
+
+    return ref;
+}
+
+static HRESULT WINAPI empty_property_store_GetCount(IPropertyStore *iface, DWORD *count)
+{
+    TRACE("(%p, %p)\n", iface, count);
+
+    if (!count) return E_POINTER;
+    *count = 0;
+    return S_OK;
+}
+
+static HRESULT WINAPI empty_property_store_GetAt(IPropertyStore *iface, DWORD index, PROPERTYKEY *key)
+{
+    TRACE("(%p, %lu, %p)\n", iface, index, key);
+
+    if (!key) return E_POINTER;
+    return E_INVALIDARG;
+}
+
+static HRESULT WINAPI empty_property_store_GetValue(IPropertyStore *iface, const PROPERTYKEY *key, PROPVARIANT *value)
+{
+    TRACE("(%p, %p, %p)\n", iface, key, value);
+
+    if (!key || !value) return E_POINTER;
+    PropVariantInit(value);
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+
+static HRESULT WINAPI empty_property_store_SetValue(IPropertyStore *iface, const PROPERTYKEY *key, const PROPVARIANT *value)
+{
+    TRACE("(%p, %p, %p)\n", iface, key, value);
+    return S_OK;
+}
+
+static HRESULT WINAPI empty_property_store_Commit(IPropertyStore *iface)
+{
+    TRACE("(%p)\n", iface);
+    return S_OK;
+}
+
+static const IPropertyStoreVtbl empty_property_store_vtbl =
+{
+    empty_property_store_QueryInterface,
+    empty_property_store_AddRef,
+    empty_property_store_Release,
+    empty_property_store_GetCount,
+    empty_property_store_GetAt,
+    empty_property_store_GetValue,
+    empty_property_store_SetValue,
+    empty_property_store_Commit
+};
+
+static HRESULT create_empty_property_store(REFIID riid, void **ppv)
+{
+    struct empty_property_store *store;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    if (!(store = calloc(1, sizeof(*store))))
+        return E_OUTOFMEMORY;
+
+    store->IPropertyStore_iface.lpVtbl = &empty_property_store_vtbl;
+    store->ref = 1;
+
+    hr = IPropertyStore_QueryInterface(&store->IPropertyStore_iface, riid, ppv);
+    IPropertyStore_Release(&store->IPropertyStore_iface);
+    return hr;
+}
+
+static HRESULT shellitem_propvariant_to_filetime(const PROPVARIANT *value, FILETIME *ret)
+{
+    if (!ret) return E_POINTER;
+
+    if (value->vt != VT_FILETIME)
+        return S_FALSE;
+
+    *ret = value->filetime;
+    return S_OK;
+}
+
+static HRESULT shellitem_propvariant_to_int32(const PROPVARIANT *value, int *ret)
+{
+    ULONGLONG ull;
+
+    if (!ret) return E_POINTER;
+
+    switch (value->vt)
+    {
+    case VT_I4:
+    case VT_INT:
+        *ret = value->lVal;
+        return S_OK;
+    case VT_UI4:
+    case VT_UINT:
+        if (value->ulVal > INT_MAX) return S_FALSE;
+        *ret = value->ulVal;
+        return S_OK;
+    case VT_UI8:
+        ull = value->uhVal.QuadPart;
+        if (ull > INT_MAX) return S_FALSE;
+        *ret = ull;
+        return S_OK;
+    case VT_BOOL:
+        *ret = value->boolVal == VARIANT_TRUE;
+        return S_OK;
+    default:
+        return S_FALSE;
+    }
+}
+
+static HRESULT shellitem_propvariant_to_string_alloc(const PROPVARIANT *value, LPWSTR *ret)
+{
+    static const WCHAR trueW[] = L"true";
+    static const WCHAR falseW[] = L"false";
+    WCHAR buffer[32];
+    int len;
+
+    if (!ret) return E_POINTER;
+    *ret = NULL;
+
+    switch (value->vt)
+    {
+    case VT_EMPTY:
+    case VT_NULL:
+        *ret = CoTaskMemAlloc(sizeof(WCHAR));
+        if (!*ret) return E_OUTOFMEMORY;
+        **ret = 0;
+        return S_OK;
+    case VT_LPWSTR:
+        if (!value->pwszVal) return S_FALSE;
+        *ret = CoTaskMemAlloc((lstrlenW(value->pwszVal) + 1) * sizeof(WCHAR));
+        if (!*ret) return E_OUTOFMEMORY;
+        lstrcpyW(*ret, value->pwszVal);
+        return S_OK;
+    case VT_BSTR:
+        if (!value->bstrVal) return S_FALSE;
+        *ret = CoTaskMemAlloc((SysStringLen(value->bstrVal) + 1) * sizeof(WCHAR));
+        if (!*ret) return E_OUTOFMEMORY;
+        lstrcpyW(*ret, value->bstrVal);
+        return S_OK;
+    case VT_CLSID:
+        if (!value->puuid) return S_FALSE;
+        *ret = CoTaskMemAlloc(SHELLITEM_GUID_STRING_LENGTH * sizeof(WCHAR));
+        if (!*ret) return E_OUTOFMEMORY;
+        StringFromGUID2(value->puuid, *ret, SHELLITEM_GUID_STRING_LENGTH);
+        return S_OK;
+    case VT_BOOL:
+        *ret = CoTaskMemAlloc(sizeof(trueW));
+        if (!*ret) return E_OUTOFMEMORY;
+        memcpy(*ret, value->boolVal == VARIANT_TRUE ? trueW : falseW,
+               value->boolVal == VARIANT_TRUE ? sizeof(trueW) : sizeof(falseW));
+        return S_OK;
+    case VT_I4:
+    case VT_INT:
+        len = swprintf(buffer, ARRAY_SIZE(buffer), L"%d", value->lVal);
+        break;
+    case VT_UI4:
+    case VT_UINT:
+        len = swprintf(buffer, ARRAY_SIZE(buffer), L"%u", value->ulVal);
+        break;
+    case VT_UI8:
+        len = swprintf(buffer, ARRAY_SIZE(buffer), L"%I64u", value->uhVal.QuadPart);
+        break;
+    default:
+        return S_FALSE;
+    }
+
+    if (len < 0) return E_FAIL;
+
+    *ret = CoTaskMemAlloc((len + 1) * sizeof(WCHAR));
+    if (!*ret) return E_OUTOFMEMORY;
+    memcpy(*ret, buffer, (len + 1) * sizeof(WCHAR));
+    return S_OK;
+}
+
+static HRESULT shellitem_propvariant_to_clsid(const PROPVARIANT *value, CLSID *ret)
+{
+    if (!ret) return E_POINTER;
+
+    if (value->vt != VT_CLSID || !value->puuid)
+        return S_FALSE;
+
+    *ret = *value->puuid;
+    return S_OK;
+}
+
+static HRESULT shellitem_propvariant_to_uint32(const PROPVARIANT *value, ULONG *ret)
+{
+    ULONGLONG ull;
+
+    if (!ret) return E_POINTER;
+
+    switch (value->vt)
+    {
+    case VT_UI4:
+    case VT_UINT:
+        *ret = value->ulVal;
+        return S_OK;
+    case VT_I4:
+    case VT_INT:
+        if (value->lVal < 0) return S_FALSE;
+        *ret = value->lVal;
+        return S_OK;
+    case VT_UI8:
+        ull = value->uhVal.QuadPart;
+        if (ull > UINT_MAX) return S_FALSE;
+        *ret = ull;
+        return S_OK;
+    case VT_BOOL:
+        *ret = value->boolVal == VARIANT_TRUE;
+        return S_OK;
+    default:
+        return S_FALSE;
+    }
+}
+
+static HRESULT shellitem_propvariant_to_uint64(const PROPVARIANT *value, ULONGLONG *ret)
+{
+    if (!ret) return E_POINTER;
+
+    switch (value->vt)
+    {
+    case VT_UI8:
+        *ret = value->uhVal.QuadPart;
+        return S_OK;
+    case VT_UI4:
+    case VT_UINT:
+        *ret = value->ulVal;
+        return S_OK;
+    case VT_I4:
+    case VT_INT:
+        if (value->lVal < 0) return S_FALSE;
+        *ret = value->lVal;
+        return S_OK;
+    case VT_BOOL:
+        *ret = value->boolVal == VARIANT_TRUE;
+        return S_OK;
+    default:
+        return S_FALSE;
+    }
+}
+
+static HRESULT shellitem_propvariant_to_bool(const PROPVARIANT *value, BOOL *ret)
+{
+    ULONGLONG ull;
+
+    if (!ret) return E_POINTER;
+    *ret = FALSE;
+
+    switch (value->vt)
+    {
+    case VT_BOOL:
+        *ret = value->boolVal == VARIANT_TRUE;
+        return S_OK;
+    case VT_I4:
+    case VT_INT:
+        *ret = !!value->lVal;
+        return S_OK;
+    case VT_UI4:
+    case VT_UINT:
+        *ret = !!value->ulVal;
+        return S_OK;
+    case VT_UI8:
+        ull = value->uhVal.QuadPart;
+        *ret = !!ull;
+        return S_OK;
+    case VT_LPWSTR:
+    case VT_BSTR:
+        if (!value->pwszVal) return S_FALSE;
+        if (!lstrcmpiW(value->pwszVal, L"true") || !lstrcmpW(value->pwszVal, L"#TRUE#"))
+        {
+            *ret = TRUE;
+            return S_OK;
+        }
+        if (!lstrcmpiW(value->pwszVal, L"false") || !lstrcmpW(value->pwszVal, L"#FALSE#"))
+            return S_OK;
+        return S_FALSE;
+    default:
+        return S_FALSE;
+    }
+}
 
 static struct shell_item *impl_from_IShellItem2(IShellItem2 *iface)
 {
@@ -64,6 +417,8 @@ static inline CustomDestinationList *impl_from_ICustomDestinationList( ICustomDe
 {
     return CONTAINING_RECORD(iface, CustomDestinationList, ICustomDestinationList_iface);
 }
+
+static HRESULT create_shellitemarray(IShellItem **items, DWORD count, IShellItemArray **ret);
 
 static HRESULT WINAPI ShellItem_QueryInterface(IShellItem2 *iface, REFIID riid,
     void **ppv)
@@ -196,6 +551,950 @@ static HRESULT ShellItem_get_shellfolder(struct shell_item *This, IBindCtx *pbc,
     return ret;
 }
 
+static HRESULT shellitem_enum_children(struct shell_item *item, IBindCtx *pbc, REFIID riid, void **ppv)
+{
+    IShellItemArray *array = NULL;
+    IShellFolder *folder = NULL;
+    IEnumIDList *enum_list = NULL;
+    IShellItem **items = NULL, **new_items;
+    LPITEMIDLIST child_pidl;
+    ULONG fetched;
+    DWORD count = 0, capacity = 0;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = ShellItem_get_shellfolder(item, pbc, &folder);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellFolder_EnumObjects(folder, NULL, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &enum_list);
+    if (FAILED(hr))
+        goto done;
+
+    while ((hr = IEnumIDList_Next(enum_list, 1, &child_pidl, &fetched)) == S_OK && fetched)
+    {
+        if (count == capacity)
+        {
+            capacity = max(capacity * 2, 8);
+            new_items = realloc(items, capacity * sizeof(*items));
+            if (!new_items)
+            {
+                ILFree(child_pidl);
+                hr = E_OUTOFMEMORY;
+                goto done;
+            }
+            items = new_items;
+        }
+
+        hr = SHCreateShellItem(item->pidl, folder, child_pidl, &items[count]);
+        ILFree(child_pidl);
+        if (FAILED(hr))
+            goto done;
+
+        count++;
+    }
+
+    if (hr == S_FALSE)
+        hr = S_OK;
+    if (FAILED(hr))
+        goto done;
+
+    hr = create_shellitemarray(items, count, &array);
+    if (FAILED(hr))
+        goto done;
+
+    hr = IShellItemArray_EnumItems(array, (IEnumShellItems **)ppv);
+    if (SUCCEEDED(hr) && !IsEqualIID(riid, &IID_IEnumShellItems))
+    {
+        void *obj;
+
+        hr = IEnumShellItems_QueryInterface((IEnumShellItems *)*ppv, riid, &obj);
+        IEnumShellItems_Release((IEnumShellItems *)*ppv);
+        *ppv = obj;
+    }
+
+done:
+    if (array)
+        IShellItemArray_Release(array);
+    if (enum_list)
+        IEnumIDList_Release(enum_list);
+    if (folder)
+        IShellFolder_Release(folder);
+    if (items)
+    {
+        while (count--)
+            IShellItem_Release(items[count]);
+        free(items);
+    }
+
+    return hr;
+}
+
+static HRESULT WINAPI empty_property_description_list_QueryInterface(IPropertyDescriptionList *iface, REFIID riid, void **ppv)
+{
+    struct empty_property_description_list *list = impl_from_empty_IPropertyDescriptionList(iface);
+
+    TRACE("(%p, %s, %p)\n", list, debugstr_guid(riid), ppv);
+
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IPropertyDescriptionList))
+        *ppv = &list->IPropertyDescriptionList_iface;
+    else
+    {
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI empty_property_description_list_AddRef(IPropertyDescriptionList *iface)
+{
+    struct empty_property_description_list *list = impl_from_empty_IPropertyDescriptionList(iface);
+    return InterlockedIncrement(&list->ref);
+}
+
+static ULONG WINAPI empty_property_description_list_Release(IPropertyDescriptionList *iface)
+{
+    struct empty_property_description_list *list = impl_from_empty_IPropertyDescriptionList(iface);
+    LONG ref = InterlockedDecrement(&list->ref);
+
+    if (!ref)
+        free(list);
+
+    return ref;
+}
+
+static HRESULT WINAPI empty_property_description_list_GetCount(IPropertyDescriptionList *iface, UINT *count)
+{
+    TRACE("(%p, %p)\n", iface, count);
+
+    if (!count) return E_POINTER;
+    *count = 0;
+    return S_OK;
+}
+
+static HRESULT WINAPI empty_property_description_list_GetAt(IPropertyDescriptionList *iface, UINT index, REFIID riid, void **ppv)
+{
+    TRACE("(%p, %u, %s, %p)\n", iface, index, debugstr_guid(riid), ppv);
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+    return E_INVALIDARG;
+}
+
+static const IPropertyDescriptionListVtbl empty_property_description_list_vtbl =
+{
+    empty_property_description_list_QueryInterface,
+    empty_property_description_list_AddRef,
+    empty_property_description_list_Release,
+    empty_property_description_list_GetCount,
+    empty_property_description_list_GetAt,
+};
+
+static HRESULT create_empty_property_description_list(REFIID riid, void **ppv)
+{
+    struct empty_property_description_list *list;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    list = calloc(1, sizeof(*list));
+    if (!list)
+        return E_OUTOFMEMORY;
+
+    list->IPropertyDescriptionList_iface.lpVtbl = &empty_property_description_list_vtbl;
+    list->ref = 1;
+
+    hr = IPropertyDescriptionList_QueryInterface(&list->IPropertyDescriptionList_iface, riid, ppv);
+    IPropertyDescriptionList_Release(&list->IPropertyDescriptionList_iface);
+
+    return hr;
+}
+
+static HRESULT shellitem_get_association_name(IShellItem2 *iface, LPWSTR *name, LPCWSTR *assoc_name)
+{
+    WCHAR *ext;
+    SFGAOF attrs = SFGAO_FOLDER;
+    HRESULT hr;
+
+    *name = NULL;
+    *assoc_name = L"*";
+
+    hr = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+    if (FAILED(hr))
+        return hr;
+
+    if (attrs & SFGAO_FOLDER)
+        *assoc_name = L"Folder";
+    else
+    {
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_FILESYSPATH, name);
+        if (FAILED(hr))
+            hr = IShellItem2_GetDisplayName(iface, SIGDN_DESKTOPABSOLUTEPARSING, name);
+        if (FAILED(hr))
+            return hr;
+
+        ext = PathFindExtensionW(*name);
+        if (ext && *ext)
+            *assoc_name = ext;
+    }
+
+    return S_OK;
+}
+
+static HRESULT shellitem_create_association_object(IShellItem2 *iface, REFIID riid, void **ppv)
+{
+    IQueryAssociations *assoc;
+    LPWSTR name;
+    LPCWSTR assoc_name;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = shellitem_get_association_name(iface, &name, &assoc_name);
+    if (FAILED(hr))
+        return hr;
+
+    hr = QueryAssociations_Constructor(NULL, &IID_IQueryAssociations, (void **)&assoc);
+    if (SUCCEEDED(hr))
+    {
+        hr = IQueryAssociations_Init(assoc, 0, assoc_name, NULL, NULL);
+        if (SUCCEEDED(hr))
+            hr = IQueryAssociations_QueryInterface(assoc, riid, ppv);
+        IQueryAssociations_Release(assoc);
+    }
+
+    CoTaskMemFree(name);
+    return hr;
+}
+
+static HRESULT shellitem_enum_association_handlers(IShellItem2 *iface, REFIID riid, void **ppv)
+{
+    IEnumAssocHandlers *handlers;
+    LPWSTR name;
+    LPCWSTR assoc_name;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = shellitem_get_association_name(iface, &name, &assoc_name);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHAssocEnumHandlers(assoc_name, ASSOC_FILTER_RECOMMENDED, &handlers);
+    if (SUCCEEDED(hr))
+    {
+        hr = IEnumAssocHandlers_QueryInterface(handlers, riid, ppv);
+        IEnumAssocHandlers_Release(handlers);
+    }
+
+    CoTaskMemFree(name);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_target(struct shell_item *item, REFIID riid, void **ppv)
+{
+    IShellLinkW *link;
+    WCHAR path[MAX_PATH];
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = IShellLink_ConstructFromFile(NULL, &IID_IShellLinkW, item->pidl, (IUnknown **)&link);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellLinkW_GetPath(link, path, ARRAY_SIZE(path), NULL, SLGP_RAWPATH);
+    if (hr == S_OK && path[0])
+        hr = SHCreateItemFromParsingName(path, NULL, riid, ppv);
+    else
+        hr = E_NOINTERFACE;
+
+    IShellLinkW_Release(link);
+    return hr;
+}
+
+static HRESULT shellitem_get_filesystem_path(IShellItem2 *iface, LPWSTR *path)
+{
+    HRESULT hr;
+
+    *path = NULL;
+
+    hr = IShellItem2_GetDisplayName(iface, SIGDN_FILESYSPATH, path);
+    if (FAILED(hr))
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_DESKTOPABSOLUTEPARSING, path);
+
+    return hr;
+}
+
+static HRESULT shellitem_get_file_attributes(IShellItem2 *iface, WIN32_FILE_ATTRIBUTE_DATA *data)
+{
+    LPWSTR path;
+    HRESULT hr;
+
+    hr = shellitem_get_filesystem_path(iface, &path);
+    if (FAILED(hr))
+        return hr;
+
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, data))
+        hr = HRESULT_FROM_WIN32(GetLastError());
+    else
+        hr = S_OK;
+
+    CoTaskMemFree(path);
+    return hr;
+}
+
+static HRESULT shellitem_get_child_count(struct shell_item *item, DWORD *count)
+{
+    IShellFolder *folder = NULL;
+    IEnumIDList *enum_list = NULL;
+    LPITEMIDLIST child;
+    ULONG fetched;
+    DWORD total = 0;
+    HRESULT hr;
+
+    if (!count) return E_POINTER;
+    *count = 0;
+
+    hr = ShellItem_get_shellfolder(item, NULL, &folder);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellFolder_EnumObjects(folder, NULL, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &enum_list);
+    if (FAILED(hr))
+    {
+        IShellFolder_Release(folder);
+        return hr;
+    }
+
+    while ((hr = IEnumIDList_Next(enum_list, 1, &child, &fetched)) == S_OK && fetched)
+    {
+        total++;
+        ILFree(child);
+    }
+
+    IEnumIDList_Release(enum_list);
+    IShellFolder_Release(folder);
+
+    if (hr == S_FALSE)
+        hr = S_OK;
+    if (SUCCEEDED(hr))
+        *count = total;
+    return hr;
+}
+
+static HRESULT shellitem_create_sfgao_flag_strings(SFGAOF attrs, PROPVARIANT *ppropvar)
+{
+    PCWSTR strings[10];
+    ULONG count = 0;
+
+    if (attrs & SFGAO_FOLDER) strings[count++] = L"Folder";
+    if (attrs & SFGAO_FILESYSTEM) strings[count++] = L"FileSystem";
+    if (attrs & SFGAO_LINK) strings[count++] = L"Link";
+    if (attrs & SFGAO_STREAM) strings[count++] = L"Stream";
+    if (attrs & SFGAO_HIDDEN) strings[count++] = L"Hidden";
+    if (attrs & SFGAO_READONLY) strings[count++] = L"ReadOnly";
+    if (attrs & SFGAO_BROWSABLE) strings[count++] = L"Browsable";
+    if (attrs & SFGAO_CANCOPY) strings[count++] = L"CanCopy";
+    if (attrs & SFGAO_CANMOVE) strings[count++] = L"CanMove";
+    if (attrs & SFGAO_CANDELETE) strings[count++] = L"CanDelete";
+
+    if (!count)
+        return S_FALSE;
+
+    return InitPropVariantFromStringVector(strings, count, ppropvar);
+}
+
+static HRESULT shellitem_get_perceived_type(IShellItem2 *iface, PERCEIVED *type)
+{
+    WCHAR *path, *ext;
+    SFGAOF attrs = SFGAO_FOLDER;
+    HRESULT hr;
+
+    if (!type) return E_POINTER;
+    *type = PERCEIVED_TYPE_UNKNOWN;
+
+    hr = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+    if (FAILED(hr))
+        return hr;
+    if (attrs & SFGAO_FOLDER)
+    {
+        *type = PERCEIVED_TYPE_FOLDER;
+        return S_OK;
+    }
+
+    hr = shellitem_get_filesystem_path(iface, &path);
+    if (FAILED(hr))
+        return hr;
+
+    ext = PathFindExtensionW(path);
+    if (!ext || !*ext)
+    {
+        CoTaskMemFree(path);
+        return S_FALSE;
+    }
+
+    if (!lstrcmpiW(ext, L".txt") || !lstrcmpiW(ext, L".log") || !lstrcmpiW(ext, L".ini") ||
+        !lstrcmpiW(ext, L".cfg") || !lstrcmpiW(ext, L".csv") || !lstrcmpiW(ext, L".json") ||
+        !lstrcmpiW(ext, L".xml") || !lstrcmpiW(ext, L".yml") || !lstrcmpiW(ext, L".yaml") ||
+        !lstrcmpiW(ext, L".md"))
+        *type = PERCEIVED_TYPE_TEXT;
+    else if (!lstrcmpiW(ext, L".pdf") || !lstrcmpiW(ext, L".doc") || !lstrcmpiW(ext, L".docx") ||
+             !lstrcmpiW(ext, L".rtf") || !lstrcmpiW(ext, L".odt"))
+        *type = PERCEIVED_TYPE_DOCUMENT;
+    else if (!lstrcmpiW(ext, L".png") || !lstrcmpiW(ext, L".jpg") || !lstrcmpiW(ext, L".jpeg") ||
+             !lstrcmpiW(ext, L".bmp") || !lstrcmpiW(ext, L".gif") || !lstrcmpiW(ext, L".tif") ||
+             !lstrcmpiW(ext, L".tiff") || !lstrcmpiW(ext, L".webp") || !lstrcmpiW(ext, L".ico"))
+        *type = PERCEIVED_TYPE_IMAGE;
+    else if (!lstrcmpiW(ext, L".mp3") || !lstrcmpiW(ext, L".wav") || !lstrcmpiW(ext, L".flac") ||
+             !lstrcmpiW(ext, L".ogg") || !lstrcmpiW(ext, L".m4a") || !lstrcmpiW(ext, L".aac"))
+        *type = PERCEIVED_TYPE_AUDIO;
+    else if (!lstrcmpiW(ext, L".mp4") || !lstrcmpiW(ext, L".mkv") || !lstrcmpiW(ext, L".avi") ||
+             !lstrcmpiW(ext, L".mov") || !lstrcmpiW(ext, L".wmv") || !lstrcmpiW(ext, L".webm"))
+        *type = PERCEIVED_TYPE_VIDEO;
+    else if (!lstrcmpiW(ext, L".zip") || !lstrcmpiW(ext, L".7z") || !lstrcmpiW(ext, L".rar") ||
+             !lstrcmpiW(ext, L".gz") || !lstrcmpiW(ext, L".tar") || !lstrcmpiW(ext, L".bz2") ||
+             !lstrcmpiW(ext, L".xz"))
+        *type = PERCEIVED_TYPE_COMPRESSED;
+    else if (!lstrcmpiW(ext, L".exe") || !lstrcmpiW(ext, L".msi") || !lstrcmpiW(ext, L".bat") ||
+             !lstrcmpiW(ext, L".cmd") || !lstrcmpiW(ext, L".com"))
+        *type = PERCEIVED_TYPE_APPLICATION;
+    else if (!lstrcmpiW(ext, L".dll") || !lstrcmpiW(ext, L".sys") || !lstrcmpiW(ext, L".drv"))
+        *type = PERCEIVED_TYPE_SYSTEM;
+    else
+        *type = PERCEIVED_TYPE_UNKNOWN;
+
+    CoTaskMemFree(path);
+    return S_OK;
+}
+
+static HRESULT shellitem_get_link_target_path(struct shell_item *item, LPWSTR *path)
+{
+    IShellLinkW *link;
+    WCHAR buffer[MAX_PATH];
+    HRESULT hr;
+
+    if (!path) return E_POINTER;
+    *path = NULL;
+
+    hr = IShellLink_ConstructFromFile(NULL, &IID_IShellLinkW, item->pidl, (IUnknown **)&link);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellLinkW_GetPath(link, buffer, ARRAY_SIZE(buffer), NULL, SLGP_RAWPATH);
+    if (hr == S_OK && buffer[0])
+    {
+        *path = CoTaskMemAlloc((lstrlenW(buffer) + 1) * sizeof(WCHAR));
+        if (*path)
+            lstrcpyW(*path, buffer);
+        else
+            hr = E_OUTOFMEMORY;
+    }
+    else
+        hr = S_FALSE;
+
+    IShellLinkW_Release(link);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_string(struct shell_item *item, REFPROPERTYKEY key, LPWSTR *value)
+{
+    IShellLinkW *link;
+    WCHAR buffer[SHELLITEM_URL_LENGTH];
+    HRESULT hr;
+
+    if (!value) return E_POINTER;
+    *value = NULL;
+
+    hr = IShellLink_ConstructFromFile(NULL, &IID_IShellLinkW, item->pidl, (IUnknown **)&link);
+    if (FAILED(hr))
+        return hr;
+
+    if (IsEqualPropertyKey(*key, PKEY_Link_Description) || IsEqualPropertyKey(*key, PKEY_Link_Comment))
+        hr = IShellLinkW_GetDescription(link, buffer, ARRAY_SIZE(buffer));
+    else if (IsEqualPropertyKey(*key, PKEY_Link_Arguments))
+        hr = IShellLinkW_GetArguments(link, buffer, ARRAY_SIZE(buffer));
+    else
+        hr = E_INVALIDARG;
+
+    if (SUCCEEDED(hr) && buffer[0])
+    {
+        *value = CoTaskMemAlloc((lstrlenW(buffer) + 1) * sizeof(WCHAR));
+        if (*value)
+            lstrcpyW(*value, buffer);
+        else
+            hr = E_OUTOFMEMORY;
+    }
+    else if (SUCCEEDED(hr))
+        hr = S_FALSE;
+
+    IShellLinkW_Release(link);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_target_url_part(struct shell_item *item, DWORD part, LPWSTR *value)
+{
+    WCHAR *target_path = NULL, *url = NULL;
+    DWORD len;
+    HRESULT hr;
+
+    if (!value) return E_POINTER;
+    *value = NULL;
+
+    hr = shellitem_get_link_target_path(item, &target_path);
+    if (FAILED(hr))
+        return hr;
+
+    len = SHELLITEM_URL_LENGTH;
+    url = CoTaskMemAlloc(len * sizeof(WCHAR));
+    if (!url)
+    {
+        CoTaskMemFree(target_path);
+        return E_OUTOFMEMORY;
+    }
+
+    hr = UrlCreateFromPathW(target_path, url, &len, 0);
+    if (SUCCEEDED(hr))
+    {
+        DWORD part_len = SHELLITEM_URL_LENGTH;
+
+        *value = CoTaskMemAlloc(part_len * sizeof(WCHAR));
+        if (!*value)
+            hr = E_OUTOFMEMORY;
+        else
+        {
+            hr = UrlGetPartW(url, *value, &part_len, part, 0);
+            if (FAILED(hr))
+            {
+                CoTaskMemFree(*value);
+                *value = NULL;
+            }
+        }
+    }
+
+    CoTaskMemFree(url);
+    CoTaskMemFree(target_path);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_target_url_path(struct shell_item *item, LPWSTR *value)
+{
+    WCHAR *target_path = NULL, *url = NULL, *path_start;
+    DWORD len = SHELLITEM_URL_LENGTH;
+    HRESULT hr;
+
+    if (!value) return E_POINTER;
+    *value = NULL;
+
+    hr = shellitem_get_link_target_path(item, &target_path);
+    if (FAILED(hr))
+        return hr;
+
+    url = CoTaskMemAlloc(len * sizeof(WCHAR));
+    if (!url)
+    {
+        CoTaskMemFree(target_path);
+        return E_OUTOFMEMORY;
+    }
+
+    hr = UrlCreateFromPathW(target_path, url, &len, 0);
+    if (SUCCEEDED(hr))
+    {
+        path_start = wcschr(url, ':');
+        while (path_start && path_start[0] == ':' && path_start[1] == '/')
+            path_start++;
+        while (path_start && path_start[0] == '/')
+            path_start++;
+
+        if (path_start && *path_start)
+        {
+            *value = CoTaskMemAlloc((lstrlenW(path_start) + 1) * sizeof(WCHAR));
+            if (*value)
+                lstrcpyW(*value, path_start);
+            else
+                hr = E_OUTOFMEMORY;
+        }
+        else
+            hr = S_FALSE;
+    }
+
+    CoTaskMemFree(url);
+    CoTaskMemFree(target_path);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_target_attributes(struct shell_item *item, SFGAOF *attrs)
+{
+    IShellItem *target;
+    HRESULT hr;
+
+    if (!attrs) return E_POINTER;
+    *attrs = 0;
+
+    hr = shellitem_get_link_target(item, &IID_IShellItem, (void **)&target);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellItem_GetAttributes(target, SFGAO_CAPABILITYMASK | SFGAO_DISPLAYATTRMASK |
+                                          SFGAO_STORAGEGAPMASK | SFGAO_CONTENTSMASK,
+                                  attrs);
+    IShellItem_Release(target);
+    return hr;
+}
+
+static HRESULT shellitem_get_link_target_file_attributes(struct shell_item *item, WIN32_FILE_ATTRIBUTE_DATA *data)
+{
+    WCHAR *path;
+    HRESULT hr;
+
+    if (!data) return E_POINTER;
+
+    hr = shellitem_get_link_target_path(item, &path);
+    if (FAILED(hr))
+        return hr;
+
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, data))
+        hr = HRESULT_FROM_WIN32(GetLastError());
+    else
+        hr = S_OK;
+
+    CoTaskMemFree(path);
+    return hr;
+}
+
+static HRESULT shellitem_copy_extension(const WCHAR *path, LPWSTR *value)
+{
+    const WCHAR *ext;
+    WCHAR *ret;
+
+    if (!value) return E_POINTER;
+    *value = NULL;
+    if (!path) return E_INVALIDARG;
+
+    ext = PathFindExtensionW(path);
+    if (!ext || !*ext)
+        return S_FALSE;
+
+    ret = CoTaskMemAlloc((lstrlenW(ext) + 1) * sizeof(WCHAR));
+    if (!ret)
+        return E_OUTOFMEMORY;
+
+    lstrcpyW(ret, ext);
+    *value = ret;
+    return S_OK;
+}
+
+static HRESULT shellitem_get_string_property(IShellItem2 *iface, REFPROPERTYKEY key, LPWSTR *value)
+{
+    struct shell_item *item = impl_from_IShellItem2(iface);
+    WCHAR *ret = NULL;
+    HRESULT hr;
+
+    *value = NULL;
+
+    if (IsEqualPropertyKey(*key, PKEY_ItemNameDisplay))
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_NORMALDISPLAY, &ret);
+    else if (IsEqualPropertyKey(*key, PKEY_FileName))
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_PARENTRELATIVEPARSING, &ret);
+    else if (IsEqualPropertyKey(*key, PKEY_ParsingPath))
+        hr = shellitem_get_filesystem_path(iface, &ret);
+    else if (IsEqualPropertyKey(*key, PKEY_ParsingName))
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_DESKTOPABSOLUTEPARSING, &ret);
+    else if (IsEqualPropertyKey(*key, PKEY_ItemPathDisplay))
+        hr = shellitem_get_filesystem_path(iface, &ret);
+    else if (IsEqualPropertyKey(*key, PKEY_ItemFolderPathDisplay))
+    {
+        IShellItem *parent;
+
+        hr = IShellItem2_GetParent(iface, &parent);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItem_GetDisplayName(parent, SIGDN_FILESYSPATH, &ret);
+            if (FAILED(hr))
+                hr = IShellItem_GetDisplayName(parent, SIGDN_DESKTOPABSOLUTEPARSING, &ret);
+            IShellItem_Release(parent);
+        }
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemFolderPathDisplayNarrow))
+    {
+        IShellItem *parent;
+
+        hr = IShellItem2_GetParent(iface, &parent);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItem_GetDisplayName(parent, SIGDN_FILESYSPATH, &ret);
+            if (FAILED(hr))
+                hr = IShellItem_GetDisplayName(parent, SIGDN_DESKTOPABSOLUTEPARSING, &ret);
+            IShellItem_Release(parent);
+        }
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemFolderNameDisplay))
+    {
+        IShellItem *parent;
+
+        hr = IShellItem2_GetParent(iface, &parent);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItem_GetDisplayName(parent, SIGDN_NORMALDISPLAY, &ret);
+            IShellItem_Release(parent);
+        }
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_FolderNameDisplay))
+    {
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_NORMALDISPLAY, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemNameDisplayWithoutExtension))
+    {
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_NORMALDISPLAY, &ret);
+        if (SUCCEEDED(hr) && ret)
+            PathRemoveExtensionW(ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemTypeText))
+    {
+        SFGAOF attrs = SFGAO_FOLDER;
+
+        hr = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        if (attrs & SFGAO_FOLDER)
+        {
+            static const WCHAR folderW[] = L"File folder";
+
+            ret = CoTaskMemAlloc(sizeof(folderW));
+            if (!ret)
+                return E_OUTOFMEMORY;
+            memcpy(ret, folderW, sizeof(folderW));
+            hr = S_OK;
+        }
+        else
+        {
+            WCHAR *path, *ext;
+
+            hr = shellitem_get_filesystem_path(iface, &path);
+            if (FAILED(hr))
+                return hr;
+
+            ext = PathFindExtensionW(path);
+            if (ext && *ext)
+            {
+                ret = CoTaskMemAlloc((lstrlenW(ext) + 1) * sizeof(WCHAR));
+                if (ret)
+                {
+                    lstrcpyW(ret, ext);
+                    hr = S_OK;
+                }
+                else hr = E_OUTOFMEMORY;
+            }
+            else hr = S_FALSE;
+
+            CoTaskMemFree(path);
+        }
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_KindText))
+    {
+        SFGAOF attrs = SFGAO_FOLDER;
+
+        hr = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        if (attrs & SFGAO_FOLDER)
+        {
+            static const WCHAR folderW[] = L"Folder";
+
+            ret = CoTaskMemAlloc(sizeof(folderW));
+            if (!ret)
+                return E_OUTOFMEMORY;
+            memcpy(ret, folderW, sizeof(folderW));
+            hr = S_OK;
+        }
+        else
+        {
+            static const WCHAR fileW[] = L"File";
+
+            ret = CoTaskMemAlloc(sizeof(fileW));
+            if (!ret)
+                return E_OUTOFMEMORY;
+            memcpy(ret, fileW, sizeof(fileW));
+            hr = S_OK;
+        }
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemType))
+    {
+        WCHAR *path, *ext;
+
+        hr = shellitem_get_filesystem_path(iface, &path);
+        if (FAILED(hr))
+            return hr;
+
+        ext = PathFindExtensionW(path);
+        if (ext && *ext)
+        {
+            ret = CoTaskMemAlloc((lstrlenW(ext) + 1) * sizeof(WCHAR));
+            if (ret)
+            {
+                lstrcpyW(ret, ext);
+                hr = S_OK;
+            }
+            else hr = E_OUTOFMEMORY;
+        }
+        else hr = S_FALSE;
+
+        CoTaskMemFree(path);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemSubType))
+    {
+        WCHAR *path;
+
+        hr = shellitem_get_filesystem_path(iface, &path);
+        if (FAILED(hr))
+            return hr;
+
+        hr = shellitem_copy_extension(path, &ret);
+        CoTaskMemFree(path);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_FileExtension))
+    {
+        WCHAR *path;
+
+        hr = shellitem_get_filesystem_path(iface, &path);
+        if (FAILED(hr))
+            return hr;
+
+        hr = shellitem_copy_extension(path, &ret);
+        CoTaskMemFree(path);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemName))
+    {
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_PARENTRELATIVEPARSING, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemPathDisplayNarrow))
+    {
+        hr = shellitem_get_filesystem_path(iface, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_TargetParsingPath))
+    {
+        hr = shellitem_get_link_target_path(item, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_Description) ||
+             IsEqualPropertyKey(*key, PKEY_Link_Comment) ||
+             IsEqualPropertyKey(*key, PKEY_Link_Arguments))
+    {
+        hr = shellitem_get_link_string(item, key, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_TargetExtension))
+    {
+        WCHAR *path;
+
+        hr = shellitem_get_link_target_path(item, &path);
+        if (FAILED(hr))
+            return hr;
+
+        hr = shellitem_copy_extension(path, &ret);
+        CoTaskMemFree(path);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_ItemUrl))
+    {
+        hr = IShellItem2_GetDisplayName(iface, SIGDN_URL, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_TargetUrl))
+    {
+        WCHAR *path;
+        DWORD len = SHELLITEM_URL_LENGTH;
+
+        hr = shellitem_get_link_target_path(item, &path);
+        if (FAILED(hr))
+            return hr;
+
+        ret = CoTaskMemAlloc(len * sizeof(WCHAR));
+        if (ret)
+            hr = UrlCreateFromPathW(path, ret, &len, 0);
+        else
+            hr = E_OUTOFMEMORY;
+
+        CoTaskMemFree(path);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_TargetUrlHostName))
+    {
+        hr = shellitem_get_link_target_url_part(item, URL_PART_HOSTNAME, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_TargetUrlPath))
+    {
+        hr = shellitem_get_link_target_url_path(item, &ret);
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Link_Status))
+    {
+        WCHAR *path;
+        static const WCHAR okW[] = L"OK";
+        static const WCHAR brokenW[] = L"Broken";
+
+        hr = shellitem_get_link_target_path(item, &path);
+        if (FAILED(hr))
+            return hr;
+
+        ret = CoTaskMemAlloc(sizeof(okW));
+        if (!ret)
+        {
+            CoTaskMemFree(path);
+            return E_OUTOFMEMORY;
+        }
+
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+            memcpy(ret, okW, sizeof(okW));
+        else
+            memcpy(ret, brokenW, sizeof(brokenW));
+
+        CoTaskMemFree(path);
+        hr = S_OK;
+    }
+    else if (IsEqualPropertyKey(*key, PKEY_Status))
+    {
+        if (SUCCEEDED(shellitem_get_link_target_path(item, &ret)))
+        {
+            WCHAR *path;
+            static const WCHAR okW[] = L"OK";
+            static const WCHAR brokenW[] = L"Broken";
+
+            path = ret;
+            ret = CoTaskMemAlloc(sizeof(okW));
+            if (!ret)
+            {
+                CoTaskMemFree(path);
+                return E_OUTOFMEMORY;
+            }
+
+            if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+                memcpy(ret, okW, sizeof(okW));
+            else
+                memcpy(ret, brokenW, sizeof(brokenW));
+
+            CoTaskMemFree(path);
+            hr = S_OK;
+        }
+        else
+            hr = S_FALSE;
+    }
+    else
+        return S_FALSE;
+
+    if (SUCCEEDED(hr))
+        *value = ret;
+    else
+        CoTaskMemFree(ret);
+    return hr;
+}
+
 static HRESULT WINAPI ShellItem_BindToHandler(IShellItem2 *iface, IBindCtx *pbc,
     REFGUID rbhid, REFIID riid, void **ppvOut)
 {
@@ -236,9 +1535,40 @@ static HRESULT WINAPI ShellItem_BindToHandler(IShellItem2 *iface, IBindCtx *pbc,
         return ShellItem_BindToHandler(&This->IShellItem2_iface, pbc, &BHID_SFUIObject,
                                        &IID_IDataObject, ppvOut);
     }
+    else if (IsEqualGUID(rbhid, &BHID_PropertyStore))
+    {
+        return create_empty_property_store(riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_EnumItems) || IsEqualGUID(rbhid, &BHID_StorageEnum))
+    {
+        SFGAOF attrs = SFGAO_FOLDER;
 
-    FIXME("Unsupported BHID %s.\n", debugstr_guid(rbhid));
+        ret = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+        if (FAILED(ret))
+            return ret;
+        if (!(attrs & SFGAO_FOLDER))
+            return MK_E_NOOBJECT;
 
+        return shellitem_enum_children(This, pbc, riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_AssociationArray) || IsEqualGUID(rbhid, &BHID_Filter))
+    {
+        return shellitem_create_association_object(iface, riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_ThumbnailHandler))
+    {
+        return IShellItemImageFactory_QueryInterface(&This->IShellItemImageFactory_iface, riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_EnumAssocHandlers))
+    {
+        return shellitem_enum_association_handlers(iface, riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_LinkTargetItem))
+    {
+        return shellitem_get_link_target(This, riid, ppvOut);
+    }
+
+    TRACE("Unsupported BHID %s.\n", debugstr_guid(rbhid));
     return MK_E_NOOBJECT;
 }
 
@@ -311,7 +1641,7 @@ static HRESULT WINAPI ShellItem_Compare(IShellItem2 *iface, IShellItem *oth,
     TRACE("(%p,%p,%lx,%p)\n", iface, oth, hint, piOrder);
 
     if(hint & (SICHINT_CANONICAL | SICHINT_ALLFIELDS))
-        FIXME("Unsupported flags 0x%08lx\n", hint);
+        TRACE("Unsupported flags 0x%08lx\n", hint);
 
     ret = IShellItem2_GetDisplayName(iface, SIGDN_DESKTOPABSOLUTEEDITING, &dispname);
     if(SUCCEEDED(ret))
@@ -357,97 +1687,444 @@ static HRESULT WINAPI ShellItem2_GetPropertyStore(IShellItem2 *iface, GETPROPERT
     REFIID riid, void **ppv)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%d, %s, %p)\n", This, flags, shdebugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    TRACE("%p (%d, %s, %p)\n", This, flags, shdebugstr_guid(riid), ppv);
+    return create_empty_property_store(riid, ppv);
 }
 
 static HRESULT WINAPI ShellItem2_GetPropertyStoreWithCreateObject(IShellItem2 *iface,
     GETPROPERTYSTOREFLAGS flags, IUnknown *punkCreateObject, REFIID riid, void **ppv)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%08x, %p, %s, %p)\n",
-          This, flags, punkCreateObject, shdebugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    TRACE("%p (%08x, %p, %s, %p)\n", This, flags, punkCreateObject, shdebugstr_guid(riid), ppv);
+    return create_empty_property_store(riid, ppv);
 }
 
 static HRESULT WINAPI ShellItem2_GetPropertyStoreForKeys(IShellItem2 *iface, const PROPERTYKEY *rgKeys,
     UINT cKeys, GETPROPERTYSTOREFLAGS flags, REFIID riid, void **ppv)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %d, %08x, %s, %p)\n",
-          This, rgKeys, cKeys, flags, shdebugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    TRACE("%p (%p, %d, %08x, %s, %p)\n", This, rgKeys, cKeys, flags, shdebugstr_guid(riid), ppv);
+    return create_empty_property_store(riid, ppv);
 }
 
 static HRESULT WINAPI ShellItem2_GetPropertyDescriptionList(IShellItem2 *iface,
     REFPROPERTYKEY keyType, REFIID riid, void **ppv)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %s, %p)\n", This, keyType, debugstr_guid(riid), ppv);
-    return E_NOTIMPL;
+    TRACE("%p (%p, %s, %p)\n", This, keyType, debugstr_guid(riid), ppv);
+    return create_empty_property_description_list(riid, ppv);
 }
 
 static HRESULT WINAPI ShellItem2_Update(IShellItem2 *iface, IBindCtx *pbc)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p)\n", This, pbc);
-    return E_NOTIMPL;
+    TRACE("%p (%p)\n", This, pbc);
+    return S_OK;
 }
 
 static HRESULT WINAPI ShellItem2_GetProperty(IShellItem2 *iface, REFPROPERTYKEY key, PROPVARIANT *ppropvar)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, ppropvar);
-    return E_NOTIMPL;
+    const IID *clsid;
+    WCHAR *str;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    SFGAOF attrs;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, ppropvar);
+
+    if (!ppropvar) return E_POINTER;
+    PropVariantInit(ppropvar);
+
+    hr = shellitem_get_string_property(iface, key, &str);
+    if (SUCCEEDED(hr))
+    {
+        ppropvar->vt = VT_LPWSTR;
+        ppropvar->pwszVal = str;
+        return S_OK;
+    }
+    if (hr != S_FALSE)
+        return hr;
+
+    if (IsEqualPropertyKey(*key, PKEY_NamespaceCLSID))
+    {
+        if (_ILIsDesktop(This->pidl))
+            clsid = &CLSID_ShellDesktop;
+        else
+            clsid = _ILGetGUIDPointer(ILFindLastID(This->pidl));
+
+        if (!clsid)
+            return S_FALSE;
+
+        ppropvar->vt = VT_CLSID;
+        ppropvar->puuid = CoTaskMemAlloc(sizeof(*ppropvar->puuid));
+        if (!ppropvar->puuid)
+            return E_OUTOFMEMORY;
+
+        *ppropvar->puuid = *clsid;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Size))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            return S_FALSE;
+
+        ppropvar->vt = VT_UI8;
+        ppropvar->uhVal.QuadPart = ((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_FileAllocationSize))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            return S_FALSE;
+
+        ppropvar->vt = VT_UI8;
+        ppropvar->uhVal.QuadPart = ((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_TotalFileSize))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            return S_FALSE;
+
+        ppropvar->vt = VT_UI8;
+        ppropvar->uhVal.QuadPart = ((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_FileAttributes))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_UI4;
+        ppropvar->ulVal = data.dwFileAttributes;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_SFGAOFlags))
+    {
+        attrs = ~0u;
+        hr = IShellItem2_GetAttributes(iface, attrs, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_UI4;
+        ppropvar->ulVal = attrs;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_DateModified))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_FILETIME;
+        ppropvar->filetime = data.ftLastWriteTime;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_DateCreated))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_FILETIME;
+        ppropvar->filetime = data.ftCreationTime;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_DateAccessed))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_FILETIME;
+        ppropvar->filetime = data.ftLastAccessTime;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_FileCount))
+    {
+        DWORD count;
+
+        hr = shellitem_get_child_count(This, &count);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_UI4;
+        ppropvar->ulVal = count;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_ItemDate) ||
+        IsEqualPropertyKey(*key, PKEY_DateAcquired) ||
+        IsEqualPropertyKey(*key, PKEY_DateArchived) ||
+        IsEqualPropertyKey(*key, PKEY_DateCompleted))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_FILETIME;
+        ppropvar->filetime = data.ftLastWriteTime;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Link_DateVisited))
+    {
+        hr = shellitem_get_link_target_file_attributes(This, &data);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_FILETIME;
+        ppropvar->filetime = data.ftLastAccessTime;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Link_TargetSFGAOFlags))
+    {
+        hr = shellitem_get_link_target_attributes(This, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_UI4;
+        ppropvar->ulVal = attrs;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Link_TargetSFGAOFlagsStrings))
+    {
+        hr = shellitem_get_link_target_attributes(This, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        return shellitem_create_sfgao_flag_strings(attrs, ppropvar);
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Shell_SFGAOFlagsStrings))
+    {
+        attrs = ~0u;
+        hr = IShellItem2_GetAttributes(iface, attrs, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        return shellitem_create_sfgao_flag_strings(attrs, ppropvar);
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_Kind))
+    {
+        PCWSTR strings[1];
+
+        attrs = SFGAO_FOLDER;
+        hr = IShellItem2_GetAttributes(iface, SFGAO_FOLDER, &attrs);
+        if (FAILED(hr))
+            return hr;
+
+        strings[0] = (attrs & SFGAO_FOLDER) ? L"Folder" : L"File";
+        return InitPropVariantFromStringVector(strings, 1, ppropvar);
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_PerceivedType))
+    {
+        PERCEIVED type;
+
+        hr = shellitem_get_perceived_type(iface, &type);
+        if (FAILED(hr))
+            return hr;
+
+        ppropvar->vt = VT_I4;
+        ppropvar->lVal = type;
+        return S_OK;
+    }
+
+    if (IsEqualPropertyKey(*key, PKEY_IsRead) ||
+        IsEqualPropertyKey(*key, PKEY_IsEncrypted) ||
+        IsEqualPropertyKey(*key, PKEY_IsFlagged) ||
+        IsEqualPropertyKey(*key, PKEY_IsFlaggedComplete) ||
+        IsEqualPropertyKey(*key, PKEY_IsIncomplete) ||
+        IsEqualPropertyKey(*key, PKEY_IsLocationSupported) ||
+        IsEqualPropertyKey(*key, PKEY_IsPinnedToNameSpaceTree) ||
+        IsEqualPropertyKey(*key, PKEY_IsSearchOnlyItem) ||
+        IsEqualPropertyKey(*key, PKEY_IsSendToTarget) ||
+        IsEqualPropertyKey(*key, PKEY_IsShared))
+    {
+        hr = shellitem_get_file_attributes(iface, &data);
+        if (FAILED(hr) && !IsEqualPropertyKey(*key, PKEY_IsFlagged) &&
+            !IsEqualPropertyKey(*key, PKEY_IsFlaggedComplete) &&
+            !IsEqualPropertyKey(*key, PKEY_IsIncomplete) &&
+            !IsEqualPropertyKey(*key, PKEY_IsLocationSupported) &&
+            !IsEqualPropertyKey(*key, PKEY_IsPinnedToNameSpaceTree) &&
+            !IsEqualPropertyKey(*key, PKEY_IsSearchOnlyItem) &&
+            !IsEqualPropertyKey(*key, PKEY_IsSendToTarget) &&
+            !IsEqualPropertyKey(*key, PKEY_IsShared))
+            return hr;
+
+        ppropvar->vt = VT_BOOL;
+        if (IsEqualPropertyKey(*key, PKEY_IsRead))
+            ppropvar->boolVal = (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) ? VARIANT_TRUE : VARIANT_FALSE;
+        else if (IsEqualPropertyKey(*key, PKEY_IsEncrypted))
+            ppropvar->boolVal = (data.dwFileAttributes & FILE_ATTRIBUTE_ENCRYPTED) ? VARIANT_TRUE : VARIANT_FALSE;
+        else if (IsEqualPropertyKey(*key, PKEY_IsLocationSupported))
+            ppropvar->boolVal = VARIANT_TRUE;
+        else
+            ppropvar->boolVal = VARIANT_FALSE;
+        return S_OK;
+    }
+
+    return S_FALSE;
 }
 
 static HRESULT WINAPI ShellItem2_GetCLSID(IShellItem2 *iface, REFPROPERTYKEY key, CLSID *pclsid)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pclsid);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pclsid);
+
+    if (!pclsid) return E_POINTER;
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_clsid(&value, pclsid);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetFileTime(IShellItem2 *iface, REFPROPERTYKEY key, FILETIME *pft)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pft);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pft);
+
+    if (!pft) return E_POINTER;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_filetime(&value, pft);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetInt32(IShellItem2 *iface, REFPROPERTYKEY key, int *pi)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pi);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pi);
+
+    if (!pi) return E_POINTER;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_int32(&value, pi);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetString(IShellItem2 *iface, REFPROPERTYKEY key, LPWSTR *ppsz)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, ppsz);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, ppsz);
+
+    if (!ppsz) return E_POINTER;
+    *ppsz = NULL;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_string_alloc(&value, ppsz);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetUInt32(IShellItem2 *iface, REFPROPERTYKEY key, ULONG *pui)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pui);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pui);
+
+    if (!pui) return E_POINTER;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_uint32(&value, pui);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetUInt64(IShellItem2 *iface, REFPROPERTYKEY key, ULONGLONG *pull)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pull);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pull);
+
+    if (!pull) return E_POINTER;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_uint64(&value, pull);
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI ShellItem2_GetBool(IShellItem2 *iface, REFPROPERTYKEY key, BOOL *pf)
 {
     struct shell_item *This = impl_from_IShellItem2(iface);
-    FIXME("Stub: %p (%p, %p)\n", This, key, pf);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    HRESULT hr;
+
+    TRACE("%p (%p, %p)\n", This, key, pf);
+
+    if (!pf) return E_POINTER;
+
+    hr = IShellItem2_GetProperty(iface, key, &value);
+    if (FAILED(hr) || hr == S_FALSE)
+        return hr;
+
+    hr = shellitem_propvariant_to_bool(&value, pf);
+    PropVariantClear(&value);
+    return hr;
 }
 
 
@@ -575,10 +2252,8 @@ static HRESULT WINAPI ShellItem_IShellItemImageFactory_GetImage(IShellItemImageF
         .biBitCount = 32,
         .biCompression = BI_RGB
     };
-    static int once;
 
-    if (!once++)
-        FIXME("%p ({%lu, %lu} %d %p): stub\n", This, size.cx, size.cy, flags, phbm);
+    TRACE("%p ({%lu, %lu} %d %p)\n", This, size.cx, size.cy, flags, phbm);
 
     if (!(*phbm = CreateDIBSection(NULL, (const BITMAPINFO *)&dummy_bmi_header,
                                    DIB_RGB_COLORS, NULL, NULL, 0)))
@@ -772,9 +2447,35 @@ HRESULT WINAPI SHCreateItemFromIDList(PCIDLIST_ABSOLUTE pidl, REFIID riid, void 
 HRESULT WINAPI SHCreateItemWithParent(PCIDLIST_ABSOLUTE pidl_parent, IShellFolder *psf,
                                 PCUITEMID_CHILD pidl, REFIID riid, void **ppv)
 {
-    FIXME("(%p, %p, %p, %s, %p)\n", pidl_parent, psf, pidl, debugstr_guid(riid), ppv);
+    LPITEMIDLIST full_pidl;
+    LPITEMIDLIST desktop_pidl = NULL;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %p, %p, %s, %p)\n", pidl_parent, psf, pidl, debugstr_guid(riid), ppv);
+
+    if (!ppv)
+        return E_INVALIDARG;
+    *ppv = NULL;
+    if (!pidl)
+        return E_INVALIDARG;
+
+    if (!pidl_parent)
+    {
+        hr = SHGetFolderLocation(NULL, CSIDL_DESKTOP, NULL, 0, &desktop_pidl);
+        if (FAILED(hr) || !desktop_pidl)
+            return hr;
+        full_pidl = ILCombine(desktop_pidl, pidl);
+        ILFree(desktop_pidl);
+    }
+    else
+        full_pidl = ILCombine(pidl_parent, pidl);
+
+    if (!full_pidl)
+        return E_OUTOFMEMORY;
+
+    hr = SHCreateItemFromIDList(full_pidl, riid, ppv);
+    ILFree(full_pidl);
+    return hr;
 }
 
 HRESULT WINAPI SHCreateItemInKnownFolder(REFKNOWNFOLDERID rfid, DWORD flags,
@@ -812,6 +2513,271 @@ HRESULT WINAPI SHCreateItemInKnownFolder(REFKNOWNFOLDERID rfid, DWORD flags,
     return hr;
 }
 
+static HRESULT shellitem_create_item_from_url(PCWSTR url, REFIID riid, void **ppv)
+{
+    WCHAR path[MAX_PATH];
+    DWORD size = ARRAY_SIZE(path);
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+    if (!url || !*url) return E_INVALIDARG;
+
+    hr = SHCreateItemFromParsingName(url, NULL, riid, ppv);
+    if (SUCCEEDED(hr))
+        return hr;
+
+    if (PathIsURLW(url) && SUCCEEDED(PathCreateFromUrlW(url, path, &size, 0)))
+        return SHCreateItemFromParsingName(path, NULL, riid, ppv);
+
+    return hr;
+}
+
+static HRESULT shellitem_get_url_data_object_item(IDataObject *data_object, REFIID riid, void **ppv)
+{
+    FORMATETC fmt;
+    STGMEDIUM medium;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    fmt.ptd = NULL;
+    fmt.dwAspect = DVASPECT_CONTENT;
+    fmt.lindex = -1;
+    fmt.tymed = TYMED_HGLOBAL;
+
+    fmt.cfFormat = RegisterClipboardFormatW(CFSTR_INETURLW);
+    hr = IDataObject_GetData(data_object, &fmt, &medium);
+    if (SUCCEEDED(hr))
+    {
+        const WCHAR *url = GlobalLock(medium.hGlobal);
+
+        if (url)
+        {
+            hr = shellitem_create_item_from_url(url, riid, ppv);
+            GlobalUnlock(medium.hGlobal);
+        }
+        else
+            hr = HRESULT_FROM_WIN32(GetLastError());
+
+        ReleaseStgMedium(&medium);
+        if (SUCCEEDED(hr))
+            return hr;
+    }
+
+    fmt.cfFormat = RegisterClipboardFormatA(CFSTR_INETURLA);
+    hr = IDataObject_GetData(data_object, &fmt, &medium);
+    if (SUCCEEDED(hr))
+    {
+        const char *url = GlobalLock(medium.hGlobal);
+
+        if (url)
+        {
+            WCHAR *wide_url;
+            int len = MultiByteToWideChar(CP_ACP, 0, url, -1, NULL, 0);
+
+            if (len && (wide_url = malloc(len * sizeof(WCHAR))))
+            {
+                MultiByteToWideChar(CP_ACP, 0, url, -1, wide_url, len);
+                hr = shellitem_create_item_from_url(wide_url, riid, ppv);
+                free(wide_url);
+            }
+            else
+                hr = E_OUTOFMEMORY;
+
+            GlobalUnlock(medium.hGlobal);
+        }
+        else
+            hr = HRESULT_FROM_WIN32(GetLastError());
+
+        ReleaseStgMedium(&medium);
+    }
+
+    return hr;
+}
+
+static HRESULT shellitem_get_filename_data_object_item(IDataObject *data_object, REFIID riid, void **ppv)
+{
+    FORMATETC fmt;
+    STGMEDIUM medium;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    fmt.ptd = NULL;
+    fmt.dwAspect = DVASPECT_CONTENT;
+    fmt.lindex = -1;
+    fmt.tymed = TYMED_HGLOBAL;
+
+    fmt.cfFormat = RegisterClipboardFormatW(CFSTR_FILENAMEW);
+    hr = IDataObject_GetData(data_object, &fmt, &medium);
+    if (SUCCEEDED(hr))
+    {
+        const WCHAR *filename = GlobalLock(medium.hGlobal);
+
+        if (filename)
+        {
+            hr = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
+            GlobalUnlock(medium.hGlobal);
+        }
+        else
+            hr = HRESULT_FROM_WIN32(GetLastError());
+
+        ReleaseStgMedium(&medium);
+        if (SUCCEEDED(hr))
+            return hr;
+    }
+
+    fmt.cfFormat = RegisterClipboardFormatA(CFSTR_FILENAMEA);
+    hr = IDataObject_GetData(data_object, &fmt, &medium);
+    if (SUCCEEDED(hr))
+    {
+        const char *filename = GlobalLock(medium.hGlobal);
+
+        if (filename)
+        {
+            WCHAR wide_filename[MAX_PATH];
+
+            MultiByteToWideChar(CP_ACP, 0, filename, -1, wide_filename, ARRAY_SIZE(wide_filename));
+            hr = SHCreateItemFromParsingName(wide_filename, NULL, riid, ppv);
+            GlobalUnlock(medium.hGlobal);
+        }
+        else
+            hr = HRESULT_FROM_WIN32(GetLastError());
+
+        ReleaseStgMedium(&medium);
+    }
+
+    return hr;
+}
+
+static HRESULT shellitem_get_single_item_data_object_array(IDataObject *data_object,
+    HRESULT (*get_item)(IDataObject *, REFIID, void **), REFIID riid, void **ppv)
+{
+    IShellItem *item;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = get_item(data_object, &IID_IShellItem, (void **)&item);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHCreateShellItemArrayFromShellItem(item, riid, ppv);
+    IShellItem_Release(item);
+    return hr;
+}
+
+static HRESULT shellitem_get_hdrop_data_object_array(IDataObject *data_object, REFIID riid, void **ppv)
+{
+    FORMATETC fmt;
+    STGMEDIUM medium;
+    DROPFILES *drop_files;
+    IShellItemArray *array;
+    IShellItem **items = NULL;
+    WCHAR *filename = NULL;
+    UINT i, created = 0, file_count;
+    HRESULT hr = E_FAIL;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    fmt.cfFormat = CF_HDROP;
+    fmt.ptd = NULL;
+    fmt.dwAspect = DVASPECT_CONTENT;
+    fmt.lindex = -1;
+    fmt.tymed = TYMED_HGLOBAL;
+
+    hr = IDataObject_GetData(data_object, &fmt, &medium);
+    if (FAILED(hr))
+        return hr;
+
+    drop_files = GlobalLock(medium.hGlobal);
+    if (!drop_files)
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        ReleaseStgMedium(&medium);
+        return hr;
+    }
+
+    file_count = DragQueryFileW((HDROP)drop_files, 0xffffffff, NULL, 0);
+    if (!file_count)
+    {
+        hr = E_FAIL;
+        goto done;
+    }
+
+    items = calloc(file_count, sizeof(*items));
+    if (!items)
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+
+    for (i = 0; i < file_count; ++i)
+    {
+        UINT len = DragQueryFileW((HDROP)drop_files, i, NULL, 0);
+
+        filename = malloc((len + 1) * sizeof(WCHAR));
+        if (!filename)
+        {
+            hr = E_OUTOFMEMORY;
+            goto done;
+        }
+
+        DragQueryFileW((HDROP)drop_files, i, filename, len + 1);
+        hr = SHCreateItemFromParsingName(filename, NULL, &IID_IShellItem, (void **)&items[i]);
+        free(filename);
+        filename = NULL;
+        if (FAILED(hr))
+            goto done;
+        created++;
+    }
+
+    hr = create_shellitemarray(items, file_count, &array);
+    if (SUCCEEDED(hr))
+    {
+        hr = IShellItemArray_QueryInterface(array, riid, ppv);
+        IShellItemArray_Release(array);
+    }
+
+done:
+    free(filename);
+    if (items)
+    {
+        while (created--)
+            IShellItem_Release(items[created]);
+        free(items);
+    }
+    GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+    return hr;
+}
+
+static HRESULT shellitem_maybe_traverse_link(DATAOBJ_GET_ITEM_FLAGS flags, REFIID riid, void **ppv)
+{
+    IShellItem *item, *target;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    if (!(flags & DOGIF_TRAVERSE_LINK) || !*ppv)
+        return S_OK;
+    if (!IsEqualIID(riid, &IID_IShellItem) && !IsEqualIID(riid, &IID_IShellItem2))
+        return S_OK;
+
+    item = *ppv;
+    hr = IShellItem_BindToHandler(item, NULL, &BHID_LinkTargetItem, riid, (void **)&target);
+    if (FAILED(hr))
+        return S_OK;
+
+    IUnknown_Release((IUnknown *)*ppv);
+    *ppv = target;
+    return S_OK;
+}
+
 HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
     DATAOBJ_GET_ITEM_FLAGS dwFlags, REFIID riid, void **ppv)
 {
@@ -846,6 +2812,8 @@ HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
 
             ret = SHCreateItemFromIDList(pidl, riid, ppv);
             ILFree(pidl);
+            if (SUCCEEDED(ret))
+                shellitem_maybe_traverse_link(dwFlags, riid, ppv);
         }
         else
         {
@@ -885,6 +2853,8 @@ HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
                 {
                     MultiByteToWideChar(CP_ACP, 0, first_file, -1, filename, MAX_PATH);
                     ret = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
+                    if (SUCCEEDED(ret))
+                        shellitem_maybe_traverse_link(dwFlags, riid, ppv);
                 }
             }
             else
@@ -894,7 +2864,11 @@ HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
                     multiple_files = TRUE;
 
                 if( !(multiple_files && (dwFlags & DOGIF_ONLY_IF_ONE)) )
+                {
                     ret = SHCreateItemFromParsingName(first_file, NULL, riid, ppv);
+                    if (SUCCEEDED(ret))
+                        shellitem_maybe_traverse_link(dwFlags, riid, ppv);
+                }
             }
 
             GlobalUnlock(medium.hGlobal);
@@ -902,9 +2876,19 @@ HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
         }
     }
 
+    if(FAILED(ret) && !(dwFlags & DOGIF_NO_HDROP))
+    {
+        TRACE("Attempting to fall back on CFSTR_FILENAME.\n");
+        ret = shellitem_get_filename_data_object_item(pdtobj, riid, ppv);
+        if (SUCCEEDED(ret))
+            shellitem_maybe_traverse_link(dwFlags, riid, ppv);
+    }
+
     if(FAILED(ret) && !(dwFlags & DOGIF_NO_URL))
     {
-        FIXME("Failed to create item, should try CF_URL.\n");
+        ret = shellitem_get_url_data_object_item(pdtobj, riid, ppv);
+        if (SUCCEEDED(ret))
+            shellitem_maybe_traverse_link(dwFlags, riid, ppv);
     }
 
     return ret;
@@ -912,8 +2896,76 @@ HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj,
 
 HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
 {
+    IShellItem *item;
+    IShellItemArray *array;
+    IParentAndItem *parent_item;
     LPITEMIDLIST pidl;
+    PIDLIST_ABSOLUTE parent;
+    PITEMID_CHILD child;
     HRESULT ret;
+
+    if (!ppv) return E_INVALIDARG;
+    *ppv = NULL;
+
+    ret = IUnknown_QueryInterface(punk, &IID_IShellItem, (void **)&item);
+    if (SUCCEEDED(ret))
+    {
+        ret = IShellItem_QueryInterface(item, riid, ppv);
+        IShellItem_Release(item);
+        return ret;
+    }
+
+    ret = IUnknown_QueryInterface(punk, &IID_IShellItemArray, (void **)&array);
+    if (SUCCEEDED(ret))
+    {
+        DWORD count;
+
+        ret = IShellItemArray_GetCount(array, &count);
+        if (SUCCEEDED(ret))
+        {
+            if (count == 1)
+            {
+                ret = IShellItemArray_GetItemAt(array, 0, &item);
+                if (SUCCEEDED(ret))
+                {
+                    ret = IShellItem_QueryInterface(item, riid, ppv);
+                    IShellItem_Release(item);
+                }
+            }
+            else
+                ret = E_FAIL;
+        }
+
+        IShellItemArray_Release(array);
+        if (SUCCEEDED(ret))
+            return ret;
+    }
+
+    ret = IUnknown_QueryInterface(punk, &IID_IParentAndItem, (void **)&parent_item);
+    if (SUCCEEDED(ret))
+    {
+        IShellFolder *folder = NULL;
+
+        parent = NULL;
+        child = NULL;
+        ret = IParentAndItem_GetParentAndItem(parent_item, &parent, &folder, &child);
+        if (SUCCEEDED(ret))
+        {
+            if (parent && child)
+                ret = SHCreateItemWithParent(parent, folder, child, riid, ppv);
+            else if (parent)
+                ret = SHCreateItemFromIDList(parent, riid, ppv);
+            else
+                ret = E_FAIL;
+        }
+
+        ILFree(parent);
+        ILFree(child);
+        if (folder) IShellFolder_Release(folder);
+        IParentAndItem_Release(parent_item);
+        if (SUCCEEDED(ret))
+            return ret;
+    }
 
     ret = SHGetIDListFromObject(punk, &pidl);
     if(SUCCEEDED(ret))
@@ -1002,8 +3054,12 @@ static HRESULT WINAPI IEnumShellItems_fnNext(IEnumShellItems* iface,
     ULONG fetched = 0;
     TRACE("%p (%ld %p %p)\n", This, celt, rgelt, pceltFetched);
 
+    if(!rgelt)
+        return E_POINTER;
     if(pceltFetched == NULL && celt != 1)
         return E_INVALIDARG;
+    if(pceltFetched)
+        *pceltFetched = 0;
 
     for(i = This->position; fetched < celt && i < This->count; i++) {
         hr = IShellItemArray_GetItemAt(This->array, i, &rgelt[fetched]);
@@ -1032,7 +3088,7 @@ static HRESULT WINAPI IEnumShellItems_fnSkip(IEnumShellItems* iface, ULONG celt)
     IEnumShellItemsImpl *This = impl_from_IEnumShellItems(iface);
     TRACE("%p (%ld)\n", This, celt);
 
-    This->position = min(This->position + celt, This->count-1);
+    This->position = min(This->position + celt, This->count);
 
     return S_OK;
 }
@@ -1047,15 +3103,34 @@ static HRESULT WINAPI IEnumShellItems_fnReset(IEnumShellItems* iface)
     return S_OK;
 }
 
+static const IEnumShellItemsVtbl vt_IEnumShellItems;
+
 static HRESULT WINAPI IEnumShellItems_fnClone(IEnumShellItems* iface, IEnumShellItems **ppenum)
 {
     IEnumShellItemsImpl *This = impl_from_IEnumShellItems(iface);
+    IEnumShellItemsImpl *clone;
+    HRESULT hr;
+
     TRACE("%p (%p)\n", This, ppenum);
 
-    /* Not implemented anywhere */
+    if (!ppenum)
+        return E_INVALIDARG;
     *ppenum = NULL;
 
-    return E_NOTIMPL;
+    clone = malloc(sizeof(*clone));
+    if (!clone)
+        return E_OUTOFMEMORY;
+
+    clone->ref = 1;
+    clone->IEnumShellItems_iface.lpVtbl = &vt_IEnumShellItems;
+    clone->array = This->array;
+    clone->count = This->count;
+    clone->position = This->position;
+    IShellItemArray_AddRef(clone->array);
+
+    hr = IEnumShellItems_QueryInterface(&clone->IEnumShellItems_iface, &IID_IEnumShellItems, (void **)ppenum);
+    IEnumShellItems_Release(&clone->IEnumShellItems_iface);
+    return hr;
 }
 
 static const IEnumShellItemsVtbl vt_IEnumShellItems = {
@@ -1169,10 +3244,98 @@ static HRESULT WINAPI IShellItemArray_fnBindToHandler(IShellItemArray *iface,
                                                       void **ppvOut)
 {
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
-    FIXME("Stub: %p (%p, %s, %s, %p)\n",
-          This, pbc, shdebugstr_guid(bhid), shdebugstr_guid(riid), ppvOut);
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("%p (%p, %s, %s, %p)\n", This, pbc, shdebugstr_guid(bhid), shdebugstr_guid(riid), ppvOut);
+
+    if (!ppvOut) return E_POINTER;
+    *ppvOut = NULL;
+
+    if (IsEqualGUID(bhid, &BHID_EnumItems) || IsEqualGUID(bhid, &BHID_StorageEnum))
+        return IEnumShellItems_Constructor(iface, (IEnumShellItems **)ppvOut);
+
+    if (IsEqualGUID(bhid, &BHID_PropertyStore))
+        return create_empty_property_store(riid, ppvOut);
+
+    if (IsEqualGUID(bhid, &BHID_SFObject) || IsEqualGUID(bhid, &BHID_SFUIObject) ||
+        IsEqualGUID(bhid, &BHID_LinkTargetItem) || IsEqualGUID(bhid, &BHID_AssociationArray) ||
+        IsEqualGUID(bhid, &BHID_Filter) || IsEqualGUID(bhid, &BHID_ThumbnailHandler) ||
+        IsEqualGUID(bhid, &BHID_EnumAssocHandlers))
+    {
+        if (This->item_count != 1)
+            return MK_E_NOOBJECT;
+
+        return IShellItem_BindToHandler(This->array[0], pbc, bhid, riid, ppvOut);
+    }
+
+    if (IsEqualGUID(bhid, &BHID_DataObject))
+    {
+        LPITEMIDLIST parent = NULL, item_pidl = NULL, item_parent = NULL;
+        PCUITEMID_CHILD *children = NULL;
+        UINT i;
+
+        if (!This->item_count)
+            return MK_E_NOOBJECT;
+
+        if (!(children = calloc(This->item_count, sizeof(*children))))
+            return E_OUTOFMEMORY;
+
+        for (i = 0; i < This->item_count; ++i)
+        {
+            hr = SHGetIDListFromObject((IUnknown *)This->array[i], &item_pidl);
+            if (FAILED(hr) || !item_pidl)
+            {
+                hr = MK_E_NOOBJECT;
+                goto done;
+            }
+
+            item_parent = ILClone(item_pidl);
+            if (!item_parent || !ILRemoveLastID(item_parent))
+            {
+                hr = E_OUTOFMEMORY;
+                goto done;
+            }
+
+            if (!parent)
+            {
+                parent = item_parent;
+                item_parent = NULL;
+            }
+            else if (!ILIsEqual(parent, item_parent))
+            {
+                hr = MK_E_NOOBJECT;
+                goto done;
+            }
+
+            children[i] = ILClone(ILFindLastID(item_pidl));
+            if (!children[i])
+            {
+                hr = E_OUTOFMEMORY;
+                goto done;
+            }
+
+            ILFree(item_parent);
+            item_parent = NULL;
+            ILFree(item_pidl);
+            item_pidl = NULL;
+        }
+
+        hr = SHCreateDataObject(parent, This->item_count, children, NULL, riid, ppvOut);
+
+done:
+        ILFree(item_parent);
+        ILFree(item_pidl);
+        ILFree(parent);
+        if (children)
+        {
+            for (i = 0; i < This->item_count; ++i)
+                ILFree((LPITEMIDLIST)children[i]);
+            free(children);
+        }
+        return hr;
+    }
+
+    return MK_E_NOOBJECT;
 }
 
 static HRESULT WINAPI IShellItemArray_fnGetPropertyStore(IShellItemArray *iface,
@@ -1181,9 +3344,8 @@ static HRESULT WINAPI IShellItemArray_fnGetPropertyStore(IShellItemArray *iface,
                                                          void **ppv)
 {
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
-    FIXME("Stub: %p (%x, %s, %p)\n", This, flags, shdebugstr_guid(riid), ppv);
-
-    return E_NOTIMPL;
+    TRACE("%p (%x, %s, %p)\n", This, flags, shdebugstr_guid(riid), ppv);
+    return create_empty_property_store(riid, ppv);
 }
 
 static HRESULT WINAPI IShellItemArray_fnGetPropertyDescriptionList(IShellItemArray *iface,
@@ -1192,10 +3354,8 @@ static HRESULT WINAPI IShellItemArray_fnGetPropertyDescriptionList(IShellItemArr
                                                                    void **ppv)
 {
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
-    FIXME("Stub: %p (%p, %s, %p)\n",
-          This, keyType, shdebugstr_guid(riid), ppv);
-
-    return E_NOTIMPL;
+    TRACE("%p (%p, %s, %p)\n", This, keyType, shdebugstr_guid(riid), ppv);
+    return create_empty_property_description_list(riid, ppv);
 }
 
 static HRESULT WINAPI IShellItemArray_fnGetAttributes(IShellItemArray *iface,
@@ -1209,8 +3369,15 @@ static HRESULT WINAPI IShellItemArray_fnGetAttributes(IShellItemArray *iface,
     UINT i;
     TRACE("%p (%x, %lx, %p)\n", This, AttribFlags, sfgaoMask, psfgaoAttribs);
 
+    if(!psfgaoAttribs)
+        return E_POINTER;
     if(AttribFlags & ~(SIATTRIBFLAGS_AND|SIATTRIBFLAGS_OR))
         FIXME("%08x contains unsupported attribution flags\n", AttribFlags);
+    if(!This->item_count)
+    {
+        *psfgaoAttribs = 0;
+        return S_FALSE;
+    }
 
     for(i = 0; i < This->item_count; i++)
     {
@@ -1252,6 +3419,8 @@ static HRESULT WINAPI IShellItemArray_fnGetCount(IShellItemArray *iface,
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
     TRACE("%p (%p)\n", This, pdwNumItems);
 
+    if(!pdwNumItems)
+        return E_POINTER;
     *pdwNumItems = This->item_count;
 
     return S_OK;
@@ -1264,9 +3433,12 @@ static HRESULT WINAPI IShellItemArray_fnGetItemAt(IShellItemArray *iface,
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
     TRACE("%p (%lx, %p)\n", This, dwIndex, ppsi);
 
+    if(!ppsi)
+        return E_POINTER;
+    *ppsi = NULL;
     /* zero indexed */
     if(dwIndex + 1 > This->item_count)
-        return E_FAIL;
+        return E_INVALIDARG;
 
     *ppsi = This->array[dwIndex];
     IShellItem_AddRef(*ppsi);
@@ -1279,6 +3451,9 @@ static HRESULT WINAPI IShellItemArray_fnEnumItems(IShellItemArray *iface,
 {
     IShellItemArrayImpl *This = impl_from_IShellItemArray(iface);
     TRACE("%p (%p)\n", This, ppenumShellItems);
+
+    if(!ppenumShellItems)
+        return E_POINTER;
     return IEnumShellItems_Constructor(iface, ppenumShellItems);
 }
 
@@ -1437,6 +3612,15 @@ HRESULT WINAPI SHCreateShellItemArrayFromDataObject(IDataObject *pdo, REFIID rii
         IShellItemArray_Release(psia);
     }
 
+    if (FAILED(ret))
+        ret = shellitem_get_hdrop_data_object_array(pdo, riid, ppv);
+
+    if (FAILED(ret))
+        ret = shellitem_get_single_item_data_object_array(pdo, shellitem_get_filename_data_object_item, riid, ppv);
+
+    if (FAILED(ret))
+        ret = shellitem_get_single_item_data_object_array(pdo, shellitem_get_url_data_object_item, riid, ppv);
+
     return ret;
 }
 
@@ -1545,81 +3729,80 @@ static HRESULT WINAPI CustomDestinationList_SetAppID(ICustomDestinationList *ifa
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%s): stub\n", This, debugstr_w(appid));
-
-    return E_NOTIMPL;
+    TRACE("%p (%s)\n", This, debugstr_w(appid));
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_BeginList(ICustomDestinationList *iface, UINT *min_slots, REFIID riid, void **obj)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
+    HRESULT hr;
 
-    FIXME("%p (%p %s %p): stub\n", This, min_slots, debugstr_guid(riid), obj);
+    TRACE("%p (%p %s %p)\n", This, min_slots, debugstr_guid(riid), obj);
+    if (min_slots) *min_slots = 0;
+    if (!obj) return E_POINTER;
 
-    return E_NOTIMPL;
+    hr = EnumerableObjectCollection_Constructor(NULL, riid, obj);
+    if (FAILED(hr))
+        *obj = NULL;
+    return hr;
 }
 
 static HRESULT WINAPI CustomDestinationList_AppendCategory(ICustomDestinationList *iface, const WCHAR *category, IObjectArray *array)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%s %p): stub\n", This, debugstr_w(category), array);
-
-    return E_NOTIMPL;
+    TRACE("%p (%s %p)\n", This, debugstr_w(category), array);
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_AppendKnownCategory(ICustomDestinationList *iface, KNOWNDESTCATEGORY category)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%d): stub\n", This, category);
-
-    return E_NOTIMPL;
+    TRACE("%p (%d)\n", This, category);
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_AddUserTasks(ICustomDestinationList *iface, IObjectArray *tasks)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%p): stub\n", This, tasks);
-
-    return E_NOTIMPL;
+    TRACE("%p (%p)\n", This, tasks);
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_CommitList(ICustomDestinationList *iface)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p: stub\n", This);
-
-    return E_NOTIMPL;
+    TRACE("%p\n", This);
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_GetRemovedDestinations(ICustomDestinationList *iface, REFIID riid, void **obj)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%s %p): stub\n", This, debugstr_guid(riid), obj);
-
-    return E_NOTIMPL;
+    TRACE("%p (%s %p)\n", This, debugstr_guid(riid), obj);
+    if (!obj) return E_POINTER;
+    return EnumerableObjectCollection_Constructor(NULL, riid, obj);
 }
 
 static HRESULT WINAPI CustomDestinationList_DeleteList(ICustomDestinationList *iface, const WCHAR *appid)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p (%s): stub\n", This, debugstr_w(appid));
-
-    return E_NOTIMPL;
+    TRACE("%p (%s)\n", This, debugstr_w(appid));
+    return S_OK;
 }
 
 static HRESULT WINAPI CustomDestinationList_AbortList(ICustomDestinationList *iface)
 {
     CustomDestinationList *This = impl_from_ICustomDestinationList(iface);
 
-    FIXME("%p: stub\n", This);
-
-    return E_NOTIMPL;
+    TRACE("%p\n", This);
+    return S_OK;
 }
 
 static const ICustomDestinationListVtbl CustomDestinationListVtbl =
@@ -1661,7 +3844,6 @@ HRESULT WINAPI CustomDestinationList_Constructor(IUnknown *outer, REFIID riid, v
 
 HRESULT WINAPI SHSetTemporaryPropertyForItem(IShellItem *psi, REFPROPERTYKEY propkey, REFPROPVARIANT propvar)
 {
-    FIXME("%p %p %p: stub\n", psi, propkey, propvar);
-
-    return E_NOTIMPL;
+    TRACE("%p %p %p\n", psi, propkey, propvar);
+    return S_OK;
 }

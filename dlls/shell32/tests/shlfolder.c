@@ -3288,9 +3288,386 @@ static const IUnknownVtbl vt_IUnknown = {
     unk_fnRelease
 };
 
+typedef struct
+{
+    IDataObject IDataObject_iface;
+    LONG ref;
+    struct
+    {
+        FORMATETC fmt;
+        STGMEDIUM medium;
+    } entries[8];
+    UINT count;
+} TestDataObject;
+
+static inline TestDataObject *impl_from_TestDataObject(IDataObject *iface)
+{
+    return CONTAINING_RECORD(iface, TestDataObject, IDataObject_iface);
+}
+
+static HGLOBAL duplicate_hglobal(HGLOBAL source)
+{
+    SIZE_T size;
+    void *src_ptr, *dst_ptr;
+    HGLOBAL copy;
+
+    size = GlobalSize(source);
+    copy = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!copy)
+        return NULL;
+
+    src_ptr = GlobalLock(source);
+    dst_ptr = GlobalLock(copy);
+    memcpy(dst_ptr, src_ptr, size);
+    GlobalUnlock(copy);
+    GlobalUnlock(source);
+    return copy;
+}
+
+static HRESULT test_data_object_set_hglobal(TestDataObject *object, CLIPFORMAT format, HGLOBAL global)
+{
+    if (object->count >= ARRAY_SIZE(object->entries))
+        return E_OUTOFMEMORY;
+
+    object->entries[object->count].fmt.cfFormat = format;
+    object->entries[object->count].fmt.ptd = NULL;
+    object->entries[object->count].fmt.dwAspect = DVASPECT_CONTENT;
+    object->entries[object->count].fmt.lindex = -1;
+    object->entries[object->count].fmt.tymed = TYMED_HGLOBAL;
+    object->entries[object->count].medium.tymed = TYMED_HGLOBAL;
+    object->entries[object->count].medium.pUnkForRelease = NULL;
+    object->entries[object->count].medium.hGlobal = global;
+    object->count++;
+    return S_OK;
+}
+
+static HRESULT WINAPI test_data_object_QueryInterface(IDataObject *iface, REFIID riid, void **ppv)
+{
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDataObject))
+    {
+        *ppv = iface;
+        IDataObject_AddRef(iface);
+        return S_OK;
+    }
+
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI test_data_object_AddRef(IDataObject *iface)
+{
+    TestDataObject *object = impl_from_TestDataObject(iface);
+    return InterlockedIncrement(&object->ref);
+}
+
+static ULONG WINAPI test_data_object_Release(IDataObject *iface)
+{
+    TestDataObject *object = impl_from_TestDataObject(iface);
+    ULONG ref = InterlockedDecrement(&object->ref);
+    UINT i;
+
+    if (!ref)
+    {
+        for (i = 0; i < object->count; ++i)
+            ReleaseStgMedium(&object->entries[i].medium);
+        free(object);
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI test_data_object_GetData(IDataObject *iface, FORMATETC *format, STGMEDIUM *medium)
+{
+    TestDataObject *object = impl_from_TestDataObject(iface);
+    UINT i;
+
+    if (!format || !medium)
+        return E_INVALIDARG;
+
+    for (i = 0; i < object->count; ++i)
+    {
+        if (object->entries[i].fmt.cfFormat == format->cfFormat &&
+            object->entries[i].fmt.dwAspect == format->dwAspect &&
+            object->entries[i].fmt.lindex == format->lindex &&
+            (object->entries[i].fmt.tymed & format->tymed))
+        {
+            medium->tymed = TYMED_HGLOBAL;
+            medium->pUnkForRelease = NULL;
+            medium->hGlobal = duplicate_hglobal(object->entries[i].medium.hGlobal);
+            return medium->hGlobal ? S_OK : E_OUTOFMEMORY;
+        }
+    }
+
+    return DV_E_FORMATETC;
+}
+
+static HRESULT WINAPI test_data_object_GetDataHere(IDataObject *iface, FORMATETC *format, STGMEDIUM *medium)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI test_data_object_QueryGetData(IDataObject *iface, FORMATETC *format)
+{
+    TestDataObject *object = impl_from_TestDataObject(iface);
+    UINT i;
+
+    if (!format)
+        return E_INVALIDARG;
+
+    for (i = 0; i < object->count; ++i)
+    {
+        if (object->entries[i].fmt.cfFormat == format->cfFormat &&
+            object->entries[i].fmt.dwAspect == format->dwAspect &&
+            object->entries[i].fmt.lindex == format->lindex &&
+            (object->entries[i].fmt.tymed & format->tymed))
+            return S_OK;
+    }
+
+    return S_FALSE;
+}
+
+static HRESULT WINAPI test_data_object_GetCanonicalFormatEtc(IDataObject *iface, FORMATETC *format_in, FORMATETC *format_out)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI test_data_object_SetData(IDataObject *iface, FORMATETC *format, STGMEDIUM *medium, BOOL release)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI test_data_object_EnumFormatEtc(IDataObject *iface, DWORD direction, IEnumFORMATETC **out)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI test_data_object_DAdvise(IDataObject *iface, FORMATETC *format, DWORD advf, IAdviseSink *sink, DWORD *connection)
+{
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static HRESULT WINAPI test_data_object_DUnadvise(IDataObject *iface, DWORD connection)
+{
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static HRESULT WINAPI test_data_object_EnumDAdvise(IDataObject *iface, IEnumSTATDATA **out)
+{
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+
+static const IDataObjectVtbl test_data_object_vtbl =
+{
+    test_data_object_QueryInterface,
+    test_data_object_AddRef,
+    test_data_object_Release,
+    test_data_object_GetData,
+    test_data_object_GetDataHere,
+    test_data_object_QueryGetData,
+    test_data_object_GetCanonicalFormatEtc,
+    test_data_object_SetData,
+    test_data_object_EnumFormatEtc,
+    test_data_object_DAdvise,
+    test_data_object_DUnadvise,
+    test_data_object_EnumDAdvise,
+};
+
+typedef struct
+{
+    IParentAndItem IParentAndItem_iface;
+    LONG ref;
+    PIDLIST_ABSOLUTE parent;
+    PITEMID_CHILD child;
+    IShellFolder *folder;
+} TestParentAndItem;
+
+static inline TestParentAndItem *impl_from_TestParentAndItem(IParentAndItem *iface)
+{
+    return CONTAINING_RECORD(iface, TestParentAndItem, IParentAndItem_iface);
+}
+
+static HRESULT WINAPI test_parent_and_item_QueryInterface(IParentAndItem *iface, REFIID riid, void **ppv)
+{
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IParentAndItem))
+    {
+        *ppv = iface;
+        IParentAndItem_AddRef(iface);
+        return S_OK;
+    }
+
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI test_parent_and_item_AddRef(IParentAndItem *iface)
+{
+    TestParentAndItem *object = impl_from_TestParentAndItem(iface);
+    return InterlockedIncrement(&object->ref);
+}
+
+static ULONG WINAPI test_parent_and_item_Release(IParentAndItem *iface)
+{
+    TestParentAndItem *object = impl_from_TestParentAndItem(iface);
+    ULONG ref = InterlockedDecrement(&object->ref);
+
+    if (!ref)
+    {
+        ILFree(object->parent);
+        ILFree(object->child);
+        if (object->folder) IShellFolder_Release(object->folder);
+        free(object);
+    }
+
+    return ref;
+}
+
+static HRESULT WINAPI test_parent_and_item_SetParentAndItem(IParentAndItem *iface, PCIDLIST_ABSOLUTE parent,
+    IShellFolder *folder, PCUITEMID_CHILD child)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI test_parent_and_item_GetParentAndItem(IParentAndItem *iface, PIDLIST_ABSOLUTE *parent,
+    IShellFolder **folder, PITEMID_CHILD *child)
+{
+    TestParentAndItem *object = impl_from_TestParentAndItem(iface);
+
+    if (!parent || !folder || !child)
+        return E_POINTER;
+
+    *parent = object->parent ? ILClone(object->parent) : NULL;
+    *child = object->child ? ILClone(object->child) : NULL;
+    *folder = object->folder;
+    if (*folder) IShellFolder_AddRef(*folder);
+
+    return (*parent || !object->parent) && (*child || !object->child) ? S_OK : E_OUTOFMEMORY;
+}
+
+static const IParentAndItemVtbl test_parent_and_item_vtbl =
+{
+    test_parent_and_item_QueryInterface,
+    test_parent_and_item_AddRef,
+    test_parent_and_item_Release,
+    test_parent_and_item_SetParentAndItem,
+    test_parent_and_item_GetParentAndItem
+};
+
+static TestParentAndItem *create_test_parent_and_item(PCIDLIST_ABSOLUTE parent, IShellFolder *folder, PCUITEMID_CHILD child)
+{
+    TestParentAndItem *object = calloc(1, sizeof(*object));
+
+    if (!object)
+        return NULL;
+
+    object->IParentAndItem_iface.lpVtbl = &test_parent_and_item_vtbl;
+    object->ref = 1;
+    object->parent = parent ? ILClone(parent) : NULL;
+    object->child = child ? ILClone(child) : NULL;
+    object->folder = folder;
+    if (object->folder) IShellFolder_AddRef(object->folder);
+
+    if ((parent && !object->parent) || (child && !object->child))
+    {
+        IParentAndItem_Release(&object->IParentAndItem_iface);
+        return NULL;
+    }
+
+    return object;
+}
+
+static TestDataObject *create_test_data_object(void)
+{
+    TestDataObject *object = calloc(1, sizeof(*object));
+
+    if (!object)
+        return NULL;
+
+    object->IDataObject_iface.lpVtbl = &test_data_object_vtbl;
+    object->ref = 1;
+    return object;
+}
+
+static HGLOBAL create_hglobal_from_wstr(const WCHAR *str)
+{
+    SIZE_T size = (lstrlenW(str) + 1) * sizeof(WCHAR);
+    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE, size);
+    WCHAR *ptr;
+
+    if (!global)
+        return NULL;
+
+    ptr = GlobalLock(global);
+    memcpy(ptr, str, size);
+    GlobalUnlock(global);
+    return global;
+}
+
+static HGLOBAL create_hdrop_from_paths(const WCHAR * const *paths, UINT count)
+{
+    DROPFILES *dropfiles;
+    HGLOBAL global;
+    WCHAR *cursor;
+    SIZE_T chars = 1;
+    UINT i;
+
+    for (i = 0; i < count; ++i)
+        chars += lstrlenW(paths[i]) + 1;
+
+    global = GlobalAlloc(GMEM_MOVEABLE, sizeof(*dropfiles) + chars * sizeof(WCHAR));
+    if (!global)
+        return NULL;
+
+    dropfiles = GlobalLock(global);
+    memset(dropfiles, 0, sizeof(*dropfiles));
+    dropfiles->pFiles = sizeof(*dropfiles);
+    dropfiles->fWide = TRUE;
+
+    cursor = (WCHAR *)((char *)dropfiles + dropfiles->pFiles);
+    for (i = 0; i < count; ++i)
+    {
+        lstrcpyW(cursor, paths[i]);
+        cursor += lstrlenW(paths[i]) + 1;
+    }
+    *cursor = 0;
+
+    GlobalUnlock(global);
+    return global;
+}
+
+static void check_shellitemarray_path(IShellItemArray *array, DWORD index, const WCHAR *path)
+{
+    PIDLIST_ABSOLUTE expected, actual;
+    IShellItem *item;
+    HRESULT hr;
+
+    hr = IShellItemArray_GetItemAt(array, index, &item);
+    ok(hr == S_OK, "GetItemAt(%lu) returned %#lx.\n", index, hr);
+    if (FAILED(hr))
+        return;
+
+    expected = ILCreateFromPathW(path);
+    actual = NULL;
+    hr = pSHGetIDListFromObject((IUnknown *)item, &actual);
+    ok(hr == S_OK, "SHGetIDListFromObject returned %#lx.\n", hr);
+    ok(actual != NULL, "actual pidl is NULL.\n");
+    if (expected && actual)
+        ok(ILIsEqual(expected, actual), "item %lu path does not match %s.\n", index, wine_dbgstr_w(path));
+
+    ILFree(actual);
+    ILFree(expected);
+    IShellItem_Release(item);
+}
+
 static void test_SHGetIDListFromObject(void)
 {
     IUnknownImpl *punkimpl;
+    IFolderView2 *pfv2;
+    TestParentAndItem *parent_item;
+    IShellItemArray *psia;
     IShellFolder *psfdesktop;
     IShellView *psv;
     LPITEMIDLIST pidl, pidl_desktop;
@@ -3366,6 +3743,32 @@ static void test_SHGetIDListFromObject(void)
     else
         skip("no SHCreateShellItem.\n");
 
+    /* Test singleton IShellItemArray */
+    if (pSHCreateShellItem && pSHCreateShellItemArrayFromShellItem)
+    {
+        IShellItem *shellitem;
+
+        hres = pSHCreateShellItem(NULL, NULL, pidl_desktop, &shellitem);
+        ok(hres == S_OK, "got 0x%08lx\n", hres);
+        if (SUCCEEDED(hres))
+        {
+            hres = pSHCreateShellItemArrayFromShellItem(shellitem, &IID_IShellItemArray, (void **)&psia);
+            ok(hres == S_OK, "got 0x%08lx\n", hres);
+            if (SUCCEEDED(hres))
+            {
+                hres = pSHGetIDListFromObject((IUnknown *)psia, &pidl);
+                ok(hres == S_OK, "got 0x%08lx\n", hres);
+                if (SUCCEEDED(hres))
+                {
+                    ok(ILIsEqual(pidl_desktop, pidl), "pidl not equal.\n");
+                    ILFree(pidl);
+                }
+                IShellItemArray_Release(psia);
+            }
+            IShellItem_Release(shellitem);
+        }
+    }
+
     /* Test IShellFolder */
     hres = pSHGetIDListFromObject((IUnknown*)psfdesktop, &pidl);
     ok(hres == S_OK, "got 0x%08lx\n", hres);
@@ -3373,6 +3776,56 @@ static void test_SHGetIDListFromObject(void)
     {
         ok(ILIsEqual(pidl_desktop, pidl), "pidl not equal.\n");
         ILFree(pidl);
+    }
+
+    /* Test IParentAndItem */
+    {
+        IEnumIDList *peidl;
+        LPITEMIDLIST child;
+
+        hres = IShellFolder_EnumObjects(psfdesktop, NULL, SHCONTF_NONFOLDERS | SHCONTF_FOLDERS | SHCONTF_INCLUDEHIDDEN, &peidl);
+        ok(hres == S_OK, "got 0x%08lx\n", hres);
+        if (SUCCEEDED(hres))
+        {
+            child = NULL;
+            if (IEnumIDList_Next(peidl, 1, &child, NULL) == S_OK)
+            {
+                PIDLIST_ABSOLUTE combined = ILCombine(pidl_desktop, child);
+
+                parent_item = create_test_parent_and_item(pidl_desktop, psfdesktop, child);
+                ok(!!parent_item, "Failed to create IParentAndItem test object.\n");
+                if (parent_item)
+                {
+                    hres = pSHGetIDListFromObject((IUnknown *)&parent_item->IParentAndItem_iface, &pidl);
+                    ok(hres == S_OK, "got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        ok(ILIsEqual(combined, pidl), "pidl not equal.\n");
+                        ILFree(pidl);
+                    }
+                    IParentAndItem_Release(&parent_item->IParentAndItem_iface);
+                }
+
+                ILFree(combined);
+                ILFree(child);
+            }
+
+            parent_item = create_test_parent_and_item(pidl_desktop, psfdesktop, NULL);
+            ok(!!parent_item, "Failed to create parent-only IParentAndItem test object.\n");
+            if (parent_item)
+            {
+                hres = pSHGetIDListFromObject((IUnknown *)&parent_item->IParentAndItem_iface, &pidl);
+                ok(hres == S_OK, "got 0x%08lx\n", hres);
+                if (SUCCEEDED(hres))
+                {
+                    ok(ILIsEqual(pidl_desktop, pidl), "pidl not equal.\n");
+                    ILFree(pidl);
+                }
+                IParentAndItem_Release(&parent_item->IParentAndItem_iface);
+            }
+
+            IEnumIDList_Release(peidl);
+        }
     }
 
     hres = IShellFolder_CreateViewObject(psfdesktop, NULL, &IID_IShellView, (void**)&psv);
@@ -3390,6 +3843,45 @@ static void test_SHGetIDListFromObject(void)
         {
             ok(ILIsEqual(pidl_desktop, pidl), "pidl not equal.\n");
             ILFree(pidl);
+        }
+
+        /* Test IFolderView2 selection */
+        hres = IShellView_QueryInterface(psv, &IID_IFolderView2, (void **)&pfv2);
+        ok(hres == S_OK || broken(hres == E_NOINTERFACE) /* pre-vista */, "got 0x%08lx\n", hres);
+        if (hres == S_OK)
+        {
+            LPITEMIDLIST child = NULL;
+
+            enum_flags = SHCONTF_NONFOLDERS | SHCONTF_FOLDERS | SHCONTF_INCLUDEHIDDEN;
+            hres = IShellFolder_EnumObjects(psfdesktop, NULL, enum_flags, &peidl);
+            ok(hres == S_OK, "got 0x%08lx\n", hres);
+            if (SUCCEEDED(hres))
+            {
+                if (IEnumIDList_Next(peidl, 1, &child, NULL) == S_OK)
+                {
+                    PIDLIST_ABSOLUTE selected = ILCombine(pidl_desktop, child);
+
+                    hres = IShellView_SelectItem(psv, child, SVSI_SELECT | SVSI_FOCUSED | SVSI_ENSUREVISIBLE);
+                    ok(hres == S_OK, "got 0x%08lx\n", hres);
+
+                    hres = pSHGetIDListFromObject((IUnknown *)pfv2, &pidl);
+                    ok(hres == S_OK, "got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        ok(ILIsEqual(selected, pidl), "pidl not equal.\n");
+                        ILFree(pidl);
+                    }
+
+                    ILFree(selected);
+                    ILFree(child);
+                }
+                else
+                    skip("No files found - skipping IFolderView2 selection test.\n");
+
+                IEnumIDList_Release(peidl);
+            }
+
+            IFolderView2_Release(pfv2);
         }
 
         /* Test IDataObject */
@@ -3459,7 +3951,11 @@ static void test_SHGetIDListFromObject(void)
 static void test_SHGetItemFromObject(void)
 {
     IUnknownImpl *punkimpl;
+    IFolderView2 *pfv2;
+    TestParentAndItem *parent_item;
+    IShellItemArray *psia;
     IShellFolder *psfdesktop;
+    IShellView *psv;
     LPITEMIDLIST pidl;
     IShellItem *psi;
     IUnknown *punk;
@@ -3526,6 +4022,174 @@ static void test_SHGetItemFromObject(void)
             IShellItem_Release(psi2);
         }
         IShellItem_Release(psi);
+    }
+
+    /* Test singleton IShellItemArray */
+    hres = pSHGetItemFromObject((IUnknown*)psfdesktop, &IID_IShellItem, (void**)&psi);
+    ok(hres == S_OK, "Got 0x%08lx\n", hres);
+    if (SUCCEEDED(hres))
+    {
+        IUnknown *punk2 = NULL;
+
+        hres = pSHCreateShellItemArrayFromShellItem(psi, &IID_IShellItemArray, (void **)&psia);
+        ok(hres == S_OK, "Got 0x%08lx\n", hres);
+        if (SUCCEEDED(hres))
+        {
+            hres = pSHGetItemFromObject((IUnknown *)psia, &IID_IUnknown, (void **)&punk2);
+            ok(hres == S_OK, "Got 0x%08lx\n", hres);
+            if (SUCCEEDED(hres))
+            {
+                IShellItem *psi2 = NULL;
+                PIDLIST_ABSOLUTE pidl2 = NULL;
+
+                hres = IUnknown_QueryInterface(punk2, &IID_IShellItem, (void **)&psi2);
+                ok(hres == S_OK, "QI(IShellItem) returned 0x%08lx\n", hres);
+                if (SUCCEEDED(hres))
+                {
+                    hres = pSHGetIDListFromObject((IUnknown *)psi2, &pidl2);
+                    ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        hres = pSHGetIDListFromObject((IUnknown *)psi, &pidl);
+                        ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                        if (SUCCEEDED(hres))
+                        {
+                            ok(ILIsEqual(pidl, pidl2), "pidl not equal.\n");
+                            ILFree(pidl);
+                        }
+                        ILFree(pidl2);
+                    }
+                    IShellItem_Release(psi2);
+                }
+                IUnknown_Release(punk2);
+            }
+            IShellItemArray_Release(psia);
+        }
+        IShellItem_Release(psi);
+    }
+
+    /* Test IFolderView2 selection */
+    hres = IShellFolder_CreateViewObject(psfdesktop, NULL, &IID_IShellView, (void **)&psv);
+    ok(hres == S_OK, "got 0x%08lx\n", hres);
+    if (SUCCEEDED(hres))
+    {
+        hres = IShellView_QueryInterface(psv, &IID_IFolderView2, (void **)&pfv2);
+        ok(hres == S_OK || broken(hres == E_NOINTERFACE) /* pre-vista */, "got 0x%08lx\n", hres);
+        if (hres == S_OK)
+        {
+            PIDLIST_ABSOLUTE pidl_desktop = NULL;
+            IEnumIDList *peidl;
+
+            SHGetSpecialFolderLocation(NULL, CSIDL_DESKTOP, &pidl_desktop);
+            hres = IShellFolder_EnumObjects(psfdesktop, NULL, SHCONTF_NONFOLDERS | SHCONTF_FOLDERS | SHCONTF_INCLUDEHIDDEN, &peidl);
+            ok(hres == S_OK, "got 0x%08lx\n", hres);
+            if (SUCCEEDED(hres))
+            {
+                LPITEMIDLIST child = NULL;
+
+                if (IEnumIDList_Next(peidl, 1, &child, NULL) == S_OK)
+                {
+                    PIDLIST_ABSOLUTE selected = ILCombine(pidl_desktop, child);
+                    PIDLIST_ABSOLUTE pidl2 = NULL;
+
+                    hres = IShellView_SelectItem(psv, child, SVSI_SELECT | SVSI_FOCUSED | SVSI_ENSUREVISIBLE);
+                    ok(hres == S_OK, "got 0x%08lx\n", hres);
+
+                    hres = pSHGetItemFromObject((IUnknown *)pfv2, &IID_IShellItem, (void **)&psi);
+                    ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        hres = pSHGetIDListFromObject((IUnknown *)psi, &pidl2);
+                        ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                        if (SUCCEEDED(hres))
+                        {
+                            ok(ILIsEqual(selected, pidl2), "pidl not equal.\n");
+                            ILFree(pidl2);
+                        }
+                        IShellItem_Release(psi);
+                    }
+
+                    ILFree(selected);
+                    ILFree(child);
+                }
+                else
+                    skip("No files found - skipping IFolderView2 item test.\n");
+
+                IEnumIDList_Release(peidl);
+            }
+
+            ILFree(pidl_desktop);
+            IFolderView2_Release(pfv2);
+        }
+        IShellView_Release(psv);
+    }
+
+    /* Test IParentAndItem */
+    {
+        PIDLIST_ABSOLUTE pidl_desktop = NULL;
+        IEnumIDList *peidl;
+        LPITEMIDLIST child;
+
+        SHGetSpecialFolderLocation(NULL, CSIDL_DESKTOP, &pidl_desktop);
+        hres = IShellFolder_EnumObjects(psfdesktop, NULL, SHCONTF_NONFOLDERS | SHCONTF_FOLDERS | SHCONTF_INCLUDEHIDDEN, &peidl);
+        ok(hres == S_OK, "got 0x%08lx\n", hres);
+        if (SUCCEEDED(hres))
+        {
+            child = NULL;
+            if (IEnumIDList_Next(peidl, 1, &child, NULL) == S_OK)
+            {
+                PIDLIST_ABSOLUTE combined = ILCombine(pidl_desktop, child);
+                PIDLIST_ABSOLUTE pidl2 = NULL;
+
+                parent_item = create_test_parent_and_item(pidl_desktop, psfdesktop, child);
+                ok(!!parent_item, "Failed to create IParentAndItem test object.\n");
+                if (parent_item)
+                {
+                    hres = pSHGetItemFromObject((IUnknown *)&parent_item->IParentAndItem_iface, &IID_IShellItem, (void **)&psi);
+                    ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        hres = pSHGetIDListFromObject((IUnknown *)psi, &pidl2);
+                        ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                        if (SUCCEEDED(hres))
+                        {
+                            ok(ILIsEqual(combined, pidl2), "pidl not equal.\n");
+                            ILFree(pidl2);
+                        }
+                        IShellItem_Release(psi);
+                    }
+                    IParentAndItem_Release(&parent_item->IParentAndItem_iface);
+                }
+
+                ILFree(combined);
+                ILFree(child);
+            }
+
+            parent_item = create_test_parent_and_item(pidl_desktop, psfdesktop, NULL);
+            ok(!!parent_item, "Failed to create parent-only IParentAndItem test object.\n");
+            if (parent_item)
+            {
+                PIDLIST_ABSOLUTE pidl2 = NULL;
+
+                hres = pSHGetItemFromObject((IUnknown *)&parent_item->IParentAndItem_iface, &IID_IShellItem, (void **)&psi);
+                ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                if (SUCCEEDED(hres))
+                {
+                    hres = pSHGetIDListFromObject((IUnknown *)psi, &pidl2);
+                    ok(hres == S_OK, "Got 0x%08lx\n", hres);
+                    if (SUCCEEDED(hres))
+                    {
+                        ok(ILIsEqual(pidl_desktop, pidl2), "pidl not equal.\n");
+                        ILFree(pidl2);
+                    }
+                    IShellItem_Release(psi);
+                }
+                IParentAndItem_Release(&parent_item->IParentAndItem_iface);
+            }
+
+            IEnumIDList_Release(peidl);
+        }
+        ILFree(pidl_desktop);
     }
 
     IShellFolder_Release(psfdesktop);
@@ -3977,6 +4641,104 @@ static void test_SHCreateShellItemArray(void)
     Cleanup();
 }
 
+static void test_SHCreateShellItemArrayFromDataObject_fallbacks(void)
+{
+    WCHAR windows_path[MAX_PATH], system_path[MAX_PATH], url[MAX_PATH * 2];
+    const WCHAR *paths[2];
+    DWORD count;
+    HRESULT hr;
+
+    if (!pSHCreateShellItemArrayFromDataObject)
+    {
+        win_skip("No SHCreateShellItemArrayFromDataObject.\n");
+        return;
+    }
+
+    GetWindowsDirectoryW(windows_path, ARRAY_SIZE(windows_path));
+    GetSystemDirectoryW(system_path, ARRAY_SIZE(system_path));
+
+    {
+        TestDataObject *object = create_test_data_object();
+        IShellItemArray *array;
+
+        ok(!!object, "Failed to create test data object.\n");
+        if (!object) return;
+
+        hr = test_data_object_set_hglobal(object, RegisterClipboardFormatW(CFSTR_FILENAMEW),
+                                          create_hglobal_from_wstr(windows_path));
+        ok(hr == S_OK, "set filename format returned %#lx.\n", hr);
+
+        hr = pSHCreateShellItemArrayFromDataObject(&object->IDataObject_iface, &IID_IShellItemArray, (void **)&array);
+        ok(hr == S_OK, "Got %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItemArray_GetCount(array, &count);
+            ok(hr == S_OK, "GetCount returned %#lx.\n", hr);
+            ok(count == 1, "Got count %lu.\n", count);
+            check_shellitemarray_path(array, 0, windows_path);
+            IShellItemArray_Release(array);
+        }
+
+        IDataObject_Release(&object->IDataObject_iface);
+    }
+
+    {
+        TestDataObject *object = create_test_data_object();
+        IShellItemArray *array;
+        DWORD len = ARRAY_SIZE(url);
+
+        ok(!!object, "Failed to create test data object.\n");
+        if (!object) return;
+
+        hr = UrlCreateFromPathW(windows_path, url, &len, 0);
+        ok(hr == S_OK, "UrlCreateFromPathW returned %#lx.\n", hr);
+
+        hr = test_data_object_set_hglobal(object, RegisterClipboardFormatW(CFSTR_INETURLW),
+                                          create_hglobal_from_wstr(url));
+        ok(hr == S_OK, "set url format returned %#lx.\n", hr);
+
+        hr = pSHCreateShellItemArrayFromDataObject(&object->IDataObject_iface, &IID_IShellItemArray, (void **)&array);
+        ok(hr == S_OK, "Got %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItemArray_GetCount(array, &count);
+            ok(hr == S_OK, "GetCount returned %#lx.\n", hr);
+            ok(count == 1, "Got count %lu.\n", count);
+            check_shellitemarray_path(array, 0, windows_path);
+            IShellItemArray_Release(array);
+        }
+
+        IDataObject_Release(&object->IDataObject_iface);
+    }
+
+    {
+        TestDataObject *object = create_test_data_object();
+        IShellItemArray *array;
+
+        ok(!!object, "Failed to create test data object.\n");
+        if (!object) return;
+
+        paths[0] = windows_path;
+        paths[1] = system_path;
+        hr = test_data_object_set_hglobal(object, CF_HDROP, create_hdrop_from_paths(paths, 2));
+        ok(hr == S_OK, "set HDROP format returned %#lx.\n", hr);
+
+        hr = pSHCreateShellItemArrayFromDataObject(&object->IDataObject_iface, &IID_IShellItemArray, (void **)&array);
+        ok(hr == S_OK, "Got %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItemArray_GetCount(array, &count);
+            ok(hr == S_OK, "GetCount returned %#lx.\n", hr);
+            ok(count == 2, "Got count %lu.\n", count);
+            check_shellitemarray_path(array, 0, windows_path);
+            check_shellitemarray_path(array, 1, system_path);
+            IShellItemArray_Release(array);
+        }
+
+        IDataObject_Release(&object->IDataObject_iface);
+    }
+}
+
 static void test_ShellItemArrayEnumItems(void)
 {
     IShellFolder *pdesktopsf, *psf;
@@ -4294,6 +5056,99 @@ static void test_ShellItemBindToHandler(void)
     else
         skip("Failed to create ShellItem.\n");
 
+    ILFree(pidl_desktop);
+}
+
+static void test_ShellItemArrayBindToHandler(void)
+{
+    IEnumIDList *peidl;
+    IShellFolder *psfdesktop;
+    IShellItemArray *psia;
+    IShellItem *psi;
+    LPITEMIDLIST apidl[2], pidl_desktop;
+    IPropertyStore *store;
+    IEnumShellItems *enum_items;
+    IDataObject *data_object;
+    DWORD count;
+    HRESULT hr;
+
+    if (!pSHCreateShellItem || !pSHCreateShellItemArray || !pSHCreateShellItemArrayFromShellItem)
+    {
+        win_skip("Required ShellItemArray helpers are missing.\n");
+        return;
+    }
+
+    hr = SHGetSpecialFolderLocation(NULL, CSIDL_DESKTOP, &pidl_desktop);
+    ok(hr == S_OK, "Got 0x%08lx\n", hr);
+    if (FAILED(hr))
+        return;
+
+    hr = SHGetDesktopFolder(&psfdesktop);
+    ok(hr == S_OK, "Got 0x%08lx\n", hr);
+    if (FAILED(hr))
+    {
+        ILFree(pidl_desktop);
+        return;
+    }
+
+    hr = pSHCreateShellItem(NULL, NULL, pidl_desktop, &psi);
+    ok(hr == S_OK, "Got 0x%08lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        hr = pSHCreateShellItemArrayFromShellItem(psi, &IID_IShellItemArray, (void **)&psia);
+        ok(hr == S_OK, "Got 0x%08lx\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_StorageEnum, &IID_IEnumShellItems, (void **)&enum_items);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr)) IEnumShellItems_Release(enum_items);
+
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_PropertyStore, &IID_IPropertyStore, (void **)&store);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IPropertyStore_GetCount(store, &count);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+                ok(!count, "Got count %lu.\n", count);
+                IPropertyStore_Release(store);
+            }
+
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_DataObject, &IID_IDataObject, (void **)&data_object);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr)) IDataObject_Release(data_object);
+
+            IShellItemArray_Release(psia);
+        }
+        IShellItem_Release(psi);
+    }
+
+    hr = IShellFolder_EnumObjects(psfdesktop, NULL, SHCONTF_NONFOLDERS | SHCONTF_FOLDERS | SHCONTF_INCLUDEHIDDEN, &peidl);
+    ok(hr == S_OK, "Got 0x%08lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        if (IEnumIDList_Next(peidl, 1, &apidl[0], NULL) == S_OK &&
+            IEnumIDList_Next(peidl, 1, &apidl[1], NULL) == S_OK)
+        {
+            hr = pSHCreateShellItemArray(pidl_desktop, psfdesktop, 2, (LPCITEMIDLIST *)apidl, &psia);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_DataObject, &IID_IDataObject, (void **)&data_object);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+                if (SUCCEEDED(hr)) IDataObject_Release(data_object);
+
+                IShellItemArray_Release(psia);
+            }
+            ILFree(apidl[1]);
+            ILFree(apidl[0]);
+        }
+        else
+            skip("Not enough desktop items for multi-item ShellItemArray test.\n");
+
+        IEnumIDList_Release(peidl);
+    }
+
+    IShellFolder_Release(psfdesktop);
     ILFree(pidl_desktop);
 }
 
@@ -6299,6 +7154,7 @@ START_TEST(shlfolder)
     test_LocalizedNames();
     test_SHCreateShellItem();
     test_SHCreateShellItemArray();
+    test_SHCreateShellItemArrayFromDataObject_fallbacks();
     test_ShellItemArrayEnumItems();
     test_desktop_IPersist();
     test_IShellItemImageFactory();
@@ -6314,6 +7170,7 @@ START_TEST(shlfolder)
     test_SHChangeNotify(FALSE);
     test_SHChangeNotify(TRUE);
     test_ShellItemBindToHandler();
+    test_ShellItemArrayBindToHandler();
     test_ShellItemGetAttributes();
     test_ShellItemArrayGetAttributes();
     test_SHCreateDefaultContextMenu();

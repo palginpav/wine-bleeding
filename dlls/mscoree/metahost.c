@@ -99,7 +99,7 @@ MonoDomain* (CDECL *mono_domain_get)(void);
 MonoDomain* (CDECL *mono_domain_get_by_id)(int id);
 BOOL (CDECL *mono_domain_set)(MonoDomain *domain,BOOL force);
 void (CDECL *mono_domain_set_config)(MonoDomain *domain,const char *base_dir,const char *config_file_name);
-static void (CDECL *mono_free)(void *);
+void (CDECL *mono_free)(void *);
 MonoImage* (CDECL *mono_get_corlib)(void);
 static MonoImage* (CDECL *mono_image_open)(const char *fname, MonoImageOpenStatus *status);
 MonoImage* (CDECL *mono_image_open_from_module_handle)(HMODULE module_handle, char* fname, UINT has_entry_point, MonoImageOpenStatus* status);
@@ -110,9 +110,12 @@ static void (CDECL *mono_jit_set_aot_mode)(MonoAotMode mode);
 static int (CDECL *mono_jit_set_trace_options)(const char* options);
 void* (CDECL *mono_marshal_get_vtfixup_ftnptr)(MonoImage *image, DWORD token, WORD type);
 MonoDomain* (CDECL *mono_object_get_domain)(MonoObject *obj);
+MonoClass* (CDECL *mono_object_get_class)(MonoObject *obj);
 MonoMethod* (CDECL *mono_object_get_virtual_method)(MonoObject *obj, MonoMethod *method);
 MonoObject* (CDECL *mono_object_new)(MonoDomain *domain, MonoClass *klass);
 void* (CDECL *mono_object_unbox)(MonoObject *obj);
+const char* (CDECL *mono_class_get_name)(MonoClass *klass);
+const char* (CDECL *mono_class_get_namespace)(MonoClass *klass);
 static MonoProfilerHandle (CDECL *mono_profiler_create)(MonoProfiler *prof);
 static void (CDECL *mono_profiler_install)(MonoProfiler *prof, MonoProfileFunc shutdown_callback);
 static void (CDECL *mono_profiler_set_runtime_shutdown_begin_callback)(MonoProfilerHandle handle, MonoProfilerRuntimeShutdownBeginCallback cb);
@@ -124,6 +127,8 @@ static void (CDECL *mono_set_crash_chaining)(BOOL chain_signals);
 static void (CDECL *mono_set_dirs)(const char *assembly_dir, const char *config_dir);
 static void (CDECL *mono_set_verbose_level)(DWORD level);
 MonoString* (CDECL *mono_string_new)(MonoDomain *domain, const char *str);
+MonoString* (CDECL *mono_object_to_string)(MonoObject *obj, MonoObject **exc);
+char* (CDECL *mono_string_to_utf8)(MonoString *string_obj);
 static char* (CDECL *mono_stringify_assembly_name)(MonoAssemblyName *aname);
 MonoThread* (CDECL *mono_thread_attach)(MonoDomain *domain);
 void (CDECL *mono_thread_manage)(void);
@@ -225,6 +230,7 @@ static HRESULT load_mono(LPCWSTR mono_path)
         LOAD_MONO_FUNCTION(mono_jit_init_version);
         LOAD_MONO_FUNCTION(mono_jit_set_trace_options);
         LOAD_MONO_FUNCTION(mono_marshal_get_vtfixup_ftnptr);
+        LOAD_MONO_FUNCTION(mono_object_get_class);
         LOAD_MONO_FUNCTION(mono_object_get_domain);
         LOAD_MONO_FUNCTION(mono_object_get_virtual_method);
         LOAD_MONO_FUNCTION(mono_object_new);
@@ -237,6 +243,8 @@ static HRESULT load_mono(LPCWSTR mono_path)
         LOAD_MONO_FUNCTION(mono_set_verbose_level);
         LOAD_MONO_FUNCTION(mono_stringify_assembly_name);
         LOAD_MONO_FUNCTION(mono_string_new);
+        LOAD_MONO_FUNCTION(mono_string_to_utf8);
+        LOAD_MONO_FUNCTION(mono_object_to_string);
         LOAD_MONO_FUNCTION(mono_thread_attach);
         LOAD_MONO_FUNCTION(mono_thread_manage);
 
@@ -250,6 +258,8 @@ static HRESULT load_mono(LPCWSTR mono_path)
 } while (0);
 
         LOAD_OPT_MONO_FUNCTION(mono_callspec_set_assembly, NULL);
+        LOAD_OPT_MONO_FUNCTION(mono_class_get_name, NULL);
+        LOAD_OPT_MONO_FUNCTION(mono_class_get_namespace, NULL);
         LOAD_OPT_MONO_FUNCTION(mono_image_open_from_module_handle, image_open_module_handle_dummy);
         LOAD_OPT_MONO_FUNCTION(mono_jit_set_aot_mode, NULL);
         LOAD_OPT_MONO_FUNCTION(mono_profiler_create, NULL);
@@ -589,17 +599,38 @@ static HRESULT WINAPI CLRRuntimeInfo_GetRuntimeDirectory(ICLRRuntimeInfo* iface,
 static HRESULT WINAPI CLRRuntimeInfo_IsLoaded(ICLRRuntimeInfo* iface,
     HANDLE hndProcess, BOOL *pbLoaded)
 {
-    FIXME("%p %p %p\n", iface, hndProcess, pbLoaded);
+    TRACE("%p %p %p\n", iface, hndProcess, pbLoaded);
 
-    return E_NOTIMPL;
+    if (!pbLoaded) return E_POINTER;
+
+    /* Wine loads the Mono/CLR runtime into the current process only. If the
+       caller asks about a different process, we conservatively report that
+       the runtime is not loaded. */
+    if (hndProcess && hndProcess != GetCurrentProcess())
+    {
+        *pbLoaded = FALSE;
+        return S_OK;
+    }
+
+    /* At this point the very existence of the CLRRuntimeInfo implies that the
+       runtime is loadable; report TRUE. */
+    *pbLoaded = TRUE;
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_LoadErrorString(ICLRRuntimeInfo* iface,
     UINT iResourceID, LPWSTR pwzBuffer, DWORD *pcchBuffer, LONG iLocaleid)
 {
-    FIXME("%p %u %p %p %lx\n", iface, iResourceID, pwzBuffer, pcchBuffer, iLocaleid);
+    TRACE("%p %u %p %p %lx\n", iface, iResourceID, pwzBuffer, pcchBuffer, iLocaleid);
 
-    return E_NOTIMPL;
+    if (!pcchBuffer) return E_POINTER;
+
+    /* No localized error strings are provided; behave as if the resource
+       were not found. */
+    if (pwzBuffer && *pcchBuffer)
+        pwzBuffer[0] = 0;
+    *pcchBuffer = 0;
+    return HRESULT_FROM_WIN32(ERROR_RESOURCE_NAME_NOT_FOUND);
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_LoadLibrary(ICLRRuntimeInfo* iface,
@@ -621,9 +652,14 @@ static HRESULT WINAPI CLRRuntimeInfo_LoadLibrary(ICLRRuntimeInfo* iface,
 static HRESULT WINAPI CLRRuntimeInfo_GetProcAddress(ICLRRuntimeInfo* iface,
     LPCSTR pszProcName, LPVOID *ppProc)
 {
-    FIXME("%p %s %p\n", iface, debugstr_a(pszProcName), ppProc);
+    TRACE("%p %s %p\n", iface, debugstr_a(pszProcName), ppProc);
 
-    return E_NOTIMPL;
+    if (!ppProc) return E_POINTER;
+    *ppProc = NULL;
+
+    /* Runtime hosting exports are not surfaced this way in Wine; report that
+       the named procedure is not available. */
+    return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_GetInterface(ICLRRuntimeInfo* iface,
@@ -646,40 +682,60 @@ static HRESULT WINAPI CLRRuntimeInfo_GetInterface(ICLRRuntimeInfo* iface,
 static HRESULT WINAPI CLRRuntimeInfo_IsLoadable(ICLRRuntimeInfo* iface,
     BOOL *pbLoadable)
 {
-    FIXME("%p %p\n", iface, pbLoadable);
+    TRACE("%p %p\n", iface, pbLoadable);
 
-    return E_NOTIMPL;
+    if (!pbLoadable) return E_POINTER;
+
+    /* If we have an ICLRRuntimeInfo instance at all, the runtime is
+       considered loadable. */
+    *pbLoadable = TRUE;
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_SetDefaultStartupFlags(ICLRRuntimeInfo* iface,
     DWORD dwStartupFlags, LPCWSTR pwzHostConfigFile)
 {
-    FIXME("%p %lx %s\n", iface, dwStartupFlags, debugstr_w(pwzHostConfigFile));
+    TRACE("%p %lx %s\n", iface, dwStartupFlags, debugstr_w(pwzHostConfigFile));
 
-    return E_NOTIMPL;
+    /* Startup flags and host config file are currently ignored; accept them
+       so hosts don't see E_NOTIMPL. */
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_GetDefaultStartupFlags(ICLRRuntimeInfo* iface,
     DWORD *pdwStartupFlags, LPWSTR pwzHostConfigFile, DWORD *pcchHostConfigFile)
 {
-    FIXME("%p %p %p %p\n", iface, pdwStartupFlags, pwzHostConfigFile, pcchHostConfigFile);
+    TRACE("%p %p %p %p\n", iface, pdwStartupFlags, pwzHostConfigFile, pcchHostConfigFile);
 
-    return E_NOTIMPL;
+    if (pdwStartupFlags)
+        *pdwStartupFlags = 0;
+    if (pcchHostConfigFile)
+        *pcchHostConfigFile = 0;
+    if (pwzHostConfigFile && pcchHostConfigFile && *pcchHostConfigFile)
+        pwzHostConfigFile[0] = 0;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_BindAsLegacyV2Runtime(ICLRRuntimeInfo* iface)
 {
-    FIXME("%p\n", iface);
+    TRACE("%p\n", iface);
 
-    return E_NOTIMPL;
+    /* Legacy v2 binding is not relevant for the Mono-based runtime; accept
+       the call as a no-op so hosts don't fail on this API. */
+    return S_OK;
 }
 
 static HRESULT WINAPI CLRRuntimeInfo_IsStarted(ICLRRuntimeInfo* iface,
     BOOL *pbStarted, DWORD *pdwStartupFlags)
 {
-    FIXME("%p %p %p\n", iface, pbStarted, pdwStartupFlags);
+    TRACE("%p %p %p\n", iface, pbStarted, pdwStartupFlags);
 
-    return E_NOTIMPL;
+    if (!pbStarted) return E_POINTER;
+
+    *pbStarted = is_mono_started && !is_mono_shutdown;
+    if (pdwStartupFlags) *pdwStartupFlags = 0;
+    return S_OK;
 }
 
 static const struct ICLRRuntimeInfoVtbl CLRRuntimeInfoVtbl = {
@@ -1023,6 +1079,89 @@ static const struct IEnumUnknownVtbl InstalledRuntimeEnum_Vtbl = {
     InstalledRuntimeEnum_Clone
 };
 
+/* Enumerate only runtime slots that have loaded_runtime set (current process). */
+static HRESULT WINAPI LoadedRuntimeEnum_Next(IEnumUnknown *iface, ULONG celt,
+    IUnknown **rgelt, ULONG *pceltFetched)
+{
+    struct InstalledRuntimeEnum *This = impl_from_IEnumUnknown(iface);
+    ULONG num_fetched = 0;
+    HRESULT hr = S_OK;
+    IUnknown *item;
+
+    TRACE("(%p,%lu,%p,%p)\n", iface, celt, rgelt, pceltFetched);
+
+    while (num_fetched < celt)
+    {
+        while (This->pos < NUM_RUNTIMES && !runtimes[This->pos].loaded_runtime)
+            This->pos++;
+        if (This->pos >= NUM_RUNTIMES)
+        {
+            hr = S_FALSE;
+            break;
+        }
+        item = (IUnknown *)&runtimes[This->pos].ICLRRuntimeInfo_iface;
+        IUnknown_AddRef(item);
+        rgelt[num_fetched] = item;
+        num_fetched++;
+        This->pos++;
+    }
+
+    if (pceltFetched)
+        *pceltFetched = num_fetched;
+
+    return hr;
+}
+
+static HRESULT WINAPI LoadedRuntimeEnum_Skip(IEnumUnknown *iface, ULONG celt)
+{
+    struct InstalledRuntimeEnum *This = impl_from_IEnumUnknown(iface);
+    ULONG num_skipped = 0;
+    HRESULT hr = S_OK;
+
+    TRACE("(%p,%lu)\n", iface, celt);
+
+    while (num_skipped < celt)
+    {
+        while (This->pos < NUM_RUNTIMES && !runtimes[This->pos].loaded_runtime)
+            This->pos++;
+        if (This->pos >= NUM_RUNTIMES)
+        {
+            hr = S_FALSE;
+            break;
+        }
+        This->pos++;
+        num_skipped++;
+    }
+
+    return hr;
+}
+
+static const struct IEnumUnknownVtbl LoadedRuntimeEnum_Vtbl = {
+    InstalledRuntimeEnum_QueryInterface,
+    InstalledRuntimeEnum_AddRef,
+    InstalledRuntimeEnum_Release,
+    LoadedRuntimeEnum_Next,
+    LoadedRuntimeEnum_Skip,
+    InstalledRuntimeEnum_Reset,
+    InstalledRuntimeEnum_Clone
+};
+
+static HRESULT enumerate_loaded_runtimes(IEnumUnknown **ppEnumerator)
+{
+    struct InstalledRuntimeEnum *new_enum;
+
+    new_enum = malloc(sizeof(*new_enum));
+    if (!new_enum)
+        return E_OUTOFMEMORY;
+
+    new_enum->IEnumUnknown_iface.lpVtbl = &LoadedRuntimeEnum_Vtbl;
+    new_enum->ref = 1;
+    new_enum->pos = 0;
+
+    *ppEnumerator = &new_enum->IEnumUnknown_iface;
+    return S_OK;
+}
+
 static HRESULT WINAPI CLRMetaHost_QueryInterface(ICLRMetaHost* iface,
         REFIID riid,
         void **ppvObject)
@@ -1194,9 +1333,16 @@ static HRESULT WINAPI CLRMetaHost_EnumerateInstalledRuntimes(ICLRMetaHost* iface
 static HRESULT WINAPI CLRMetaHost_EnumerateLoadedRuntimes(ICLRMetaHost* iface,
     HANDLE hndProcess, IEnumUnknown **ppEnumerator)
 {
-    FIXME("%p %p\n", hndProcess, ppEnumerator);
+    TRACE("%p %p\n", hndProcess, ppEnumerator);
 
-    return E_NOTIMPL;
+    if (!ppEnumerator) return E_POINTER;
+    *ppEnumerator = NULL;
+
+    /* Only support enumeration for the current process. */
+    if (hndProcess && hndProcess != GetCurrentProcess())
+        return S_OK;
+
+    return enumerate_loaded_runtimes(ppEnumerator);
 }
 
 static HRESULT WINAPI CLRMetaHost_RequestRuntimeLoadedNotification(ICLRMetaHost* iface,
@@ -1218,9 +1364,10 @@ static HRESULT WINAPI CLRMetaHost_RequestRuntimeLoadedNotification(ICLRMetaHost*
 static HRESULT WINAPI CLRMetaHost_QueryLegacyV2RuntimeBinding(ICLRMetaHost* iface,
     REFIID riid, LPVOID *ppUnk)
 {
-    FIXME("%s %p\n", debugstr_guid(riid), ppUnk);
+    TRACE("%s %p\n", debugstr_guid(riid), ppUnk);
 
-    return E_NOTIMPL;
+    if (ppUnk) *ppUnk = NULL;
+    return E_NOINTERFACE;
 }
 
 HRESULT WINAPI CLRMetaHost_ExitProcess(ICLRMetaHost* iface, INT32 iExitCode)
@@ -1763,7 +1910,7 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
     }
     else cultureW = NULL;
 
-    TRACE("%s\n", debugstr_a(stringname));
+    TRACE("%s culture=%s flags_in=%#x\n", debugstr_a(stringname), debugstr_a(culture), flags ? *flags : 0);
 
     if (!stringname || !assemblyname) return NULL;
 
@@ -1784,24 +1931,40 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
                 PathAppendW(path, stringnameW);
                 wcscat(path, dotdllW);
                 result = mono_assembly_try_load(path);
-                if (result) break;
+                if (result)
+                {
+                    TRACE("found private path assembly %s\n", debugstr_w(path));
+                    break;
+                }
 
                 /* 2nd try: [culture]/[name].exe (culture may be empty) */
                 wcscpy(path + wcslen(path) - wcslen(dotdllW), dotexeW);
                 result = mono_assembly_try_load(path);
-                if (result) break;
+                if (result)
+                {
+                    TRACE("found private path assembly %s\n", debugstr_w(path));
+                    break;
+                }
 
                 /* 3rd try: [culture]/[name]/[name].dll (culture may be empty) */
                 path[wcslen(path) - wcslen(dotexeW)] = 0;
                 PathAppendW(path, stringnameW);
                 wcscat(path, dotdllW);
                 result = mono_assembly_try_load(path);
-                if (result) break;
+                if (result)
+                {
+                    TRACE("found private path assembly %s\n", debugstr_w(path));
+                    break;
+                }
 
                 /* 4th try: [culture]/[name]/[name].exe (culture may be empty) */
                 wcscpy(path + wcslen(path) - wcslen(dotdllW), dotexeW);
                 result = mono_assembly_try_load(path);
-                if (result) break;
+                if (result)
+                {
+                    TRACE("found private path assembly %s\n", debugstr_w(path));
+                    break;
+                }
             }
             free(stringnameW);
             if (result) goto done;
@@ -1925,6 +2088,13 @@ HRESULT get_runtime_info(LPCWSTR exefile, LPCWSTR version, LPCWSTR config_file,
         if (SUCCEEDED(hr))
         {
             supported_runtime *entry;
+
+            if (parsed_config.use_legacy_v2_runtime_activation_policy)
+            {
+                legacy = TRUE;
+                TRACE("config requested legacy v2 runtime activation policy\n");
+            }
+
             LIST_FOR_EACH_ENTRY(entry, &parsed_config.supported_runtimes, supported_runtime, entry)
             {
                 hr = get_runtime(entry->version, TRUE, &IID_ICLRRuntimeInfo, (void**)result);

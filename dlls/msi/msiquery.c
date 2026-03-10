@@ -529,14 +529,20 @@ UINT WINAPI MsiViewExecute( MSIHANDLE hView, MSIHANDLE hRec )
     query = msihandle2msiinfo( hView, MSIHANDLETYPE_VIEW );
     if( !query )
     {
+        struct wire_record *wire_rec = NULL;
         MSIHANDLE remote;
 
         if (!(remote = msi_get_remote(hView)))
             return ERROR_INVALID_HANDLE;
+        if (rec && !(wire_rec = marshal_record(hRec)))
+        {
+            msiobj_release(&rec->hdr);
+            return ERROR_OUTOFMEMORY;
+        }
 
         __TRY
         {
-            ret = remote_ViewExecute(remote, rec ? (struct wire_record *)&rec->count : NULL);
+            ret = remote_ViewExecute(remote, wire_rec);
         }
         __EXCEPT(rpc_filter)
         {
@@ -544,6 +550,7 @@ UINT WINAPI MsiViewExecute( MSIHANDLE hView, MSIHANDLE hRec )
         }
         __ENDTRY
 
+        free_remote_record(wire_rec);
         if (rec)
             msiobj_release(&rec->hdr);
         return ret;
@@ -728,16 +735,22 @@ UINT WINAPI MsiViewModify( MSIHANDLE hView, MSIMODIFY eModifyMode, MSIHANDLE hRe
     query = msihandle2msiinfo( hView, MSIHANDLETYPE_VIEW );
     if (!query)
     {
+        struct wire_record *wire_rec;
         struct wire_record *wire_refreshed = NULL;
         MSIHANDLE remote;
 
         if (!(remote = msi_get_remote(hView)))
             return ERROR_INVALID_HANDLE;
+        if (!(wire_rec = marshal_record(hRecord)))
+        {
+            msiobj_release(&rec->hdr);
+            return ERROR_OUTOFMEMORY;
+        }
 
         __TRY
         {
             r = remote_ViewModify(remote, eModifyMode,
-                (struct wire_record *)&rec->count, &wire_refreshed);
+                wire_rec, &wire_refreshed);
         }
         __EXCEPT(rpc_filter)
         {
@@ -745,6 +758,7 @@ UINT WINAPI MsiViewModify( MSIHANDLE hView, MSIMODIFY eModifyMode, MSIHANDLE hRe
         }
         __ENDTRY
 
+        free_remote_record(wire_rec);
         if (!r && (eModifyMode == MSIMODIFY_REFRESH || eModifyMode == MSIMODIFY_SEEK))
         {
             r = copy_remote_record(wire_refreshed, hRecord);

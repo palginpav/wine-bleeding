@@ -80,6 +80,32 @@ LONG WINAPI rpc_filter(EXCEPTION_POINTERS *eptr)
     return I_RpcExceptionFilter(eptr->ExceptionRecord->ExceptionCode);
 }
 
+struct custom_action_exception_info
+{
+    DWORD code;
+    void *exception_address;
+    ULONG_PTR access_type;
+    void *fault_address;
+};
+
+static LONG WINAPI custom_action_page_fault_filter(EXCEPTION_POINTERS *eptr, void *context)
+{
+    struct custom_action_exception_info *info = context;
+    const EXCEPTION_RECORD *rec = eptr->ExceptionRecord;
+
+    if (rec->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    info->code = rec->ExceptionCode;
+    info->exception_address = rec->ExceptionAddress;
+    if (rec->NumberParameters >= 2)
+    {
+        info->access_type = rec->ExceptionInformation[0];
+        info->fault_address = (void *)rec->ExceptionInformation[1];
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 UINT msi_schedule_action( MSIPACKAGE *package, UINT script, const WCHAR *action )
 {
     UINT count;
@@ -496,6 +522,7 @@ UINT CDECL __wine_msi_call_dll_function(DWORD client_pid, const GUID *guid)
     HANDLE hModule;
     INT type;
     UINT r;
+    struct custom_action_exception_info exc_info = {0};
 
     TRACE("%s\n", debugstr_guid( guid ));
 
@@ -554,10 +581,36 @@ UINT CDECL __wine_msi_call_dll_function(DWORD client_pid, const GUID *guid)
         {
             r = custom_proc_wrapper( fn, hPackage );
         }
-        __EXCEPT_PAGE_FAULT
+        __EXCEPT_CTX(custom_action_page_fault_filter, &exc_info)
         {
-            ERR( "Custom action (%s:%s) caused a page fault: %#lx\n",
-                 debugstr_w(dll), debugstr_a(proc), GetExceptionCode() );
+            const char *access = "read";
+            void *fault_addr = NULL;
+            void *fault_module = NULL;
+            ULONG_PTR module_offset = 0;
+            MEMORY_BASIC_INFORMATION mbi;
+            WCHAR fault_module_name[MAX_PATH];
+
+            if (exc_info.access_type == EXCEPTION_WRITE_FAULT) access = "write";
+            else if (exc_info.access_type == EXCEPTION_EXECUTE_FAULT) access = "execute";
+            fault_addr = exc_info.fault_address;
+
+            fault_module_name[0] = 0;
+            if (exc_info.exception_address &&
+                VirtualQuery( exc_info.exception_address, &mbi, sizeof(mbi) ) == sizeof(mbi))
+                fault_module = mbi.AllocationBase;
+            if (exc_info.exception_address && fault_module)
+                module_offset = (const char *)exc_info.exception_address - (const char *)fault_module;
+            else if (exc_info.exception_address && hModule)
+            {
+                module_offset = (const char *)exc_info.exception_address - (const char *)hModule;
+                fault_module = hModule;
+            }
+            if (fault_module) GetModuleFileNameW( fault_module, fault_module_name, ARRAY_SIZE(fault_module_name) );
+
+            ERR( "Custom action %s (%s:%s, type %#x) caused page fault %#lx at %p (fault module %s, %p + %#Ix; action module %s, %p), %s access to %p\n",
+                 debugstr_w(action), debugstr_w(dll), debugstr_a(proc), type, exc_info.code,
+                 exc_info.exception_address, debugstr_w(fault_module_name), fault_module, module_offset,
+                 debugstr_w(dll), hModule, access, fault_addr );
             r = ERROR_SUCCESS;
         }
         __ENDTRY;
@@ -836,15 +889,30 @@ static UINT HANDLE_CustomType1( MSIPACKAGE *package, const WCHAR *source, const 
 {
     custom_action_info *info;
     MSIBINARY *binary;
+    UINT r;
 
     if (!(binary = get_temp_binary(package, source)))
         return ERROR_FUNCTION_FAILED;
 
     TRACE("Calling function %s from %s\n", debugstr_w(target), debugstr_w(binary->tmpfile));
+    if (!wcscmp( action, L"AI_AppSearchEx" ) || !wcscmp( target, L"DoAppSearchEx" ) ||
+        !wcscmp( action, L"WindowsOptionalFeatures" ) || !wcscmp( source, L"WinOptionalFeatures.dll" ))
+        ERR("Type1 custom action %s source %s target %s tempfile %s\n",
+            debugstr_w( action ), debugstr_w( source ), debugstr_w( target ), debugstr_w( binary->tmpfile ));
 
     if (!(info = do_msidbCustomActionTypeDll( package, type, binary->tmpfile, target, action )))
         return ERROR_FUNCTION_FAILED;
-    return wait_thread_handle( info );
+    r = wait_thread_handle( info );
+
+    if (r == ERROR_INSTALL_FAILURE && (!wcscmp( action, L"WindowsOptionalFeatures" ) ||
+        !wcscmp( source, L"WinOptionalFeatures.dll" )))
+    {
+        WARN( "ignoring failing Windows feature custom action %s (%s:%s)\n",
+              debugstr_w( action ), debugstr_w( source ), debugstr_w( target ) );
+        return ERROR_SUCCESS;
+    }
+
+    return r;
 }
 
 static HANDLE execute_command( const WCHAR *app, WCHAR *arg, const WCHAR *dir )

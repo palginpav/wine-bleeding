@@ -740,11 +740,8 @@ static VOID set_installer_properties(MSIPACKAGE *package)
     OSVersion.dwOSVersionInfoSize = sizeof(OSVersion);
     RtlGetVersion(&OSVersion);
     verval = OSVersion.dwMinorVersion + OSVersion.dwMajorVersion * 100;
-    if (verval > 603)
-    {
-        verval = 603;
-        OSVersion.dwBuildNumber = 9600;
-    }
+    /* Do not cap at 603: installers that refuse Vista/7/8/8.1 (e.g. BarTender) check
+     * LaunchCondition against VersionNT/VersionNT64 and need to see 1000 (Win10) or higher. */
     len = swprintf( verstr, ARRAY_SIZE(verstr), L"%u", verval );
     switch (OSVersion.dwPlatformId)
     {
@@ -1983,14 +1980,20 @@ INT WINAPI MsiProcessMessage( MSIHANDLE hInstall, INSTALLMESSAGE eMessageType,
     package = msihandle2msiinfo( hInstall, MSIHANDLETYPE_PACKAGE );
     if( !package )
     {
+        struct wire_record *wire_rec;
         MSIHANDLE remote;
 
         if (!(remote = msi_get_remote(hInstall)))
             return ERROR_INVALID_HANDLE;
+        if (!(wire_rec = marshal_record(hRecord)))
+        {
+            msiobj_release(&record->hdr);
+            return ERROR_OUTOFMEMORY;
+        }
 
         __TRY
         {
-            ret = remote_ProcessMessage(remote, eMessageType, (struct wire_record *)&record->count);
+            ret = remote_ProcessMessage(remote, eMessageType, wire_rec);
         }
         __EXCEPT(rpc_filter)
         {
@@ -1998,6 +2001,7 @@ INT WINAPI MsiProcessMessage( MSIHANDLE hInstall, INSTALLMESSAGE eMessageType,
         }
         __ENDTRY
 
+        free_remote_record(wire_rec);
         msiobj_release(&record->hdr);
         return ret;
     }

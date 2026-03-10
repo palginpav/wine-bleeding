@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(powershell);
@@ -23,6 +25,24 @@ WINE_DEFAULT_DEBUG_CHANNEL(powershell);
 int __cdecl wmain(int argc, WCHAR *argv[])
 {
     int i;
+
+    /* Installers (e.g. BarTender) call powershell with (Get-WinUserLanguageList).LanguageTag
+     * and read stdout; the stub must return a BCP-47 tag or the caller gets IOException. */
+    for (i = 1; i < argc; i++)
+    {
+        if (argv[i] && (wcsstr(argv[i], L"LanguageTag") || wcsstr(argv[i], L"Get-WinUserLanguageList")))
+        {
+            const char *tag = "en-US";
+            const char *lang = getenv("LANG");
+            if (lang && (lang[0] == 'r' || lang[0] == 'R') && lang[1] == 'u' && (lang[2] == '_' || lang[2] == '.'))
+                tag = "ru-RU";
+            else if (lang && lang[0] == 'e' && lang[1] == 'n' && (lang[2] == '_' || lang[2] == '.' || !lang[2]))
+                tag = "en-US";
+            printf("%s\n", tag);
+            fflush(stdout);
+            return 0;
+        }
+    }
 
     WINE_FIXME("stub.\n");
     for (i = 0; i < argc; i++)

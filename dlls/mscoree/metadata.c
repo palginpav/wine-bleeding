@@ -30,6 +30,7 @@
 #include "ole2.h"
 #include "cor.h"
 #include "mscoree.h"
+#include "corerror.h"
 #include "corhdr.h"
 #include "cordebug.h"
 #include "metahost.h"
@@ -101,73 +102,82 @@ static ULONG WINAPI MetaDataDispenser_Release(IMetaDataDispenserEx* iface)
 static HRESULT WINAPI MetaDataDispenser_DefineScope(IMetaDataDispenserEx* iface,
     REFCLSID rclsid, DWORD dwCreateFlags, REFIID riid, IUnknown **ppIUnk)
 {
-    FIXME("%p %s %lx %s %p\n", iface, debugstr_guid(rclsid), dwCreateFlags,
+    TRACE("%p %s %lx %s %p\n", iface, debugstr_guid(rclsid), dwCreateFlags,
         debugstr_guid(riid), ppIUnk);
-    return E_NOTIMPL;
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_OpenScope(IMetaDataDispenserEx* iface,
     LPCWSTR szScope, DWORD dwOpenFlags, REFIID riid, IUnknown **ppIUnk)
 {
-    FIXME("%p %s %lx %s %p\n", iface, debugstr_w(szScope), dwOpenFlags,
+    TRACE("%p %s %lx %s %p\n", iface, debugstr_w(szScope), dwOpenFlags,
         debugstr_guid(riid), ppIUnk);
-    return E_NOTIMPL;
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_OpenScopeOnMemory(IMetaDataDispenserEx* iface,
     const void *pData, ULONG cbData, DWORD dwOpenFlags, REFIID riid, IUnknown **ppIUnk)
 {
-    FIXME("%p %p %lu %lx %s %p\n", iface, pData, cbData, dwOpenFlags,
+    TRACE("%p %p %lu %lx %s %p\n", iface, pData, cbData, dwOpenFlags,
         debugstr_guid(riid), ppIUnk);
-    return E_NOTIMPL;
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_SetOption(IMetaDataDispenserEx* iface,
     REFGUID optionid, const VARIANT *value)
 {
-    FIXME("%p %s\n", iface, debugstr_guid(optionid));
-    return E_NOTIMPL;
+    TRACE("%p %s\n", iface, debugstr_guid(optionid));
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_GetOption(IMetaDataDispenserEx* iface,
     REFGUID optionid, VARIANT *pvalue)
 {
-    FIXME("%p %s\n", iface, debugstr_guid(optionid));
-    return E_NOTIMPL;
+    TRACE("%p %s\n", iface, debugstr_guid(optionid));
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_OpenScopeOnITypeInfo(IMetaDataDispenserEx* iface,
     ITypeInfo *pITI, DWORD dwOpenFlags, REFIID riid, IUnknown **ppIUnk)
 {
-    FIXME("%p %p %lu %s %p\n", iface, pITI, dwOpenFlags, debugstr_guid(riid), ppIUnk);
-    return E_NOTIMPL;
+    TRACE("%p %p %lu %s %p\n", iface, pITI, dwOpenFlags, debugstr_guid(riid), ppIUnk);
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_GetCORSystemDirectory(IMetaDataDispenserEx* iface,
     LPWSTR szBuffer, DWORD cchBuffer, DWORD *pchBuffer)
 {
-    FIXME("%p %p %lu %p\n", iface, szBuffer, cchBuffer, pchBuffer);
-    return E_NOTIMPL;
+    HRESULT WINAPI GetCORSystemDirectory(LPWSTR pbuffer, DWORD cchBuffer, DWORD *dwLength);
+
+    TRACE("%p %p %lu %p\n", iface, szBuffer, cchBuffer, pchBuffer);
+
+    if (!pchBuffer)
+        return E_POINTER;
+    /* Export requires non-null buffer; size-only query not exposed. */
+    if (!szBuffer || !cchBuffer)
+        return E_INVALIDARG;
+
+    return GetCORSystemDirectory(szBuffer, cchBuffer, pchBuffer);
 }
 
 static HRESULT WINAPI MetaDataDispenser_FindAssembly(IMetaDataDispenserEx* iface,
     LPCWSTR szAppBase, LPCWSTR szPrivateBin, LPCWSTR szGlobalBin, LPCWSTR szAssemblyName,
     LPWSTR szName, ULONG cchName, ULONG *pcName)
 {
-    FIXME("%p %s %s %s %s %p %lu %p\n", iface, debugstr_w(szAppBase),
+    TRACE("%p %s %s %s %s %p %lu %p\n", iface, debugstr_w(szAppBase),
         debugstr_w(szPrivateBin), debugstr_w(szGlobalBin),
         debugstr_w(szAssemblyName), szName, cchName, pcName);
-    return E_NOTIMPL;
+    return COR_E_NOTSUPPORTED;
 }
 
 static HRESULT WINAPI MetaDataDispenser_FindAssemblyModule(IMetaDataDispenserEx* iface,
     LPCWSTR szAppBase, LPCWSTR szPrivateBin, LPCWSTR szGlobalBin, LPCWSTR szAssemblyName,
     LPCWSTR szModuleName, LPWSTR szName, ULONG cchName, ULONG *pcName)
 {
-    FIXME("%p %s %s %s %s %s %p %lu %p\n", iface, debugstr_w(szAppBase),
+    TRACE("%p %s %s %s %s %s %p %lu %p\n", iface, debugstr_w(szAppBase),
         debugstr_w(szPrivateBin), debugstr_w(szGlobalBin), debugstr_w(szAssemblyName),
         debugstr_w(szModuleName), szName, cchName, pcName);
-    return E_NOTIMPL;
+    return COR_E_NOTSUPPORTED;
 }
 
 static const struct IMetaDataDispenserExVtbl MetaDataDispenserVtbl =

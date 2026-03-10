@@ -25,6 +25,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
+#include "objidl.h"
 #include "ole2.h"
 #include "msxml2.h"
 #include "mscoree.h"
@@ -145,37 +146,76 @@ static HRESULT WINAPI ConfigStream_Seek(IStream *iface, LARGE_INTEGER dlibMove,
                                         DWORD dwOrigin, ULARGE_INTEGER *pNewPos)
 {
     ConfigStream *This = impl_from_IStream(iface);
+    LARGE_INTEGER new_pos;
+
     TRACE("(%p)->(%ld %ld %p)\n", This, dlibMove.u.LowPart, dwOrigin, pNewPos);
-    return E_NOTIMPL;
+    if (SetFilePointerEx(This->file, dlibMove, &new_pos, dwOrigin))
+    {
+        if (pNewPos)
+            pNewPos->QuadPart = new_pos.QuadPart;
+        return S_OK;
+    }
+    return HRESULT_FROM_WIN32(GetLastError());
 }
 
 static HRESULT WINAPI ConfigStream_SetSize(IStream *iface, ULARGE_INTEGER libNewSize)
 {
     ConfigStream *This = impl_from_IStream(iface);
+    LARGE_INTEGER pos;
+    DWORD err;
+
     TRACE("(%p)->(%ld)\n", This, libNewSize.u.LowPart);
-    return E_NOTIMPL;
+    pos.QuadPart = libNewSize.QuadPart;
+    if (!SetFilePointerEx(This->file, pos, NULL, FILE_BEGIN))
+        return HRESULT_FROM_WIN32(GetLastError());
+    if (!SetEndOfFile(This->file))
+    {
+        err = GetLastError();
+        return err == ERROR_ACCESS_DENIED ? E_ACCESSDENIED : HRESULT_FROM_WIN32(err);
+    }
+    return S_OK;
 }
 
 static HRESULT WINAPI ConfigStream_CopyTo(IStream *iface, IStream *stream, ULARGE_INTEGER size,
                                           ULARGE_INTEGER *read, ULARGE_INTEGER *written)
 {
     ConfigStream *This = impl_from_IStream(iface);
-    FIXME("(%p)->(%p %ld %p %p)\n", This, stream, size.u.LowPart, read, written);
-    return E_NOTIMPL;
+    char buf[4096];
+    ULONG chunk, got_read, got_written;
+    ULONGLONG total_read = 0, total_written = 0;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p %I64u %p %p)\n", This, stream, size.QuadPart, read, written);
+    while (total_read < size.QuadPart)
+    {
+        ULONGLONG remaining = size.QuadPart - total_read;
+        chunk = (remaining > sizeof(buf)) ? (ULONG)sizeof(buf) : (ULONG)remaining;
+        hr = IStream_Read(&This->IStream_iface, buf, chunk, &got_read);
+        if (FAILED(hr)) break;
+        if (!got_read) break;
+        hr = IStream_Write(stream, buf, got_read, &got_written);
+        if (FAILED(hr)) break;
+        total_read += got_read;
+        total_written += got_written;
+        if (got_read < chunk) break;
+    }
+    if (read) read->QuadPart = total_read;
+    if (written) written->QuadPart = total_written;
+    return S_OK;
 }
 
 static HRESULT WINAPI ConfigStream_Commit(IStream *iface, DWORD flags)
 {
     ConfigStream *This = impl_from_IStream(iface);
-    FIXME("(%p,%ld)\n", This, flags);
-    return E_NOTIMPL;
+    TRACE("(%p,%ld)\n", This, flags);
+    return S_OK;
 }
 
 static HRESULT WINAPI ConfigStream_Revert(IStream *iface)
 {
     ConfigStream *This = impl_from_IStream(iface);
     TRACE("(%p)\n", This);
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT WINAPI ConfigStream_LockUnlockRegion(IStream *iface, ULARGE_INTEGER libOffset,
@@ -183,21 +223,39 @@ static HRESULT WINAPI ConfigStream_LockUnlockRegion(IStream *iface, ULARGE_INTEG
 {
     ConfigStream *This = impl_from_IStream(iface);
     TRACE("(%p,%ld,%ld,%ld)\n", This, libOffset.u.LowPart, cb.u.LowPart, dwLockType);
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 static HRESULT WINAPI ConfigStream_Stat(IStream *iface, STATSTG *lpStat, DWORD grfStatFlag)
 {
     ConfigStream *This = impl_from_IStream(iface);
-    FIXME("(%p,%p,%ld)\n", This, lpStat, grfStatFlag);
-    return E_NOTIMPL;
+    LARGE_INTEGER size;
+
+    TRACE("(%p,%p,%ld)\n", This, lpStat, grfStatFlag);
+    if (!lpStat) return E_INVALIDARG;
+    ZeroMemory(lpStat, sizeof(*lpStat));
+    lpStat->type = STGTY_STREAM;
+    lpStat->grfMode = STGM_READ;
+    if (GetFileSizeEx(This->file, &size))
+        lpStat->cbSize.QuadPart = size.QuadPart;
+    if ((grfStatFlag & STATFLAG_NONAME) == 0)
+        lpStat->pwcsName = NULL;
+    return S_OK;
 }
+
+static HRESULT config_stream_create_from_handle(HANDLE file, IStream **ppstm);
 
 static HRESULT WINAPI ConfigStream_Clone(IStream *iface, IStream **ppstm)
 {
     ConfigStream *This = impl_from_IStream(iface);
-    TRACE("(%p)\n",This);
-    return E_NOTIMPL;
+    HANDLE dup_handle;
+
+    TRACE("(%p)\n", This);
+    if (!ppstm) return E_INVALIDARG;
+    *ppstm = NULL;
+    if (!DuplicateHandle(GetCurrentProcess(), This->file, GetCurrentProcess(), &dup_handle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+        return HRESULT_FROM_WIN32(GetLastError());
+    return config_stream_create_from_handle(dup_handle, ppstm);
 }
 
 static const IStreamVtbl ConfigStreamVtbl = {
@@ -216,6 +274,24 @@ static const IStreamVtbl ConfigStreamVtbl = {
   ConfigStream_Stat,
   ConfigStream_Clone
 };
+
+static HRESULT config_stream_create_from_handle(HANDLE file, IStream **ppstm)
+{
+    ConfigStream *config_stream;
+
+    if (!ppstm) return E_INVALIDARG;
+    config_stream = malloc(sizeof(*config_stream));
+    if (!config_stream)
+    {
+        CloseHandle(file);
+        return E_OUTOFMEMORY;
+    }
+    config_stream->IStream_iface.lpVtbl = &ConfigStreamVtbl;
+    config_stream->ref = 1;
+    config_stream->file = file;
+    *ppstm = &config_stream->IStream_iface;
+    return S_OK;
+}
 
 HRESULT WINAPI CreateConfigStream(const WCHAR *filename, IStream **stream)
 {
@@ -324,6 +400,8 @@ static HRESULT WINAPI ConfigFileHandler_endPrefixMapping(ISAXContentHandler *ifa
 static HRESULT parse_startup(ConfigFileHandler *This, ISAXAttributes *pAttr)
 {
     static const WCHAR legacy[] = {'u','s','e','L','e','g','a','c','y','V','2','R','u','n','t','i','m','e','A','c','t','i','v','a','t','i','o','n','P','o','l','i','c','y',0};
+    static const WCHAR trueW[] = {'t','r','u','e',0};
+    static const WCHAR oneW[] = {'1',0};
     static const WCHAR empty[] = {0};
     LPCWSTR value;
     int value_size;
@@ -331,7 +409,13 @@ static HRESULT parse_startup(ConfigFileHandler *This, ISAXAttributes *pAttr)
 
     hr = ISAXAttributes_getValueFromName(pAttr, empty, 0, legacy, lstrlenW(legacy), &value, &value_size);
     if (SUCCEEDED(hr))
-        FIXME("useLegacyV2RuntimeActivationPolicy=%s not implemented\n", debugstr_wn(value, value_size));
+    {
+        This->result->use_legacy_v2_runtime_activation_policy =
+            (value_size == ARRAY_SIZE(trueW) - 1 && !wcsnicmp(value, trueW, ARRAY_SIZE(trueW) - 1)) ||
+            (value_size == ARRAY_SIZE(oneW) - 1 && !wcsncmp(value, oneW, ARRAY_SIZE(oneW) - 1));
+        TRACE("useLegacyV2RuntimeActivationPolicy=%s -> %u\n", debugstr_wn(value, value_size),
+              This->result->use_legacy_v2_runtime_activation_policy);
+    }
     hr = S_OK;
 
     return hr;
@@ -615,6 +699,7 @@ static void init_config(parsed_config_file *config)
 {
     list_init(&config->supported_runtimes);
     config->private_path = NULL;
+    config->use_legacy_v2_runtime_activation_policy = FALSE;
 }
 
 static HRESULT parse_config(VARIANT input, parsed_config_file *result)
@@ -705,4 +790,5 @@ void free_parsed_config_file(parsed_config_file *file)
     }
 
     free(file->private_path);
+    file->use_legacy_v2_runtime_activation_policy = FALSE;
 }

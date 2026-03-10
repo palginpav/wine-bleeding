@@ -280,6 +280,9 @@ UINT MSI_OpenDatabaseW(LPCWSTR szDBPath, LPCWSTR szPersist, MSIDATABASE **pdb)
     if( !db->strings )
         goto end;
 
+    /* Preload OLE streams (e.g. Binary table) so MsiRecordGetStream finds them by name */
+    msi_load_database_streams( db );
+
     ret = ERROR_SUCCESS;
 
     msiobj_addref( &db->hdr );

@@ -6401,7 +6401,25 @@ LANGID WINAPI DECLSPEC_HOTPATCH GetUserDefaultLangID(void)
  */
 INT WINAPI DECLSPEC_HOTPATCH GetUserDefaultLocaleName( LPWSTR name, INT len )
 {
-    return get_locale_info( user_locale, user_lcid, LOCALE_SNAME, name, len );
+    INT ret;
+
+    ret = get_locale_info( user_locale, user_lcid, LOCALE_SNAME, name, len );
+    if (!ret || !name || len <= 0) return ret;
+
+    /* Some libc locales (eg. en_US.POSIX) map to pseudo-Windows names like
+     * "en-US-posix" which are not valid culture identifiers for .NET /
+     * CultureInfo. Strip the non-standard "-posix" suffix so managed code
+     * sees a valid Windows locale name. */
+    {
+        WCHAR *pos = wcsstr( name, L"-posix" );
+        if (pos)
+        {
+            *pos = 0;
+            ret = wcslen( name ) + 1;
+        }
+    }
+
+    return ret;
 }
 
 
