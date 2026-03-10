@@ -1460,10 +1460,31 @@ HRESULT WINAPI SHGetNameFromIDList(PCIDLIST_ABSOLUTE pidl, SIGDN sigdnName, PWST
 /*************************************************************************
  * SHGetIDListFromObject             [SHELL32.@]
  */
+static HRESULT shellview_get_selection_pidl(IShellView *shell_view, PIDLIST_ABSOLUTE *pidl)
+{
+    IDataObject *data_object;
+    IShellItem *item;
+    HRESULT hr;
+
+    hr = IShellView_GetItemObject(shell_view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data_object);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHGetItemFromDataObject(data_object, DOGIF_ONLY_IF_ONE, &IID_IShellItem, (void **)&item);
+    IDataObject_Release(data_object);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHGetIDListFromObject((IUnknown *)item, pidl);
+    IShellItem_Release(item);
+    return hr;
+}
+
 HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
 {
     IPersistIDList *ppersidl;
     IPersistFolder2 *ppf2;
+    IShellView *psv;
     IFolderView2 *pfv2;
     IShellItemArray *psia;
     IDataObject *pdo;
@@ -1548,6 +1569,17 @@ HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
             return ret;
     }
 
+    /* Try IShellView selection */
+    ret = IUnknown_QueryInterface(punk, &IID_IShellView, (void **)&psv);
+    if (SUCCEEDED(ret))
+    {
+        ret = shellview_get_selection_pidl(psv, ppidl);
+        IShellView_Release(psv);
+
+        if (ret != E_FAIL)
+            return ret;
+    }
+
     /* Try IParentAndItem */
     ret = IUnknown_QueryInterface(punk, &IID_IParentAndItem, (void **)&pparent);
     if (SUCCEEDED(ret))
@@ -1604,7 +1636,7 @@ HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
         }
         IFolderView2_Release(pfv2);
 
-        if (SUCCEEDED(ret))
+        if (ret != E_FAIL)
             return ret;
     }
 
@@ -1613,6 +1645,19 @@ HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl)
     if(SUCCEEDED(ret))
     {
         IShellFolder *psf;
+
+        ret = IFolderView_QueryInterface(pfv, &IID_IShellView, (void **)&psv);
+        if (SUCCEEDED(ret))
+        {
+            ret = shellview_get_selection_pidl(psv, ppidl);
+            IShellView_Release(psv);
+            if (ret != E_FAIL)
+            {
+                IFolderView_Release(pfv);
+                return ret;
+            }
+        }
+
         TRACE("IFolderView (%p)\n", pfv);
         ret = IFolderView_GetFolder(pfv, &IID_IShellFolder, (void**)&psf);
         if(SUCCEEDED(ret))

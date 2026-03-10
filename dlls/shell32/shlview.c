@@ -3326,7 +3326,7 @@ static HRESULT WINAPI FolderView2_GetSelection(IFolderView2 *iface, BOOL none_im
     if (!sel_count)
     {
         HeapFree(GetProcessHeap(), 0, pidl_list);
-        return none_implies_folder ? S_FALSE : S_OK;
+        return none_implies_folder ? S_FALSE : E_FAIL;
     }
 
     hr = SHCreateShellItemArray(NULL, This->pSFParent, sel_count, (LPCITEMIDLIST *)pidl_list, array);

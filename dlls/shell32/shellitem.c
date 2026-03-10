@@ -64,6 +64,12 @@ struct empty_property_description_list
     LONG ref;
 };
 
+struct bind_unknown_placeholder
+{
+    IUnknown IUnknown_iface;
+    LONG ref;
+};
+
 static inline struct empty_property_store *impl_from_empty_IPropertyStore(IPropertyStore *iface)
 {
     return CONTAINING_RECORD(iface, struct empty_property_store, IPropertyStore_iface);
@@ -74,10 +80,77 @@ static inline struct empty_property_description_list *impl_from_empty_IPropertyD
     return CONTAINING_RECORD(iface, struct empty_property_description_list, IPropertyDescriptionList_iface);
 }
 
+static inline struct bind_unknown_placeholder *impl_from_bind_unknown_placeholder(IUnknown *iface)
+{
+    return CONTAINING_RECORD(iface, struct bind_unknown_placeholder, IUnknown_iface);
+}
+
 static HRESULT create_empty_property_store(REFIID riid, void **ppv);
 static HRESULT create_empty_property_description_list(REFIID riid, void **ppv);
 HRESULT WINAPI SHCreateDataObject(PCIDLIST_ABSOLUTE pidl_folder, UINT count, PCUITEMID_CHILD_ARRAY pidl_array,
                                   IDataObject *object, REFIID riid, void **ppv);
+
+static HRESULT WINAPI bind_unknown_placeholder_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
+{
+    struct bind_unknown_placeholder *placeholder = impl_from_bind_unknown_placeholder(iface);
+
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown))
+        *ppv = &placeholder->IUnknown_iface;
+    else
+    {
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI bind_unknown_placeholder_AddRef(IUnknown *iface)
+{
+    struct bind_unknown_placeholder *placeholder = impl_from_bind_unknown_placeholder(iface);
+    return InterlockedIncrement(&placeholder->ref);
+}
+
+static ULONG WINAPI bind_unknown_placeholder_Release(IUnknown *iface)
+{
+    struct bind_unknown_placeholder *placeholder = impl_from_bind_unknown_placeholder(iface);
+    LONG ref = InterlockedDecrement(&placeholder->ref);
+
+    if (!ref)
+        free(placeholder);
+
+    return ref;
+}
+
+static const IUnknownVtbl bind_unknown_placeholder_vtbl =
+{
+    bind_unknown_placeholder_QueryInterface,
+    bind_unknown_placeholder_AddRef,
+    bind_unknown_placeholder_Release,
+};
+
+static HRESULT create_bind_unknown_placeholder(REFIID riid, void **ppv)
+{
+    struct bind_unknown_placeholder *placeholder;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    placeholder = calloc(1, sizeof(*placeholder));
+    if (!placeholder)
+        return E_OUTOFMEMORY;
+
+    placeholder->IUnknown_iface.lpVtbl = &bind_unknown_placeholder_vtbl;
+    placeholder->ref = 1;
+
+    hr = IUnknown_QueryInterface(&placeholder->IUnknown_iface, riid, ppv);
+    IUnknown_Release(&placeholder->IUnknown_iface);
+    return hr;
+}
 
 static HRESULT WINAPI empty_property_store_QueryInterface(IPropertyStore *iface, REFIID riid, void **ppv)
 {
@@ -629,6 +702,63 @@ done:
         free(items);
     }
 
+    return hr;
+}
+
+static HRESULT shellitem_get_view_object(struct shell_item *item, IBindCtx *pbc, REFIID riid, void **ppv)
+{
+    IShellFolder *folder;
+    SFGAOF attrs = SFGAO_FOLDER;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = IShellItem2_GetAttributes(&item->IShellItem2_iface, SFGAO_FOLDER, &attrs);
+    if (FAILED(hr))
+        return hr;
+    if (!(attrs & SFGAO_FOLDER))
+        return MK_E_NOOBJECT;
+
+    hr = ShellItem_get_shellfolder(item, pbc, &folder);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IShellFolder_CreateViewObject(folder, NULL, riid, ppv);
+    IShellFolder_Release(folder);
+    return hr;
+}
+
+static HRESULT shellitem_get_filesystem_stream(struct shell_item *item, REFIID riid, void **ppv)
+{
+    SFGAOF attrs = SFGAO_FILESYSTEM | SFGAO_FOLDER;
+    WCHAR *path = NULL;
+    IStream *stream = NULL;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    if (IsEqualIID(riid, &IID_IUnknown))
+        return create_bind_unknown_placeholder(riid, ppv);
+
+    hr = IShellItem2_GetAttributes(&item->IShellItem2_iface, SFGAO_FILESYSTEM | SFGAO_FOLDER, &attrs);
+    if (FAILED(hr))
+        return hr;
+    if (!(attrs & SFGAO_FILESYSTEM) || (attrs & SFGAO_FOLDER))
+        return E_NOINTERFACE;
+
+    hr = IShellItem2_GetDisplayName(&item->IShellItem2_iface, SIGDN_FILESYSPATH, &path);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHCreateStreamOnFileW(path, STGM_READ | STGM_SHARE_DENY_NONE, &stream);
+    CoTaskMemFree(path);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IStream_QueryInterface(stream, riid, ppv);
+    IStream_Release(stream);
     return hr;
 }
 
@@ -1535,9 +1665,17 @@ static HRESULT WINAPI ShellItem_BindToHandler(IShellItem2 *iface, IBindCtx *pbc,
         return ShellItem_BindToHandler(&This->IShellItem2_iface, pbc, &BHID_SFUIObject,
                                        &IID_IDataObject, ppvOut);
     }
+    else if (IsEqualGUID(rbhid, &BHID_SFViewObject))
+    {
+        return shellitem_get_view_object(This, pbc, riid, ppvOut);
+    }
     else if (IsEqualGUID(rbhid, &BHID_PropertyStore))
     {
         return create_empty_property_store(riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_Stream) || IsEqualGUID(rbhid, &BHID_Storage))
+    {
+        return shellitem_get_filesystem_stream(This, riid, ppvOut);
     }
     else if (IsEqualGUID(rbhid, &BHID_EnumItems) || IsEqualGUID(rbhid, &BHID_StorageEnum))
     {
@@ -1558,6 +1696,10 @@ static HRESULT WINAPI ShellItem_BindToHandler(IShellItem2 *iface, IBindCtx *pbc,
     else if (IsEqualGUID(rbhid, &BHID_ThumbnailHandler))
     {
         return IShellItemImageFactory_QueryInterface(&This->IShellItemImageFactory_iface, riid, ppvOut);
+    }
+    else if (IsEqualGUID(rbhid, &BHID_Transfer))
+    {
+        return create_bind_unknown_placeholder(riid, ppvOut);
     }
     else if (IsEqualGUID(rbhid, &BHID_EnumAssocHandlers))
     {
@@ -2898,6 +3040,10 @@ HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
 {
     IShellItem *item;
     IShellItemArray *array;
+    IDataObject *data_object;
+    IShellView *shell_view;
+    IFolderView2 *folder_view;
+    IFolderView *legacy_folder_view;
     IParentAndItem *parent_item;
     LPITEMIDLIST pidl;
     PIDLIST_ABSOLUTE parent;
@@ -2941,17 +3087,113 @@ HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
             return ret;
     }
 
+    if (IsEqualIID(riid, &IID_IShellItemArray))
+    {
+        ret = IUnknown_QueryInterface(punk, &IID_IDataObject, (void **)&data_object);
+        if (SUCCEEDED(ret))
+        {
+            ret = SHCreateShellItemArrayFromDataObject(data_object, riid, ppv);
+            IDataObject_Release(data_object);
+            if (SUCCEEDED(ret))
+                return ret;
+        }
+    }
+    else
+    {
+        ret = IUnknown_QueryInterface(punk, &IID_IDataObject, (void **)&data_object);
+        if (SUCCEEDED(ret))
+        {
+            ret = SHGetItemFromDataObject(data_object, DOGIF_ONLY_IF_ONE, riid, ppv);
+            IDataObject_Release(data_object);
+            if (SUCCEEDED(ret))
+                return ret;
+        }
+    }
+
+    ret = IUnknown_QueryInterface(punk, &IID_IShellView, (void **)&shell_view);
+    if (SUCCEEDED(ret))
+    {
+        ret = IShellView_GetItemObject(shell_view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data_object);
+        if (SUCCEEDED(ret))
+        {
+            if (IsEqualIID(riid, &IID_IShellItemArray))
+                ret = SHCreateShellItemArrayFromDataObject(data_object, riid, ppv);
+            else
+                ret = SHGetItemFromDataObject(data_object, DOGIF_ONLY_IF_ONE, riid, ppv);
+
+            IDataObject_Release(data_object);
+        }
+        IShellView_Release(shell_view);
+        if (ret != E_FAIL)
+            return ret;
+    }
+
+    ret = IUnknown_QueryInterface(punk, &IID_IFolderView2, (void **)&folder_view);
+    if (SUCCEEDED(ret))
+    {
+        ret = IFolderView2_GetSelection(folder_view, FALSE, &array);
+        if (SUCCEEDED(ret))
+        {
+            ret = IShellItemArray_QueryInterface(array, riid, ppv);
+            IShellItemArray_Release(array);
+        }
+        IFolderView2_Release(folder_view);
+        if (ret != E_FAIL)
+            return ret;
+    }
+
+    ret = IUnknown_QueryInterface(punk, &IID_IFolderView, (void **)&legacy_folder_view);
+    if (SUCCEEDED(ret))
+    {
+        IShellView *folder_shell_view = NULL;
+
+        ret = IFolderView_QueryInterface(legacy_folder_view, &IID_IShellView, (void **)&folder_shell_view);
+        if (SUCCEEDED(ret))
+        {
+            ret = IShellView_GetItemObject(folder_shell_view, SVGIO_SELECTION, &IID_IDataObject, (void **)&data_object);
+            if (SUCCEEDED(ret))
+            {
+                if (IsEqualIID(riid, &IID_IShellItemArray))
+                    ret = SHCreateShellItemArrayFromDataObject(data_object, riid, ppv);
+                else
+                    ret = SHGetItemFromDataObject(data_object, DOGIF_ONLY_IF_ONE, riid, ppv);
+
+                IDataObject_Release(data_object);
+            }
+            IShellView_Release(folder_shell_view);
+        }
+        IFolderView_Release(legacy_folder_view);
+        if (ret != E_FAIL)
+            return ret;
+    }
+
     ret = IUnknown_QueryInterface(punk, &IID_IParentAndItem, (void **)&parent_item);
     if (SUCCEEDED(ret))
     {
         IShellFolder *folder = NULL;
+        IShellItem *parent_shell_item = NULL;
 
         parent = NULL;
         child = NULL;
         ret = IParentAndItem_GetParentAndItem(parent_item, &parent, &folder, &child);
         if (SUCCEEDED(ret))
         {
-            if (parent && child)
+            if (IsEqualIID(riid, &IID_IShellItemArray))
+            {
+                if (parent && child)
+                    ret = SHCreateItemWithParent(parent, folder, child, &IID_IShellItem, (void **)&parent_shell_item);
+                else if (parent)
+                    ret = SHCreateItemFromIDList(parent, &IID_IShellItem, (void **)&parent_shell_item);
+                else
+                    ret = E_FAIL;
+
+                if (SUCCEEDED(ret))
+                {
+                    ret = SHCreateShellItemArrayFromShellItem(parent_shell_item, riid, ppv);
+                    IShellItem_Release(parent_shell_item);
+                }
+            }
+            else if (parent && child)
                 ret = SHCreateItemWithParent(parent, folder, child, riid, ppv);
             else if (parent)
                 ret = SHCreateItemFromIDList(parent, riid, ppv);
@@ -2970,7 +3212,17 @@ HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
     ret = SHGetIDListFromObject(punk, &pidl);
     if(SUCCEEDED(ret))
     {
-        ret = SHCreateItemFromIDList(pidl, riid, ppv);
+        if (IsEqualIID(riid, &IID_IShellItemArray))
+        {
+            ret = SHCreateItemFromIDList(pidl, &IID_IShellItem, (void **)&item);
+            if (SUCCEEDED(ret))
+            {
+                ret = SHCreateShellItemArrayFromShellItem(item, riid, ppv);
+                IShellItem_Release(item);
+            }
+        }
+        else
+            ret = SHCreateItemFromIDList(pidl, riid, ppv);
         ILFree(pidl);
     }
 
@@ -3258,9 +3510,11 @@ static HRESULT WINAPI IShellItemArray_fnBindToHandler(IShellItemArray *iface,
         return create_empty_property_store(riid, ppvOut);
 
     if (IsEqualGUID(bhid, &BHID_SFObject) || IsEqualGUID(bhid, &BHID_SFUIObject) ||
-        IsEqualGUID(bhid, &BHID_LinkTargetItem) || IsEqualGUID(bhid, &BHID_AssociationArray) ||
-        IsEqualGUID(bhid, &BHID_Filter) || IsEqualGUID(bhid, &BHID_ThumbnailHandler) ||
-        IsEqualGUID(bhid, &BHID_EnumAssocHandlers))
+        IsEqualGUID(bhid, &BHID_SFViewObject) || IsEqualGUID(bhid, &BHID_Stream) ||
+        IsEqualGUID(bhid, &BHID_Storage) || IsEqualGUID(bhid, &BHID_LinkTargetItem) ||
+        IsEqualGUID(bhid, &BHID_AssociationArray) || IsEqualGUID(bhid, &BHID_Filter) ||
+        IsEqualGUID(bhid, &BHID_ThumbnailHandler) || IsEqualGUID(bhid, &BHID_EnumAssocHandlers) ||
+        IsEqualGUID(bhid, &BHID_Transfer))
     {
         if (This->item_count != 1)
             return MK_E_NOOBJECT;

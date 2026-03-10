@@ -21,6 +21,7 @@
 # Distribution artifacts and helper build payloads
 /dist/
 /build-deps/
+/tools/publish-release.sh
 
 # In-tree per-module build output
 **/i386-windows/

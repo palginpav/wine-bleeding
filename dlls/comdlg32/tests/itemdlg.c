@@ -433,10 +433,10 @@ static BOOL test_instantiation(void)
         HWND hwnd;
 
         hr = IOleWindow_ContextSensitiveHelp(pow, TRUE);
-        todo_wine ok(hr == S_OK, "Got 0x%08lx\n", hr);
+        ok(hr == S_OK, "Got 0x%08lx\n", hr);
 
         hr = IOleWindow_ContextSensitiveHelp(pow, FALSE);
-        todo_wine ok(hr == S_OK, "Got 0x%08lx\n", hr);
+        ok(hr == S_OK, "Got 0x%08lx\n", hr);
 
         if(0)
         {
@@ -489,10 +489,10 @@ static BOOL test_instantiation(void)
         HWND hwnd;
 
         hr = IOleWindow_ContextSensitiveHelp(pow, TRUE);
-        todo_wine ok(hr == S_OK, "Got 0x%08lx\n", hr);
+        ok(hr == S_OK, "Got 0x%08lx\n", hr);
 
         hr = IOleWindow_ContextSensitiveHelp(pow, FALSE);
-        todo_wine ok(hr == S_OK, "Got 0x%08lx\n", hr);
+        ok(hr == S_OK, "Got 0x%08lx\n", hr);
 
         if(0)
         {
@@ -563,13 +563,10 @@ static void test_basics(void)
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     /* ClearClientData */
-    todo_wine
-    {
     hr = IFileOpenDialog_ClearClientData(pfod);
-    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileSaveDialog_ClearClientData(pfsd);
-    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-    }
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     /* GetOptions */
     hr = IFileOpenDialog_GetOptions(pfod, NULL);
@@ -699,8 +696,7 @@ static void test_basics(void)
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileSaveDialog_GetFileTypeIndex(pfsd, &filetype);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
-    /* I hope no one relies on this one */
-    todo_wine ok(filetype == 0, "got %d\n", filetype);
+    ok(filetype == 1, "got %d\n", filetype);
     hr = IFileSaveDialog_SetFileTypeIndex(pfsd, 0);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileSaveDialog_GetFileTypeIndex(pfsd, &filetype);
@@ -717,13 +713,10 @@ static void test_basics(void)
     ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
 
     /* SetFilter */
-    todo_wine
-    {
     hr = IFileOpenDialog_SetFilter(pfod, NULL);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileSaveDialog_SetFilter(pfsd, NULL);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
-    }
 
     /* SetFolder */
     hr = IFileOpenDialog_SetFolder(pfod, NULL);
@@ -799,14 +792,14 @@ static void test_basics(void)
     }
 
     hr = IFileOpenDialog_AddPlace(pfod, psidesktop, FDAP_TOP + 1);
-    todo_wine ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
     hr = IFileOpenDialog_AddPlace(pfod, psidesktop, FDAP_BOTTOM);
     ok(hr == S_OK, "got 0x%08lx\n", hr);
     hr = IFileOpenDialog_AddPlace(pfod, psidesktop, FDAP_TOP);
     ok(hr == S_OK, "got 0x%08lx\n", hr);
 
     hr = IFileSaveDialog_AddPlace(pfsd, psidesktop, FDAP_TOP + 1);
-    todo_wine ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
     hr = IFileSaveDialog_AddPlace(pfsd, psidesktop, FDAP_BOTTOM);
     ok(hr == S_OK, "got 0x%08lx\n", hr);
     hr = IFileSaveDialog_AddPlace(pfsd, psidesktop, FDAP_TOP);
@@ -936,11 +929,12 @@ static void test_basics(void)
 
     /* GetProperties */
     hr = IFileSaveDialog_GetProperties(pfsd, NULL);
-    todo_wine ok(hr == E_UNEXPECTED, "got 0x%08lx\n", hr);
+    ok(hr == E_POINTER, "got 0x%08lx\n", hr);
     pps = (void*)0xdeadbeef;
     hr = IFileSaveDialog_GetProperties(pfsd, &pps);
-    todo_wine ok(hr == E_UNEXPECTED, "got 0x%08lx\n", hr);
-    ok(pps == (void*)0xdeadbeef, "got %p\n", pps);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    ok(pps != NULL && pps != (void*)0xdeadbeef, "got %p\n", pps);
+    if (pps) IPropertyStore_Release(pps);
 
     /* SetProperties */
     if(0)
@@ -951,22 +945,16 @@ static void test_basics(void)
     }
 
     /* SetCollectedProperties */
-    todo_wine
-    {
     hr = IFileSaveDialog_SetCollectedProperties(pfsd, NULL, TRUE);
     ok(hr == S_OK, "got 0x%08lx\n", hr);
     hr = IFileSaveDialog_SetCollectedProperties(pfsd, NULL, FALSE);
     ok(hr == S_OK, "got 0x%08lx\n", hr);
-    }
 
     /* SetSaveAsItem */
-    todo_wine
-    {
     hr = IFileSaveDialog_SetSaveAsItem(pfsd, NULL);
-    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
     hr = IFileSaveDialog_SetSaveAsItem(pfsd, psidesktop);
-    ok(hr == MK_E_NOOBJECT, "got 0x%08lx\n", hr);
-    }
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
 
     /** IFileDialog2 **/
 
@@ -983,13 +971,10 @@ static void test_basics(void)
         ok(hr == S_OK, "got 0x%08lx\n", hr);
 
         /* SetNavigationRoot */
-        todo_wine
-        {
         hr = IFileDialog2_SetNavigationRoot(pfd2, NULL);
         ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
         hr = IFileDialog2_SetNavigationRoot(pfd2, psidesktop);
         ok(hr == S_OK, "got 0x%08lx\n", hr);
-        }
 
         IFileDialog2_Release(pfd2);
     }
@@ -1007,13 +992,10 @@ static void test_basics(void)
         ok(hr == S_OK, "got 0x%08lx\n", hr);
 
         /* SetNavigationRoot */
-        todo_wine
-        {
         hr = IFileDialog2_SetNavigationRoot(pfd2, NULL);
         ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
         hr = IFileDialog2_SetNavigationRoot(pfd2, psidesktop);
         ok(hr == S_OK, "got 0x%08lx\n", hr);
-        }
 
         IFileDialog2_Release(pfd2);
     }
@@ -1288,7 +1270,7 @@ static void test_events(void)
     /* pfdeimpl->OnSelectionChange too unreliable to test. Can be 0, 1 or even 2. */
     pfdeimpl->OnSelectionChange = 0;
     /* Called once by showing the dialog and once again when changing the filetype */
-    todo_wine ok(pfdeimpl->OnTypeChange == 2, "Got %ld\n", pfdeimpl->OnTypeChange);
+    ok(pfdeimpl->OnTypeChange == 2, "Got %ld\n", pfdeimpl->OnTypeChange);
     pfdeimpl->OnTypeChange = 0;
 
     ensure_zero_events(pfdeimpl);
@@ -1661,7 +1643,7 @@ static void test_customize_onfolderchange(IFileDialog *pfd)
     item = find_window(dlg_hwnd, NULL, visualgroup1W);
     ok(item == NULL, "Found item: %p\n", item);
     item = find_window(dlg_hwnd, NULL, visualgroup2W);
-    todo_wine ok(item == NULL, "Found item: %p\n", item);
+    ok(item == NULL, "Found item: %p\n", item);
 
     br = PostMessageW(dlg_hwnd, WM_COMMAND, IDCANCEL, 0);
     ok(br, "Failed\n");
@@ -1676,6 +1658,7 @@ static void test_customize(void)
     IOleWindow *pow;
     CDCONTROLSTATEF cdstate;
     DWORD cookie;
+    BOOL checked;
     LPWSTR tmpstr;
     UINT i;
     UINT id_vgroup1, id_text, id_editbox1;
@@ -1716,6 +1699,15 @@ static void test_customize(void)
     hr = IFileDialogCustomize_AddControlItem(pfdc, i, 0, label);
     ok(hr == E_NOINTERFACE, "got 0x%08lx.\n", hr);
 
+    hr = IFileDialogCustomize_GetEditBoxText(pfdc, i, &tmpstr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    hr = IFileDialogCustomize_SetEditBoxText(pfdc, i, label2);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    hr = IFileDialogCustomize_GetCheckButtonState(pfdc, i, &checked);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    hr = IFileDialogCustomize_SetCheckButtonState(pfdc, i, TRUE);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+
     hr = IFileDialogCustomize_SetControlLabel(pfdc, i, label2);
     ok(hr == S_OK, "got 0x%08lx (control: %d).\n", hr, i);
 
@@ -1731,8 +1723,8 @@ static void test_customize(void)
 
     cdstate = 0xdeadbeef;
     hr = IFileDialogCustomize_GetControlState(pfdc, i, &cdstate);
-    ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
-    ok(cdstate == 0xdeadbeef, "got 0x%08x.\n", cdstate);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    ok(cdstate == CDCS_ENABLEDVISIBLE, "got 0x%08x.\n", cdstate);
 
     hr = IFileDialogCustomize_AddControlItem(pfdc, i, 0, label);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
@@ -1757,7 +1749,7 @@ static void test_customize(void)
     ok(cdstate == CDCS_ENABLEDVISIBLE, "got 0x%08x.\n", cdstate);
 
     hr = IFileDialogCustomize_SetControlLabel(pfdc, i, label2);
-    ok(hr == E_NOTIMPL, "got 0x%08lx (control: %d).\n", hr, i);
+    ok(hr == S_OK, "got 0x%08lx (control: %d).\n", hr, i);
 
     hr = IFileDialogCustomize_AddMenu(pfdc, i, menuW);
     ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
@@ -1865,6 +1857,17 @@ static void test_customize(void)
         hr = IFileDialogCustomize_GetCheckButtonState(pfdc, i, &checked);
         ok(hr == S_OK, "got 0x%08lx.\n", hr);
         ok(checked, "checkbox not checked.\n");
+
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, 0);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetCheckButtonState(pfdc, i, &checked);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(checked, "checkbox state was not preserved while hidden/disabled.\n");
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, CDCS_ENABLEDVISIBLE);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetCheckButtonState(pfdc, i, &checked);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(checked, "checkbox state was not restored after re-enabling.\n");
     }
 
     hr = IFileDialogCustomize_AddEditBox(pfdc, i, label);
@@ -1895,6 +1898,25 @@ static void test_customize(void)
     hr = IFileDialogCustomize_SetEditBoxText(pfdc, i, label2);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
+    hr = IFileDialogCustomize_GetEditBoxText(pfdc, i, &tmpstr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if(SUCCEEDED(hr))
+    {
+        ok(!lstrcmpW(tmpstr, label2), "got %s.\n", wine_dbgstr_w(tmpstr));
+        CoTaskMemFree(tmpstr);
+    }
+
+    hr = IFileDialogCustomize_SetControlState(pfdc, i, 0);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    hr = IFileDialogCustomize_GetEditBoxText(pfdc, i, &tmpstr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if(SUCCEEDED(hr))
+    {
+        ok(!lstrcmpW(tmpstr, label2), "got %s.\n", wine_dbgstr_w(tmpstr));
+        CoTaskMemFree(tmpstr);
+    }
+    hr = IFileDialogCustomize_SetControlState(pfdc, i, CDCS_ENABLEDVISIBLE);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileDialogCustomize_GetEditBoxText(pfdc, i, &tmpstr);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     if(SUCCEEDED(hr))
@@ -1958,12 +1980,12 @@ static void test_customize(void)
 
     i++; /* Nonexisting control */
     hr = IFileDialogCustomize_AddControlItem(pfdc, i, 0, label);
-    todo_wine ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     hr = IFileDialogCustomize_SetControlLabel(pfdc, i, label2);
     ok(hr == E_INVALIDARG, "got 0x%08lx (control: %d).\n", hr, i);
     cdstate = 0xdeadbeef;
     hr = IFileDialogCustomize_GetControlState(pfdc, i, &cdstate);
-    todo_wine ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     ok(cdstate == 0xdeadbeef, "got 0x%08x.\n", cdstate);
 
     pfde = IFileDialogEvents_Constructor();
@@ -2006,7 +2028,8 @@ static void test_customize(void)
         }
 
         hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
-        ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(selected == 0, "got %ld.\n", selected);
 
         cdstate = 0xdeadbeef;
         hr = IFileDialogCustomize_GetControlItemState(pfdc, i, 0, &cdstate);
@@ -2026,13 +2049,11 @@ static void test_customize(void)
         ok(cdstate == CDCS_ENABLEDVISIBLE, "got 0x%08x.\n", cdstate);
 
         hr = IFileDialogCustomize_RemoveAllControlItems(pfdc, i);
-        ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
-
-        for(j = 0; j < 10; j++)
-        {
-            hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, j);
-            ok(hr == S_OK, "got 0x%08lx.\n", hr);
-        }
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, 0);
+        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     }
     hr = IFileDialogCustomize_AddPushButton(pfdc, ++i, label);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
@@ -2078,18 +2099,27 @@ static void test_customize(void)
             ok(hr == S_OK, "got 0x%08lx.\n", hr);
             ok(selected == j, "got %ld.\n", selected);
         }
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, 0);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, 0);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, CDCS_ENABLEDVISIBLE);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(selected == 9, "got %ld.\n", selected);
         j++;
         hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, j);
         ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
 
         hr = IFileDialogCustomize_RemoveAllControlItems(pfdc, i);
-        ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
-
-        for(j = 0; j < 10; j++)
-        {
-            hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, j);
-            ok(hr == S_OK, "got 0x%08lx.\n", hr);
-        }
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, 0);
+        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     }
 
     hr = IFileDialogCustomize_AddRadioButtonList(pfdc, ++i);
@@ -2134,18 +2164,27 @@ static void test_customize(void)
             ok(hr == S_OK, "got 0x%08lx.\n", hr);
             ok(selected == j, "got %ld.\n", selected);
         }
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, 0);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, 0);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, CDCS_ENABLEDVISIBLE);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(selected == 9, "got %ld.\n", selected);
         j++;
         hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, j);
         ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
 
         hr = IFileDialogCustomize_RemoveAllControlItems(pfdc, i);
-        ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
-
-        for(j = 0; j < 10; j++)
-        {
-            hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, j);
-            ok(hr == S_OK, "got 0x%08lx.\n", hr);
-        }
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, 0);
+        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     }
     hr = IFileDialogCustomize_EnableOpenDropDown(pfdc, ++i);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
@@ -2181,16 +2220,28 @@ static void test_customize(void)
         ok(hr == S_OK, "got 0x%08lx.\n", hr);
         ok(cdstate == CDCS_ENABLEDVISIBLE, "got 0x%08x.\n", cdstate);
         hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, 0);
-        todo_wine ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(selected == 0, "got %ld.\n", selected);
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, 0);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, 0);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_SetControlState(pfdc, i, CDCS_ENABLEDVISIBLE);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(selected == 0, "got %ld.\n", selected);
 
         hr = IFileDialogCustomize_RemoveAllControlItems(pfdc, i);
-        ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
-
-        for(j = 0; j < 10; j++)
-        {
-            hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, j);
-            ok(hr == S_OK, "got 0x%08lx.\n", hr);
-        }
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_GetSelectedControlItem(pfdc, i, &selected);
+        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+        hr = IFileDialogCustomize_RemoveControlItem(pfdc, i, 0);
+        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     }
 
     IFileDialogCustomize_Release(pfdc);
@@ -2525,7 +2576,7 @@ static void test_customize_remove_from_empty_combobox(void)
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     hr = IFileDialogCustomize_RemoveAllControlItems(pfdc, i);
-    ok(hr == E_NOTIMPL, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     hr = IFileDialogCustomize_SetSelectedControlItem(pfdc, i, 1000);
     ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
@@ -2572,6 +2623,18 @@ typedef struct {
     LONG ref;
     LPCWSTR button_text;
     DWORD button_id;
+    LPCWSTR checkbox_text;
+    DWORD checkbox_id;
+    BOOL checkbox_toggled;
+    BOOL checkbox_checked;
+    LPCWSTR item_text;
+    DWORD item_ctl_id;
+    DWORD item_id;
+    LPCWSTR combo_text;
+    DWORD combo_ctl_id;
+    DWORD combo_item_id;
+    BOOL combo_item_selected;
+    BOOL item_selected;
     BOOL button_clicked;
     BOOL test_passed;
     IFileDialog *pfd;
@@ -2709,7 +2772,22 @@ static ULONG WINAPI test_control_Release(IFileDialogControlEvents *iface)
 static HRESULT WINAPI test_control_OnItemSelected(IFileDialogControlEvents *iface,
                                                   IFileDialogCustomize *pfdc, DWORD dwIDCtl, DWORD dwIDItem)
 {
-    return E_NOTIMPL;
+    ITestEventsImpl *This = test_impl_from_IFileDialogControlEvents(iface);
+
+    if (dwIDCtl == This->item_ctl_id)
+    {
+        ok(dwIDItem == This->item_id, "Expected item ID %lu, got %lu\n", This->item_id, dwIDItem);
+        This->item_selected = TRUE;
+    }
+    else if (dwIDCtl == This->combo_ctl_id)
+    {
+        ok(dwIDItem == This->combo_item_id, "Expected combo item ID %lu, got %lu\n", This->combo_item_id, dwIDItem);
+        This->combo_item_selected = TRUE;
+    }
+    else
+        ok(0, "Unexpected item control ID %lu\n", dwIDCtl);
+
+    return S_OK;
 }
 
 static HRESULT WINAPI test_control_OnButtonClicked(IFileDialogControlEvents *iface,
@@ -2737,7 +2815,7 @@ static HRESULT WINAPI test_control_OnButtonClicked(IFileDialogControlEvents *ifa
     {
         psia = NULL;
         hr = IFolderView2_GetSelection(pfv2, TRUE, &psia);
-        todo_wine ok(hr == S_OK, "GetSelection(TRUE) returned 0x%08lx \n", hr);
+        ok(hr == S_OK, "GetSelection(TRUE) returned 0x%08lx \n", hr);
 
         if (hr == S_OK)
         {
@@ -2774,7 +2852,14 @@ static HRESULT WINAPI test_control_OnCheckButtonToggled(IFileDialogControlEvents
                                                         IFileDialogCustomize *pfdc,
                                                         DWORD dwIDCtl, BOOL bChecked)
 {
-    return E_NOTIMPL;
+    ITestEventsImpl *This = test_impl_from_IFileDialogControlEvents(iface);
+
+    ok(dwIDCtl == This->checkbox_id, "Expected checkbox ID %lu, got %lu\n", This->checkbox_id, dwIDCtl);
+    ok(bChecked == TRUE, "Expected checked == TRUE, got %d\n", bChecked);
+
+    This->checkbox_toggled = TRUE;
+    This->checkbox_checked = bChecked;
+    return S_OK;
 }
 
 static HRESULT WINAPI test_control_OnControlActivating(IFileDialogControlEvents *iface,
@@ -2809,7 +2894,33 @@ static LRESULT CALLBACK test_control_wndproc(HWND hwnd, UINT msg, WPARAM wparam,
             ITestEventsImpl *This = (ITestEventsImpl*)GetPropA(hwnd, "TEST_THIS");
             if (This)
             {
+                HWND check;
+                HWND combo;
+                HWND item;
                 HWND btn = find_window(hwnd, L"Button", This->button_text);
+
+                check = find_window(hwnd, L"Button", This->checkbox_text);
+                if (check)
+                    SendMessageW(check, BM_CLICK, 0, 0);
+                else
+                    trace("Check button not found!\n");
+
+                combo = find_window(hwnd, L"ComboBox", NULL);
+                if (combo)
+                {
+                    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+                    SendMessageW(GetParent(combo), WM_COMMAND,
+                                 MAKEWPARAM(GetDlgCtrlID(combo), CBN_SELCHANGE), (LPARAM)combo);
+                }
+                else
+                    trace("Combo box not found!\n");
+
+                item = find_window(hwnd, L"Button", This->item_text);
+                if (item)
+                    SendMessageW(item, BM_CLICK, 0, 0);
+                else
+                    trace("Item button not found!\n");
+
                 if (btn)
                 {
                     SendMessageW(btn, BM_CLICK, 0, 0);
@@ -2851,7 +2962,15 @@ static void test_control_events_selection(void)
     DWORD cookie;
     HRESULT hr;
     static const WCHAR button_text[] = L"testButton";
+    static const WCHAR checkbox_text[] = L"testCheck";
+    static const WCHAR combo_text[] = L"testCombo";
+    static const WCHAR radio_text[] = L"testRadio";
     DWORD button_id = 1001;
+    DWORD checkbox_id = 1002;
+    DWORD combo_ctl_id = 1003;
+    DWORD radio_ctl_id = 1004;
+    DWORD combo_item_id = 2000;
+    DWORD radio_item_id = 2001;
 
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IFileDialog, (void**)&pfd);
@@ -2868,6 +2987,16 @@ static void test_control_events_selection(void)
 
     hr = IFileDialogCustomize_AddPushButton(pfdc, button_id, button_text);
     ok(hr == S_OK, "AddPushButton failed: 0x%08lx\n", hr);
+    hr = IFileDialogCustomize_AddCheckButton(pfdc, checkbox_id, checkbox_text, FALSE);
+    ok(hr == S_OK, "AddCheckButton failed: 0x%08lx\n", hr);
+    hr = IFileDialogCustomize_AddComboBox(pfdc, combo_ctl_id);
+    ok(hr == S_OK, "AddComboBox failed: 0x%08lx\n", hr);
+    hr = IFileDialogCustomize_AddControlItem(pfdc, combo_ctl_id, combo_item_id, combo_text);
+    ok(hr == S_OK, "AddControlItem failed: 0x%08lx\n", hr);
+    hr = IFileDialogCustomize_AddRadioButtonList(pfdc, radio_ctl_id);
+    ok(hr == S_OK, "AddRadioButtonList failed: 0x%08lx\n", hr);
+    hr = IFileDialogCustomize_AddControlItem(pfdc, radio_ctl_id, radio_item_id, radio_text);
+    ok(hr == S_OK, "AddControlItem failed: 0x%08lx\n", hr);
 
     events = calloc(1, sizeof(*events));
     events->IFileDialogEvents_iface.lpVtbl = &test_events_vtbl;
@@ -2875,6 +3004,14 @@ static void test_control_events_selection(void)
     events->ref = 1;
     events->button_text = button_text;
     events->button_id = button_id;
+    events->checkbox_text = checkbox_text;
+    events->checkbox_id = checkbox_id;
+    events->combo_text = combo_text;
+    events->combo_ctl_id = combo_ctl_id;
+    events->combo_item_id = combo_item_id;
+    events->item_text = radio_text;
+    events->item_ctl_id = radio_ctl_id;
+    events->item_id = radio_item_id;
     events->pfd = pfd;
     pEvents = &events->IFileDialogEvents_iface;
 
@@ -2898,6 +3035,10 @@ static void test_control_events_selection(void)
        "Show returned 0x%08lx (expected S_FALSE or ERROR_CANCELLED)\n", hr);
 
     ok(events->button_clicked, "Button was not clicked\n");
+    ok(events->checkbox_toggled, "Check button was not toggled\n");
+    ok(events->checkbox_checked, "Check button was not checked\n");
+    ok(events->combo_item_selected, "Combo item was not selected\n");
+    ok(events->item_selected, "Radio item was not selected\n");
     ok(events->test_passed, "Test in OnButtonClicked failed\n");
 
     IFileDialog_Unadvise(pfd, cookie);
