@@ -64,6 +64,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+/* Not declared in public Wine headers yet, but exported from shell32. */
+HRESULT WINAPI SHCreateItemWithParent(PCIDLIST_ABSOLUTE pidl_parent, IShellFolder *psf,
+                                      PCUITEMID_CHILD pidl, REFIID riid, void **ppv);
+
 /* Generic structure used by several messages */
 typedef struct
 {
@@ -1844,8 +1848,7 @@ static HRESULT WINAPI IShellView_fnContextSensitiveHelp(IShellView3 *iface, BOOL
 {
     IShellViewImpl *This = impl_from_IShellView3(iface);
     TRACE("(%p)->(%d)\n", This, mode);
-    /* Desktop shell view doesn't use this flag; accept the call and do nothing. */
-    return S_OK;
+    return E_NOTIMPL;
 }
 
 /**********************************************************
@@ -3845,10 +3848,7 @@ static HRESULT WINAPI IShellFolderView_fnMoveIcons(
 {
     IShellViewImpl *This = impl_from_IShellFolderView(iface);
     TRACE("(%p)->(%p)\n", This, obj);
-
-    /* Icon movement is handled by the listview and drag/drop logic; nothing
-       additional is required here. */
-    return S_OK;
+    return E_NOTIMPL;
 }
 
 static HRESULT WINAPI IShellFolderView_fnSetItemPos(

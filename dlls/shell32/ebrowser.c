@@ -1337,9 +1337,8 @@ static HRESULT WINAPI IShellBrowser_fnContextSensitiveHelp(IShellBrowser *iface,
                                                            BOOL fEnterMode)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%d)\n", This, fEnterMode);
-
-    return E_NOTIMPL;
+    TRACE("%p (%d)\n", This, fEnterMode);
+    return S_OK;
 }
 
 static HRESULT WINAPI IShellBrowser_fnInsertMenusSB(IShellBrowser *iface,
@@ -1379,18 +1378,16 @@ static HRESULT WINAPI IShellBrowser_fnSetStatusTextSB(IShellBrowser *iface,
                                                       LPCOLESTR pszStatusText)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%s)\n", This, debugstr_w(pszStatusText));
-
-    return E_NOTIMPL;
+    TRACE("%p (%s)\n", This, debugstr_w(pszStatusText));
+    return S_OK;
 }
 
 static HRESULT WINAPI IShellBrowser_fnEnableModelessSB(IShellBrowser *iface,
                                                        BOOL fEnable)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%d)\n", This, fEnable);
-
-    return E_NOTIMPL;
+    TRACE("%p (%d)\n", This, fEnable);
+    return S_OK;
 }
 
 static HRESULT WINAPI IShellBrowser_fnTranslateAcceleratorSB(IShellBrowser *iface,
@@ -1472,9 +1469,8 @@ static HRESULT WINAPI IShellBrowser_fnSetToolbarItems(IShellBrowser *iface,
                                                       UINT nButtons, UINT uFlags)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%p, %d, 0x%x)\n", This, lpButtons, nButtons, uFlags);
-
-    return E_NOTIMPL;
+    TRACE("%p (%p, %d, 0x%x)\n", This, lpButtons, nButtons, uFlags);
+    return S_OK;
 }
 
 static const IShellBrowserVtbl vt_IShellBrowser = {

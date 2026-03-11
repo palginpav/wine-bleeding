@@ -1711,11 +1711,30 @@ static char **myARGV;
 static char   base[MAX_PATH];
 static char   selfname[MAX_PATH];
 
+/* Build an ANSI module path that remains executable from non-ASCII locations. */
+static void get_module_name_a(char *path, DWORD size)
+{
+    WCHAR long_path[MAX_PATH], short_path[MAX_PATH];
+    DWORD len;
+
+    len = GetModuleFileNameW(NULL, long_path, ARRAY_SIZE(long_path));
+    if (len && len < ARRAY_SIZE(long_path))
+    {
+        DWORD short_len = GetShortPathNameW(long_path, short_path, ARRAY_SIZE(short_path));
+        const WCHAR *source = short_len && short_len < ARRAY_SIZE(short_path) ? short_path : long_path;
+
+        if (WideCharToMultiByte(CP_ACP, 0, source, -1, path, size, NULL, NULL))
+            return;
+    }
+
+    GetModuleFileNameA(NULL, path, size);
+}
+
 static BOOL init(void)
 {
     myARGC = winetest_get_mainargs(&myARGV);
     if (!GetCurrentDirectoryA(sizeof(base), base)) return FALSE;
-    strcpy(selfname, myARGV[0]);
+    get_module_name_a(selfname, ARRAY_SIZE(selfname));
     return TRUE;
 }
 
@@ -1831,7 +1850,7 @@ static void test_NonExistentPath(void)
                 STARTUPINFOA startup;
                 PROCESS_INFORMATION info;
 
-                sprintf(buffer, "%s shellpath 1", selfname);
+                sprintf(buffer, "\"%s\" shellpath 1", selfname);
                 memset(&startup, 0, sizeof(startup));
                 startup.cb = sizeof(startup);
                 startup.dwFlags = STARTF_USESHOWWINDOW;
@@ -1846,7 +1865,7 @@ static void test_NonExistentPath(void)
                  strlen(originalPath) + 1);
                 RegFlushKey(key);
 
-                sprintf(buffer, "%s shellpath 2", selfname);
+                sprintf(buffer, "\"%s\" shellpath 2", selfname);
                 memset(&startup, 0, sizeof(startup));
                 startup.cb = sizeof(startup);
                 startup.dwFlags = STARTF_USESHOWWINDOW;

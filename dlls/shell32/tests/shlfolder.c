@@ -8208,6 +8208,20 @@ static void test_copy_paste(void)
 
 START_TEST(shlfolder)
 {
+    WCHAR cwdW[MAX_PATH];
+    char cwdA[MAX_PATH];
+    BOOL used_default = FALSE;
+    DWORD len;
+
+    len = GetCurrentDirectoryW(ARRAY_SIZE(cwdW), cwdW);
+    if (!len || len >= ARRAY_SIZE(cwdW) ||
+        !WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, cwdW, -1, cwdA, ARRAY_SIZE(cwdA), NULL, &used_default) ||
+        used_default)
+    {
+        skip("Current directory is not representable in ANSI; skipping shlfolder test.\n");
+        return;
+    }
+
     init_function_pointers();
     /* if OleInitialize doesn't get called, ParseDisplayName returns
        CO_E_NOTINITIALIZED for malformed directory names */

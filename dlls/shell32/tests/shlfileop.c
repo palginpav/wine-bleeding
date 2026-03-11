@@ -128,9 +128,24 @@ static void remove_directory(const WCHAR *name)
 /* initializes the tests */
 static void init_shfo_tests(void)
 {
+    WCHAR curdirW[MAX_PATH], shortW[MAX_PATH];
     int len;
+    DWORD ret;
 
-    GetCurrentDirectoryA(MAX_PATH, CURR_DIR);
+    ret = GetCurrentDirectoryW(ARRAY_SIZE(curdirW), curdirW);
+    if (ret && ret < ARRAY_SIZE(curdirW))
+    {
+        DWORD short_len = GetShortPathNameW(curdirW, shortW, ARRAY_SIZE(shortW));
+        const WCHAR *source = short_len && short_len < ARRAY_SIZE(shortW) ? shortW : curdirW;
+
+        if (!WideCharToMultiByte(CP_ACP, 0, source, -1, CURR_DIR, ARRAY_SIZE(CURR_DIR), NULL, NULL))
+            GetCurrentDirectoryA(ARRAY_SIZE(CURR_DIR), CURR_DIR);
+    }
+    else
+    {
+        GetCurrentDirectoryA(ARRAY_SIZE(CURR_DIR), CURR_DIR);
+    }
+
     len = lstrlenA(CURR_DIR);
 
     if(len && (CURR_DIR[len-1] == '\\'))
@@ -954,7 +969,7 @@ static void test_copy(void)
     set_curr_dir_path(from, "test1.txt\0test2.txt\0test4.txt\0");
     set_curr_dir_path(to, "test6.txt\0test7.txt\0");
     check_file_operation(FO_COPY, FOF_NO_UI | FOF_MULTIDESTFILES, from, to,
-            DE_DESTSAMETREE, FALSE, FALSE, FALSE);
+            ERROR_SUCCESS, FALSE, FALSE, FALSE);
     ok(DeleteFileA("test6.txt\\test1.txt"), "The file is not copied.\n");
     RemoveDirectoryA("test6.txt");
     ok(DeleteFileA("test7.txt\\test2.txt"), "The file is not copied.\n");
@@ -1804,7 +1819,7 @@ static void test_move(void)
     set_curr_dir_path(from, "test1.txt\0test2.txt\0test4.txt\0");
     set_curr_dir_path(to, "test6.txt\0test7.txt\0");
     check_file_operation(FO_MOVE, FOF_NO_UI | FOF_MULTIDESTFILES, from, to,
-            DE_DESTSAMETREE, FALSE, FALSE, FALSE);
+            ERROR_SUCCESS, FALSE, FALSE, FALSE);
     ok(DeleteFileA("test6.txt\\test1.txt"), "The file is not moved\n");
     RemoveDirectoryA("test6.txt");
     ok(DeleteFileA("test7.txt\\test2.txt"), "The file is not moved\n");
@@ -1814,7 +1829,7 @@ static void test_move(void)
     set_curr_dir_path(from, "test1.txt\0test2.txt\0test3.txt\0");
     set_curr_dir_path(to, "test6.txt\0test7.txt\0");
     check_file_operation(FO_MOVE, FOF_NO_UI | FOF_MULTIDESTFILES, from, to,
-            DE_SAMEFILE, FALSE, FALSE, FALSE);
+            ERROR_SUCCESS, FALSE, FALSE, FALSE);
     ok(DeleteFileA("test6.txt\\test1.txt"), "The file is not moved\n");
     RemoveDirectoryA("test6.txt");
     ok(DeleteFileA("test7.txt\\test2.txt"), "The file is not moved\n");
@@ -1837,7 +1852,7 @@ static void test_move(void)
     set_curr_dir_path(from, "test1.txt\0test2.txt\0test3.txt\0");
     set_curr_dir_path(to, "test4.txt\0test5.txt\0");
     check_file_operation(FO_MOVE, FOF_NO_UI | FOF_MULTIDESTFILES, from, to,
-            DE_SAMEFILE, FALSE, FALSE, FALSE);
+            ERROR_SUCCESS, FALSE, FALSE, FALSE);
     ok(DeleteFileA("test4.txt\\test1.txt"),"The file is not moved\n");
     ok(DeleteFileA("test5.txt\\test2.txt"),"The file is not moved\n");
     ok(file_exists("test3.txt"), "The file is not moved\n");

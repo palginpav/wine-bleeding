@@ -56,6 +56,25 @@ static BOOL skip_noassoc_tests = FALSE;
 static HANDLE dde_ready_event;
 static BOOL is_elevated;
 
+/* Build an ANSI module path that remains executable from non-ASCII locations. */
+static void get_module_name_a(char *path, DWORD size)
+{
+    WCHAR long_path[MAX_PATH], short_path[MAX_PATH];
+    DWORD len;
+
+    len = GetModuleFileNameW(NULL, long_path, ARRAY_SIZE(long_path));
+    if (len && len < ARRAY_SIZE(long_path))
+    {
+        DWORD short_len = GetShortPathNameW(long_path, short_path, ARRAY_SIZE(short_path));
+        const WCHAR *source = short_len && short_len < ARRAY_SIZE(short_path) ? short_path : long_path;
+
+        if (WideCharToMultiByte(CP_ACP, 0, source, -1, path, size, NULL, NULL))
+            return;
+    }
+
+    GetModuleFileNameA(NULL, path, size);
+}
+
 
 /***
  *
@@ -1632,7 +1651,8 @@ static void test_argify(void)
 
 static void test_filename(void)
 {
-    char filename[MAX_PATH + 20], curdir[MAX_PATH];
+    char filename[MAX_PATH + 20];
+    WCHAR curdirW[MAX_PATH];
     const filename_tests_t* test;
     char* c;
     INT_PTR rc;
@@ -1643,7 +1663,7 @@ static void test_filename(void)
         return;
     }
 
-    GetCurrentDirectoryA(sizeof(curdir), curdir);
+    GetCurrentDirectoryW(ARRAY_SIZE(curdirW), curdirW);
 
     SetCurrentDirectoryA(tmpdir);
     rc=shell_execute("QuotedLowerL", "simple.shlexec", NULL, NULL);
@@ -1666,7 +1686,7 @@ static void test_filename(void)
     strcat(filename, "\\simple.shlexec");
     okChildPath("argvA4", filename);
 
-    SetCurrentDirectoryA(curdir);
+    SetCurrentDirectoryW(curdirW);
 
     test=filename_tests;
     while (test->basename)
@@ -2017,7 +2037,7 @@ static void test_urls(void)
 
 static void test_find_executable(void)
 {
-    char curdir[MAX_PATH];
+    WCHAR curdirW[MAX_PATH];
     char notepad_path[MAX_PATH];
     char filename[MAX_PATH + 17];
     char command[MAX_PATH];
@@ -2068,11 +2088,11 @@ static void test_find_executable(void)
     ok(rc > 32, "FindExecutable(%s) returned %Id\n", argv0, rc);
 
     /* Make sure FindExecutable uses the correct current directory */
-    GetCurrentDirectoryA(MAX_PATH, curdir);
+    GetCurrentDirectoryW(ARRAY_SIZE(curdirW), curdirW);
     SetCurrentDirectoryA(tmpdir);
     rc=(INT_PTR)FindExecutableA(basename, NULL, command);
     ok(rc == SE_ERR_FNF, "FindExecutable(%s) returned %Id\n", basename, rc);
-    SetCurrentDirectoryA(curdir);
+    SetCurrentDirectoryW(curdirW);
 
     sprintf(filename, "%s\\test file.sfe", tmpdir);
     rc=(INT_PTR)FindExecutableA(filename, NULL, command);
@@ -2274,7 +2294,7 @@ static void test_exes(void)
 {
     char filename[2 * MAX_PATH + 17];
     char params[1024];
-    char curdir[MAX_PATH];
+    WCHAR curdirW[MAX_PATH];
     char relative_basename[MAX_PATH];
     char *basename = strrchr(argv0, '\\') + 1, *dirname = strdup(argv0);
     INT_PTR rc;
@@ -2373,11 +2393,11 @@ static void test_exes(void)
     todo_wine okShell(rc == SE_ERR_NOASSOC, "returned %Iu\n", rc);
 
     /* Check the correct search path is used */
-    GetCurrentDirectoryA(MAX_PATH, curdir);
+    GetCurrentDirectoryW(ARRAY_SIZE(curdirW), curdirW);
     SetCurrentDirectoryA(tmpdir);
     rc = shell_execute(NULL, basename, params, NULL);
     okShell(rc == SE_ERR_FNF, "returned %Iu\n", rc);
-    SetCurrentDirectoryA(curdir);
+    SetCurrentDirectoryW(curdirW);
 
     if (!skip_shlexec_tests)
     {
@@ -2814,7 +2834,8 @@ static void init_test(void)
     if (FAILED(r))
         exit(1);
 
-    rc=GetModuleFileNameA(NULL, argv0, sizeof(argv0));
+    get_module_name_a(argv0, ARRAY_SIZE(argv0));
+    rc = strlen(argv0);
     ok(rc != 0 && rc < sizeof(argv0), "got %ld\n", rc);
     if (GetFileAttributesA(argv0)==INVALID_FILE_ATTRIBUTES)
     {
@@ -2957,6 +2978,7 @@ static void cleanup_test(void)
 static void test_directory(void)
 {
     char path[MAX_PATH + 10], curdir[MAX_PATH];
+    WCHAR curdirW[MAX_PATH];
     char params[1024], dirpath[1024];
     INT_PTR rc;
     BOOL ret;
@@ -2968,6 +2990,7 @@ static void test_directory(void)
 
     /* Test with the current directory */
     GetCurrentDirectoryA(sizeof(curdir), curdir);
+    GetCurrentDirectoryW(ARRAY_SIZE(curdirW), curdirW);
     SetCurrentDirectoryA(tmpdir);
     rc=shell_execute_ex(SEE_MASK_NOZONECHECKS|SEE_MASK_FLAG_NO_UI,
                         NULL, "test2.exe", params, NULL, NULL);
@@ -2976,7 +2999,7 @@ static void test_directory(void)
     okChildString("argvA0", path);
     okChildString("argvA3", "Exec");
     okChildPath("longPath", path);
-    SetCurrentDirectoryA(curdir);
+    SetCurrentDirectoryW(curdirW);
 
     rc=shell_execute_ex(SEE_MASK_NOZONECHECKS|SEE_MASK_FLAG_NO_UI,
                         NULL, "test2.exe", params, NULL, NULL);
@@ -3031,7 +3054,7 @@ static void test_directory(void)
     DeleteFileA(path);
 
     RemoveDirectoryA("tmp");
-    SetCurrentDirectoryA(curdir);
+    SetCurrentDirectoryW(curdirW);
 }
 
 START_TEST(shlexec)
