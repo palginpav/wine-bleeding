@@ -45,6 +45,10 @@
  * there is any difference I have yet to find it. */
 DEFINE_GUID(IID_IFileDialogCustomizeAlt, 0x8016B7B3, 0x3D49, 0x4504, 0xA0,0xAA, 0x2A,0x37,0x49,0x4E,0x60,0x6F);
 
+/* Not declared in public Wine headers yet, but exported from shell32. */
+HRESULT WINAPI SHCreateItemWithParent(PCIDLIST_ABSOLUTE pidl_parent, IShellFolder *psf,
+                                      PCUITEMID_CHILD pidl, REFIID riid, void **ppv);
+
 WINE_DEFAULT_DEBUG_CHANNEL(commdlg);
 
 enum ITEMDLG_TYPE {

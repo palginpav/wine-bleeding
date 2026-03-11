@@ -110,7 +110,7 @@ echo "[4/6] Сборка Wine (make -j\$(nproc))..."
 if [ ! -x "$WINE_ROOT/loader/wine" ] || [ ! -x "$WINE_ROOT/server/wineserver" ]; then
     (cd "$WINE_ROOT" && make -j"$(nproc)") || { echo "Ошибка сборки Wine." >&2; exit 1; }
 else
-    (cd "$WINE_ROOT" && make -j"$(nproc)") || true
+    (cd "$WINE_ROOT" && make -j"$(nproc)") || { echo "Ошибка сборки Wine." >&2; exit 1; }
 fi
 if [ ! -x "$WINE_ROOT/loader/wine" ] || [ ! -x "$WINE_ROOT/server/wineserver" ]; then
     echo "Ошибка: Wine не собран (нет loader/wine или server/wineserver)." >&2
