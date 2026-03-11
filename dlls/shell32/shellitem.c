@@ -3338,11 +3338,13 @@ static HRESULT WINAPI IEnumShellItems_fnNext(IEnumShellItems* iface,
 static HRESULT WINAPI IEnumShellItems_fnSkip(IEnumShellItems* iface, ULONG celt)
 {
     IEnumShellItemsImpl *This = impl_from_IEnumShellItems(iface);
+    DWORD remaining;
     TRACE("%p (%ld)\n", This, celt);
 
+    remaining = This->count - This->position;
     This->position = min(This->position + celt, This->count);
 
-    return S_OK;
+    return celt <= remaining ? S_OK : S_FALSE;
 }
 
 static HRESULT WINAPI IEnumShellItems_fnReset(IEnumShellItems* iface)
@@ -3416,6 +3418,29 @@ static HRESULT IEnumShellItems_Constructor(IShellItemArray *array, IEnumShellIte
     IEnumShellItems_Release(&This->IEnumShellItems_iface);
 
     return ret;
+}
+
+static HRESULT create_shellitem_enumerator(IShellItemArray *array, REFIID riid, void **ppv)
+{
+    IEnumShellItems *enum_items = NULL;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    hr = IEnumShellItems_Constructor(array, &enum_items);
+    if (FAILED(hr))
+        return hr;
+
+    if (IsEqualIID(riid, &IID_IEnumShellItems))
+    {
+        *ppv = enum_items;
+        return S_OK;
+    }
+
+    hr = IEnumShellItems_QueryInterface(enum_items, riid, ppv);
+    IEnumShellItems_Release(enum_items);
+    return hr;
 }
 
 
@@ -3504,7 +3529,7 @@ static HRESULT WINAPI IShellItemArray_fnBindToHandler(IShellItemArray *iface,
     *ppvOut = NULL;
 
     if (IsEqualGUID(bhid, &BHID_EnumItems) || IsEqualGUID(bhid, &BHID_StorageEnum))
-        return IEnumShellItems_Constructor(iface, (IEnumShellItems **)ppvOut);
+        return create_shellitem_enumerator(iface, riid, ppvOut);
 
     if (IsEqualGUID(bhid, &BHID_PropertyStore))
         return create_empty_property_store(riid, ppvOut);
@@ -3763,6 +3788,8 @@ HRESULT WINAPI SHCreateShellItemArray(PCIDLIST_ABSOLUTE pidlParent,
 
     TRACE("%p, %p, %d, %p, %p\n", pidlParent, psf, cidl, ppidl, ppsiItemArray);
 
+    if (!ppsiItemArray)
+        return E_POINTER;
     *ppsiItemArray = NULL;
 
     if(!pidlParent && !psf)
@@ -3777,6 +3804,11 @@ HRESULT WINAPI SHCreateShellItemArray(PCIDLIST_ABSOLUTE pidlParent,
 
     for(i = 0; i < cidl; i++)
     {
+        if (!ppidl[i])
+        {
+            ret = E_INVALIDARG;
+            break;
+        }
         ret = SHCreateShellItem(pidlParent, psf, ppidl[i], &array[i]);
         if(FAILED(ret)) break;
     }
@@ -3802,7 +3834,11 @@ HRESULT WINAPI SHCreateShellItemArrayFromShellItem(IShellItem *item, REFIID riid
 
     TRACE("%p, %s, %p\n", item, shdebugstr_guid(riid), ppv);
 
+    if (!ppv)
+        return E_POINTER;
     *ppv = NULL;
+    if (!item)
+        return E_INVALIDARG;
 
     IShellItem_AddRef(item);
     ret = create_shellitemarray(&item, 1, &array);
@@ -3887,9 +3923,11 @@ HRESULT WINAPI SHCreateShellItemArrayFromIDLists(UINT cidl,
     UINT i;
     TRACE("%d, %p, %p\n", cidl, pidl_array, psia);
 
+    if (!psia)
+        return E_POINTER;
     *psia = NULL;
 
-    if(cidl == 0)
+    if(cidl == 0 || !pidl_array)
         return E_INVALIDARG;
 
     array = calloc(cidl, sizeof(IShellItem*));
@@ -3898,6 +3936,11 @@ HRESULT WINAPI SHCreateShellItemArrayFromIDLists(UINT cidl,
 
     for(i = 0; i < cidl; i++)
     {
+        if (!pidl_array[i])
+        {
+            ret = E_INVALIDARG;
+            break;
+        }
         ret = SHCreateShellItem(NULL, NULL, pidl_array[i], &array[i]);
         if(FAILED(ret))
             break;

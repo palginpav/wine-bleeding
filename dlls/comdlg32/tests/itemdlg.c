@@ -397,30 +397,36 @@ static BOOL test_instantiation(void)
         hr = IServiceProvider_QueryService(psp, &SID_SExplorerBrowserFrame, &IID_ICommDlgBrowser, (void**)&punk);
         ok(hr == S_OK, "got 0x%08lx.\n", hr);
         if(SUCCEEDED(hr)) IUnknown_Release(punk);
+        hr = IServiceProvider_QueryService(psp, &SID_SExplorerBrowserFrame, &IID_IServiceProvider, (void**)&punk);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if(SUCCEEDED(hr)) IUnknown_Release(punk);
+        hr = IServiceProvider_QueryService(psp, &SID_STopWindow, &IID_IOleWindow, (void**)&pow);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if(SUCCEEDED(hr)) IOleWindow_Release(pow);
 
         /* since win8, the result is E_NOTIMPL for all other services */
         hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IExplorerBrowser, (void**)&peb);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IExplorerBrowser_Release(peb);
         hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IShellBrowser, (void**)&psb);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IShellBrowser_Release(psb);
         hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_ICommDlgBrowser, (void**)&punk);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IUnknown_Release(punk);
 
         hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IUnknown, (void**)&punk);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IUnknown_Release(punk);
         hr = IServiceProvider_QueryService(psp, &IID_IUnknown, &IID_IUnknown, (void**)&punk);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IUnknown_Release(punk);
 
         hr = IServiceProvider_QueryService(psp, &IID_IFolderView, &IID_IFolderView, (void**)&pfv);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IFolderView_Release(pfv);
         hr = IServiceProvider_QueryService(psp, &IID_IFolderView, &IID_IFolderView2, (void**)&pfv2);
-        ok(hr == E_NOTIMPL || broken(hr == E_FAIL), "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
         if(SUCCEEDED(hr)) IFolderView2_Release(pfv2);
 
         IServiceProvider_Release(psp);
@@ -482,6 +488,44 @@ static BOOL test_instantiation(void)
     IUnknown_Release(punk);
     IUnknown_Release(unk2);
 
+    hr = IFileSaveDialog_QueryInterface(pfsd, &IID_IServiceProvider, (void**)&psp);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if(SUCCEEDED(hr))
+    {
+        IExplorerBrowser *peb;
+        IShellBrowser *psb;
+
+        hr = IServiceProvider_QueryService(psp, &SID_SExplorerBrowserFrame, &IID_ICommDlgBrowser, (void**)&punk);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if(SUCCEEDED(hr)) IUnknown_Release(punk);
+        hr = IServiceProvider_QueryService(psp, &SID_SExplorerBrowserFrame, &IID_IServiceProvider, (void**)&punk);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if(SUCCEEDED(hr)) IUnknown_Release(punk);
+
+        hr = IServiceProvider_QueryService(psp, &SID_STopWindow, &IID_IOleWindow, (void **)&pow);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if(SUCCEEDED(hr)) IOleWindow_Release(pow);
+
+        hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IExplorerBrowser, (void**)&peb);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        if(SUCCEEDED(hr)) IExplorerBrowser_Release(peb);
+        hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IShellBrowser, (void**)&psb);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        if(SUCCEEDED(hr)) IShellBrowser_Release(psb);
+        hr = IServiceProvider_QueryService(psp, &IID_IUnknown, &IID_IUnknown, (void**)&punk);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        if(SUCCEEDED(hr)) IUnknown_Release(punk);
+
+        hr = IServiceProvider_QueryService(psp, &IID_IFolderView, &IID_IFolderView, (void**)&pfv);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        if(SUCCEEDED(hr)) IFolderView_Release(pfv);
+        hr = IServiceProvider_QueryService(psp, &IID_IFolderView, &IID_IFolderView2, (void**)&pfv2);
+        ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+        if(SUCCEEDED(hr)) IFolderView2_Release(pfv2);
+
+        IServiceProvider_Release(psp);
+    }
+
     hr = IFileSaveDialog_QueryInterface(pfsd, &IID_IOleWindow, (void**)&pow);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     if(SUCCEEDED(hr))
@@ -534,6 +578,7 @@ static void test_basics(void)
     const WCHAR fspec1[] = {'*','.','t','x','t',0};
     const WCHAR fname2[] = {'f','n','a','m','e','2', 0};
     const WCHAR fspec2[] = {'*','.','e','x','e',0};
+    const WCHAR missing_targetW[] = {'w','i','n','e','_','b','l','e','e','d','i','n','g','_','m','i','s','s','i','n','g','_','t','a','r','g','e','t','.','t','m','p',0};
     COMDLG_FILTERSPEC filterspec[2] = {{fname1, fspec1}, {fname2, fspec2}};
     const DWORD invalid_fos[] = {0x1, 0x10, 0x400, 0x80000, 0x400000, 0x800000, 0x1000000, 0x4000000, 0x8000000};
     INT i;
@@ -610,24 +655,25 @@ static void test_basics(void)
     psi = (void*)0xdeadbeef;
     hr = IFileOpenDialog_GetResult(pfod, &psi);
     ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
-    ok(psi == (void*)0xdeadbeef, "got %p.\n", psi);
+    ok(psi == NULL, "got %p.\n", psi);
     psi = (void*)0xdeadbeef;
     hr = IFileSaveDialog_GetResult(pfsd, &psi);
     ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
-    ok(psi == (void*)0xdeadbeef, "got %p.\n", psi);
+    ok(psi == NULL, "got %p.\n", psi);
 
     /* GetCurrentSelection */
-    if(0) {
-        /* Crashes on Vista/W2K8. Tests below passes on Windows 7 */
-        hr = IFileOpenDialog_GetCurrentSelection(pfod, NULL);
-        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
-        hr = IFileSaveDialog_GetCurrentSelection(pfsd, NULL);
-        ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
-        hr = IFileOpenDialog_GetCurrentSelection(pfod, &psi);
-        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-        hr = IFileSaveDialog_GetCurrentSelection(pfsd, &psi);
-        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-    }
+    hr = IFileOpenDialog_GetCurrentSelection(pfod, NULL);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    hr = IFileSaveDialog_GetCurrentSelection(pfsd, NULL);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    psi = (void*)0xdeadbeef;
+    hr = IFileOpenDialog_GetCurrentSelection(pfod, &psi);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+    ok(psi == NULL, "got %p.\n", psi);
+    psi = (void*)0xdeadbeef;
+    hr = IFileSaveDialog_GetCurrentSelection(pfsd, &psi);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+    ok(psi == NULL, "got %p.\n", psi);
 
     /* GetFileName */
     hr = IFileOpenDialog_GetFileName(pfod, NULL);
@@ -783,13 +829,60 @@ static void test_basics(void)
         IShellItem_Release(psi_original);
     }
 
-    /* AddPlace */
-    if(0)
+    hr = IFileOpenDialog_SetFileName(pfod, missing_targetW);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    psi = (void *)0xdeadbeef;
+    hr = IFileOpenDialog_GetCurrentSelection(pfod, &psi);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if (SUCCEEDED(hr))
     {
-        /* Crashes under Windows 7 */
-        IFileOpenDialog_AddPlace(pfod, NULL, 0);
-        IFileSaveDialog_AddPlace(pfsd, NULL, 0);
+        filename = NULL;
+        hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(!lstrcmpW(filename, missing_targetW), "got %s\n", wine_dbgstr_w(filename));
+        CoTaskMemFree(filename);
+        IShellItem_Release(psi);
     }
+    psia = (void *)0xdeadbeef;
+    hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        psi = NULL;
+        hr = IShellItemArray_GetItemAt(psia, 0, &psi);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            filename = NULL;
+            hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+            ok(hr == S_OK, "got 0x%08lx.\n", hr);
+            ok(!lstrcmpW(filename, missing_targetW), "got %s\n", wine_dbgstr_w(filename));
+            CoTaskMemFree(filename);
+            IShellItem_Release(psi);
+        }
+        IShellItemArray_Release(psia);
+    }
+
+    hr = IFileSaveDialog_SetFileName(pfsd, missing_targetW);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    psi = (void *)0xdeadbeef;
+    hr = IFileSaveDialog_GetCurrentSelection(pfsd, &psi);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        filename = NULL;
+        hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        ok(!lstrcmpW(filename, missing_targetW), "got %s\n", wine_dbgstr_w(filename));
+        CoTaskMemFree(filename);
+        IShellItem_Release(psi);
+    }
+
+    /* AddPlace */
+    hr = IFileOpenDialog_AddPlace(pfod, NULL, 0);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
+    hr = IFileSaveDialog_AddPlace(pfsd, NULL, 0);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
 
     hr = IFileOpenDialog_AddPlace(pfod, psidesktop, FDAP_TOP + 1);
     ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
@@ -895,37 +988,28 @@ static void test_basics(void)
     /** IFileOpenDialog specific **/
 
     /* GetResults */
-    if(0)
-    {
-        /* Crashes under Windows 7 */
-        IFileOpenDialog_GetResults(pfod, NULL);
-    }
+    hr = IFileOpenDialog_GetResults(pfod, NULL);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     psia = (void*)0xdeadbeef;
     hr = IFileOpenDialog_GetResults(pfod, &psia);
     ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
     ok(psia == NULL, "got %p.\n", psia);
 
     /* GetSelectedItems */
-    if(0)
-    {
-        /* Crashes under W2K8 */
-        hr = IFileOpenDialog_GetSelectedItems(pfod, NULL);
-        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-        psia = (void*)0xdeadbeef;
-        hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
-        ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-        ok(psia == (void*)0xdeadbeef, "got %p.\n", psia);
-    }
+    hr = IFileOpenDialog_GetSelectedItems(pfod, NULL);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    psia = (void*)0xdeadbeef;
+    hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+    ok(psia == NULL, "got %p.\n", psia);
 
     /** IFileSaveDialog specific **/
 
     /* ApplyProperties */
-    if(0)
-    {
-        /* Crashes under windows 7 */
-        IFileSaveDialog_ApplyProperties(pfsd, NULL, NULL, NULL, NULL);
-        IFileSaveDialog_ApplyProperties(pfsd, psidesktop, NULL, NULL, NULL);
-    }
+    hr = IFileSaveDialog_ApplyProperties(pfsd, NULL, NULL, NULL, NULL);
+    ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
+    hr = IFileSaveDialog_ApplyProperties(pfsd, psidesktop, NULL, NULL, NULL);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     /* GetProperties */
     hr = IFileSaveDialog_GetProperties(pfsd, NULL);
@@ -937,12 +1021,13 @@ static void test_basics(void)
     if (pps) IPropertyStore_Release(pps);
 
     /* SetProperties */
-    if(0)
-    {
-        /* Crashes under W2K8 */
-        hr = IFileSaveDialog_SetProperties(pfsd, NULL);
-        ok(hr == S_OK, "got 0x%08lx\n", hr);
-    }
+    hr = IFileSaveDialog_SetProperties(pfsd, NULL);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    pps = (void*)0xdeadbeef;
+    hr = IFileSaveDialog_GetProperties(pfsd, &pps);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    ok(pps != NULL && pps != (void*)0xdeadbeef, "got %p\n", pps);
+    if (pps) IPropertyStore_Release(pps);
 
     /* SetCollectedProperties */
     hr = IFileSaveDialog_SetCollectedProperties(pfsd, NULL, TRUE);
@@ -959,7 +1044,7 @@ static void test_basics(void)
     /** IFileDialog2 **/
 
     hr = IFileOpenDialog_QueryInterface(pfod, &IID_IFileDialog2, (void**)&pfd2);
-    ok((hr == S_OK) || broken(hr == E_NOINTERFACE), "got 0x%08lx\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
     if(SUCCEEDED(hr))
     {
         /* SetCancelButtonLabel */
@@ -980,7 +1065,7 @@ static void test_basics(void)
     }
 
     hr = IFileSaveDialog_QueryInterface(pfsd, &IID_IFileDialog2, (void**)&pfd2);
-    ok((hr == S_OK) || broken(hr == E_NOINTERFACE), "got 0x%08lx\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
     if(SUCCEEDED(hr))
     {
         /* SetCancelButtonLabel */
@@ -2794,9 +2879,12 @@ static HRESULT WINAPI test_control_OnButtonClicked(IFileDialogControlEvents *ifa
                                                    IFileDialogCustomize *pfdc, DWORD dwIDCtl)
 {
     ITestEventsImpl *This = test_impl_from_IFileDialogControlEvents(iface);
+    IExplorerBrowser *peb;
+    IOleWindow *pow;
     IServiceProvider *psp;
     IFolderView2 *pfv2;
     IShellItemArray *psia;
+    IUnknown *punk;
     HRESULT hr;
     IFileDialog *pfd;
 
@@ -2831,6 +2919,24 @@ static HRESULT WINAPI test_control_OnButtonClicked(IFileDialogControlEvents *ifa
         }
         IFolderView2_Release(pfv2);
     }
+
+    peb = NULL;
+    hr = IServiceProvider_QueryService(psp, &SID_STopLevelBrowser, &IID_IExplorerBrowser, (void **)&peb);
+    ok(hr == S_OK, "QueryService for IExplorerBrowser failed: 0x%08lx\n", hr);
+    if (SUCCEEDED(hr))
+        IExplorerBrowser_Release(peb);
+
+    pow = NULL;
+    hr = IServiceProvider_QueryService(psp, &SID_STopWindow, &IID_IOleWindow, (void **)&pow);
+    ok(hr == S_OK, "QueryService for IOleWindow failed: 0x%08lx\n", hr);
+    if (SUCCEEDED(hr))
+        IOleWindow_Release(pow);
+
+    punk = NULL;
+    hr = IServiceProvider_QueryService(psp, &IID_IUnknown, &IID_IUnknown, (void **)&punk);
+    ok(hr == E_NOTIMPL, "got 0x%08lx (expected E_NOTIMPL)\n", hr);
+    ok(!punk, "Got unexpected object %p\n", punk);
+
     IServiceProvider_Release(psp);
 
     This->test_passed = TRUE;

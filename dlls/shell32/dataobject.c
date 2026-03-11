@@ -57,6 +57,7 @@ static HRESULT WINAPI IEnumFORMATETC_fnQueryInterface(
 	IEnumFORMATETCImpl *This = impl_from_IEnumFORMATETC(iface);
 	TRACE("(%p)->(\n\tIID:\t%s,%p)\n",This,debugstr_guid(riid),ppvObj);
 
+        if (!ppvObj) return E_POINTER;
 	*ppvObj = NULL;
 
 	if(IsEqualIID(riid, &IID_IUnknown) ||
@@ -110,6 +111,7 @@ static HRESULT WINAPI IEnumFORMATETC_fnNext(LPENUMFORMATETC iface, ULONG celt, F
 
 	if(!This->pFmt)return S_FALSE;
 	if(!rgelt) return E_INVALIDARG;
+	if (celt > 1 && !pceltFethed) return E_INVALIDARG;
 	if (pceltFethed)  *pceltFethed = 0;
 
 	for(i = 0; This->posFmt < This->countFmt && celt > i; i++)
@@ -125,9 +127,18 @@ static HRESULT WINAPI IEnumFORMATETC_fnNext(LPENUMFORMATETC iface, ULONG celt, F
 static HRESULT WINAPI IEnumFORMATETC_fnSkip(LPENUMFORMATETC iface, ULONG celt)
 {
 	IEnumFORMATETCImpl *This = impl_from_IEnumFORMATETC(iface);
+        UINT remaining;
 	TRACE("(%p)->(num=%lu)\n", This, celt);
 
-	if((This->posFmt + celt) >= This->countFmt) return S_FALSE;
+        if (This->posFmt >= This->countFmt) return S_FALSE;
+
+        remaining = This->countFmt - This->posFmt;
+        if (celt >= remaining)
+        {
+            This->posFmt = This->countFmt;
+            return S_FALSE;
+        }
+
 	This->posFmt += celt;
 	return S_OK;
 }
@@ -148,8 +159,9 @@ static HRESULT WINAPI IEnumFORMATETC_fnClone(LPENUMFORMATETC iface, LPENUMFORMAT
 
 	if (!ppenum) return E_INVALIDARG;
 	*ppenum = IEnumFORMATETC_Constructor(This->countFmt, This->pFmt);
-        if(*ppenum)
-           IEnumFORMATETC_fnSkip(*ppenum, This->posFmt);
+        if (!*ppenum) return E_OUTOFMEMORY;
+
+        IEnumFORMATETC_fnSkip(*ppenum, This->posFmt);
 	return S_OK;
 }
 
@@ -170,17 +182,22 @@ LPENUMFORMATETC IEnumFORMATETC_Constructor(UINT cfmt, const FORMATETC afmt[])
     DWORD size=cfmt * sizeof(FORMATETC);
 
     ef = calloc(1, sizeof(*ef));
+    if (!ef) return NULL;
 
-    if(ef)
+    ef->ref = 1;
+    ef->IEnumFORMATETC_iface.lpVtbl = &efvt;
+    ef->countFmt = cfmt;
+
+    if (cfmt)
     {
-        ef->ref=1;
-        ef->IEnumFORMATETC_iface.lpVtbl = &efvt;
+        ef->pFmt = SHAlloc(size);
+        if (!ef->pFmt)
+        {
+            free(ef);
+            return NULL;
+        }
 
-        ef->countFmt = cfmt;
-        ef->pFmt = SHAlloc (size);
-
-        if (ef->pFmt)
-            memcpy(ef->pFmt, afmt, size);
+        memcpy(ef->pFmt, afmt, size);
     }
 
     TRACE("(%p)->(%u,%p)\n",ef, cfmt, afmt);
@@ -207,6 +224,69 @@ static inline IDataObjectImpl *impl_from_IDataObject(IDataObject *iface)
 	return CONTAINING_RECORD(iface, IDataObjectImpl, IDataObject_iface);
 }
 
+static void release_data_entries(struct data *data, size_t count)
+{
+    if (!data) return;
+
+    for (size_t i = 0; i < count; ++i)
+        GlobalFree(data[i].global);
+    free(data);
+}
+
+static BOOL data_object_format_matches(const struct data *data, const FORMATETC *format)
+{
+    return data->cf == format->cfFormat && format->dwAspect == DVASPECT_CONTENT && format->lindex == -1;
+}
+
+static HGLOBAL render_preferred_drop_effect(DWORD effect)
+{
+    DWORD *value;
+    HGLOBAL global;
+
+    if (!(global = GlobalAlloc(GMEM_MOVEABLE, sizeof(*value))))
+        return NULL;
+
+    value = GlobalLock(global);
+    if (!value)
+    {
+        GlobalFree(global);
+        return NULL;
+    }
+
+    *value = effect;
+    GlobalUnlock(global);
+    return global;
+}
+
+static HGLOBAL duplicate_hglobal(HGLOBAL source)
+{
+    size_t size;
+    HGLOBAL copy;
+    const void *src;
+    void *dst;
+
+    if (!source) return NULL;
+
+    size = GlobalSize(source);
+    if (!(copy = GlobalAlloc(GMEM_MOVEABLE, size)))
+        return NULL;
+
+    src = GlobalLock(source);
+    dst = GlobalLock(copy);
+    if (!src || !dst)
+    {
+        if (src) GlobalUnlock(source);
+        if (dst) GlobalUnlock(copy);
+        GlobalFree(copy);
+        return NULL;
+    }
+
+    memcpy(dst, src, size);
+    GlobalUnlock(source);
+    GlobalUnlock(copy);
+    return copy;
+}
+
 /***************************************************************************
 *  IDataObject_QueryInterface
 */
@@ -215,6 +295,7 @@ static HRESULT WINAPI IDataObject_fnQueryInterface(IDataObject *iface, REFIID ri
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
 	TRACE("(%p)->(\n\tIID:\t%s,%p)\n",This,debugstr_guid(riid),ppvObj);
 
+        if (!ppvObj) return E_POINTER;
 	*ppvObj = NULL;
 
 	if(IsEqualIID(riid, &IID_IUnknown) ||
@@ -258,9 +339,7 @@ static ULONG WINAPI IDataObject_fnRelease(IDataObject *iface)
 
     if (!refcount)
     {
-        for (size_t i = 0; i < obj->data_count; ++i)
-            GlobalFree(obj->data[i].global);
-        free(obj->data);
+        release_data_entries(obj->data, obj->data_count);
         free(obj);
     }
     return refcount;
@@ -275,6 +354,9 @@ static HRESULT WINAPI IDataObject_fnGetData(IDataObject *iface, FORMATETC *forma
 
     TRACE("iface %p, format %p, medium %p.\n", iface, format, medium);
 
+    if (!format || !medium) return E_INVALIDARG;
+    memset(medium, 0, sizeof(*medium));
+
     if (!(format->tymed & TYMED_HGLOBAL))
     {
         FIXME("Unrecognized tymed %#lx, returning DV_E_FORMATETC.\n", format->tymed);
@@ -283,7 +365,7 @@ static HRESULT WINAPI IDataObject_fnGetData(IDataObject *iface, FORMATETC *forma
 
     for (size_t i = 0; i < obj->data_count; ++i)
     {
-        if (obj->data[i].cf == format->cfFormat)
+        if (data_object_format_matches(&obj->data[i], format))
         {
             HGLOBAL src_global = obj->data[i].global;
             size_t size = GlobalSize(src_global);
@@ -312,8 +394,43 @@ static HRESULT WINAPI IDataObject_fnGetData(IDataObject *iface, FORMATETC *forma
 static HRESULT WINAPI IDataObject_fnGetDataHere(IDataObject *iface, LPFORMATETC pformatetc, STGMEDIUM *pmedium)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
-	FIXME("(%p)->()\n", This);
-	return E_NOTIMPL;
+	TRACE("(%p)->(%p,%p)\n", This, pformatetc, pmedium);
+
+        if (!pformatetc || !pmedium) return E_INVALIDARG;
+        if (pmedium->tymed != TYMED_HGLOBAL) return DV_E_TYMED;
+        if (!(pformatetc->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
+        if (!pmedium->hGlobal) return STG_E_MEDIUMFULL;
+
+        for (size_t i = 0; i < This->data_count; ++i)
+        {
+            if (data_object_format_matches(&This->data[i], pformatetc))
+            {
+                HGLOBAL src_global = This->data[i].global;
+                size_t size = GlobalSize(src_global);
+                size_t dst_size = GlobalSize(pmedium->hGlobal);
+                const void *src;
+                void *dst;
+
+                if (dst_size < size) return STG_E_MEDIUMFULL;
+
+                src = GlobalLock(src_global);
+                dst = GlobalLock(pmedium->hGlobal);
+                if (!src || !dst)
+                {
+                    if (src) GlobalUnlock(src_global);
+                    if (dst) GlobalUnlock(pmedium->hGlobal);
+                    return STG_E_MEDIUMFULL;
+                }
+
+                memcpy(dst, src, size);
+                GlobalUnlock(src_global);
+                GlobalUnlock(pmedium->hGlobal);
+                pmedium->pUnkForRelease = NULL;
+                return S_OK;
+            }
+        }
+
+	return DV_E_FORMATETC;
 }
 
 static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *format)
@@ -321,6 +438,8 @@ static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *
     IDataObjectImpl *obj = impl_from_IDataObject(iface);
 
     TRACE("iface %p, format %p.\n", iface, format);
+
+    if (!format) return E_INVALIDARG;
 
     if (!(format->tymed & TYMED_HGLOBAL))
     {
@@ -330,7 +449,7 @@ static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *
 
     for (size_t i = 0; i < obj->data_count; ++i)
     {
-        if (obj->data[i].cf == format->cfFormat)
+        if (data_object_format_matches(&obj->data[i], format))
             return S_OK;
     }
 
@@ -340,8 +459,13 @@ static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *
 static HRESULT WINAPI IDataObject_fnGetCanonicalFormatEtc(IDataObject *iface, LPFORMATETC pformatectIn, LPFORMATETC pformatetcOut)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
-	FIXME("(%p)->()\n", This);
-	return E_NOTIMPL;
+	TRACE("(%p)->(%p,%p)\n", This, pformatectIn, pformatetcOut);
+
+        if (!pformatectIn || !pformatetcOut) return E_INVALIDARG;
+
+        *pformatetcOut = *pformatectIn;
+        pformatetcOut->ptd = NULL;
+	return DATA_S_SAMEFORMATETC;
 }
 
 static HRESULT WINAPI IDataObject_fnSetData(IDataObject *iface,
@@ -349,11 +473,11 @@ static HRESULT WINAPI IDataObject_fnSetData(IDataObject *iface,
 {
     IDataObjectImpl *obj = impl_from_IDataObject(iface);
     struct data *new_array;
+    HGLOBAL global;
 
     TRACE("iface %p, format %p, medium %p, release %d.\n", iface, format, medium, release);
 
-    if (!release)
-        return E_INVALIDARG;
+    if (!format || !medium) return E_INVALIDARG;
 
     if (format->tymed != TYMED_HGLOBAL)
     {
@@ -370,21 +494,32 @@ static HRESULT WINAPI IDataObject_fnSetData(IDataObject *iface,
     if (medium->pUnkForRelease)
         FIXME("Ignoring IUnknown %p.\n", medium->pUnkForRelease);
 
+    if (!medium->hGlobal)
+        return E_INVALIDARG;
+    if (format->dwAspect != DVASPECT_CONTENT || format->lindex != -1)
+        return DV_E_FORMATETC;
+
+    if (release) global = medium->hGlobal;
+    else if (!(global = duplicate_hglobal(medium->hGlobal))) return E_OUTOFMEMORY;
+
     for (size_t i = 0; i < obj->data_count; ++i)
     {
         if (obj->data[i].cf == format->cfFormat)
         {
             GlobalFree(obj->data[i].global);
-            obj->data[i].global = medium->hGlobal;
+            obj->data[i].global = global;
             return S_OK;
         }
     }
 
     if (!(new_array = realloc(obj->data, (obj->data_count + 1) * sizeof(*obj->data))))
+    {
+        if (!release) GlobalFree(global);
         return E_OUTOFMEMORY;
+    }
     obj->data = new_array;
     obj->data[obj->data_count].cf = format->cfFormat;
-    obj->data[obj->data_count].global = medium->hGlobal;
+    obj->data[obj->data_count].global = global;
     ++obj->data_count;
     return S_OK;
 }
@@ -395,6 +530,9 @@ static HRESULT WINAPI IDataObject_fnEnumFormatEtc(IDataObject *iface, DWORD dire
     FORMATETC *formats;
 
     TRACE("iface %p, direction %#lx, out %p.\n", iface, direction, out);
+
+    if (!out) return E_POINTER;
+    *out = NULL;
 
     if (!(formats = calloc(obj->data_count, sizeof(*formats))))
         return E_OUTOFMEMORY;
@@ -413,20 +551,24 @@ static HRESULT WINAPI IDataObject_fnEnumFormatEtc(IDataObject *iface, DWORD dire
 static HRESULT WINAPI IDataObject_fnDAdvise(IDataObject *iface, FORMATETC *pformatetc, DWORD advf, IAdviseSink *pAdvSink, DWORD *pdwConnection)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
-	FIXME("(%p)->()\n", This);
-	return E_NOTIMPL;
+	TRACE("(%p)->(%p,%#lx,%p,%p)\n", This, pformatetc, advf, pAdvSink, pdwConnection);
+
+        if (pdwConnection) *pdwConnection = 0;
+	return OLE_E_ADVISENOTSUPPORTED;
 }
 static HRESULT WINAPI IDataObject_fnDUnadvise(IDataObject *iface, DWORD dwConnection)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
-	FIXME("(%p)->()\n", This);
-	return E_NOTIMPL;
+	TRACE("(%p)->(%#lx)\n", This, dwConnection);
+	return OLE_E_ADVISENOTSUPPORTED;
 }
 static HRESULT WINAPI IDataObject_fnEnumDAdvise(IDataObject *iface, IEnumSTATDATA **ppenumAdvise)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
-	FIXME("(%p)->()\n", This);
-	return E_NOTIMPL;
+	TRACE("(%p)->(%p)\n", This, ppenumAdvise);
+
+        if (ppenumAdvise) *ppenumAdvise = NULL;
+	return OLE_E_ADVISENOTSUPPORTED;
 }
 
 static const IDataObjectVtbl dtovt =
@@ -458,7 +600,13 @@ IDataObject *IDataObject_Constructor(HWND hwnd, const ITEMIDLIST *root_pidl,
 
     obj->ref = 1;
     obj->IDataObject_iface.lpVtbl = &dtovt;
-    obj->data = calloc(4, sizeof(*obj->data));
+    obj->data = calloc(5, sizeof(*obj->data));
+    if (!obj->data)
+    {
+        free(obj);
+        return NULL;
+    }
+
     obj->data[0].cf = RegisterClipboardFormatW(CFSTR_SHELLIDLISTW);
     obj->data[0].global = RenderSHELLIDLIST(root_pidl, pidls, pidl_count);
     obj->data[1].cf = CF_HDROP;
@@ -467,7 +615,19 @@ IDataObject *IDataObject_Constructor(HWND hwnd, const ITEMIDLIST *root_pidl,
     obj->data[2].global = RenderFILENAMEA(root_pidl, pidls, pidl_count);
     obj->data[3].cf = RegisterClipboardFormatW(CFSTR_FILENAMEW);
     obj->data[3].global = RenderFILENAMEW(root_pidl, pidls, pidl_count);
-    obj->data_count = 4;
+    obj->data[4].cf = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECTW);
+    obj->data[4].global = render_preferred_drop_effect(DROPEFFECT_LINK);
+    obj->data_count = 5;
+
+    for (size_t i = 0; i < obj->data_count; ++i)
+    {
+        if (!obj->data[i].global)
+        {
+            release_data_entries(obj->data, obj->data_count);
+            free(obj);
+            return NULL;
+        }
+    }
 
     TRACE("Created data object %p.\n", obj);
     return &obj->IDataObject_iface;

@@ -4794,7 +4794,7 @@ static void test_SHCreateShellItemArray(void)
             ok(numitems == done, "Got %ld, expected %d\n", numitems, done);
 
             hr = IShellItemArray_GetItemAt(psia, numitems, &psi);
-            ok(hr == E_FAIL, "Got 0x%08lx\n", hr);
+            ok(hr == E_INVALIDARG, "Got 0x%08lx\n", hr);
 
             /* Compare all the items */
             for(i = 0; i < numitems; i++)
@@ -4836,6 +4836,11 @@ static void test_SHCreateShellItemArray(void)
             pSHCreateShellItemArrayFromShellItem(psi, &IID_IShellItemArray, NULL);
         }
 
+        psia = (void *)0xdeadbeef;
+        hr = pSHCreateShellItemArrayFromShellItem(NULL, &IID_IShellItemArray, (void **)&psia);
+        ok(hr == E_INVALIDARG, "Got 0x%08lx\n", hr);
+        ok(psia == NULL, "Got %p\n", psia);
+
         hr = pSHCreateItemFromIDList(pidl_testdir, &IID_IShellItem, (void**)&psi);
         ok(hr == S_OK, "Got 0x%08lx\n", hr);
         if(SUCCEEDED(hr))
@@ -4868,7 +4873,7 @@ static void test_SHCreateShellItemArray(void)
                     IShellItem_Release(psi2);
                 }
                 hr = IShellItemArray_GetItemAt(psia, 1, &psi2);
-                ok(hr == E_FAIL, "Got 0x%08lx\n", hr);
+                ok(hr == E_INVALIDARG, "Got 0x%08lx\n", hr);
                 IShellItemArray_Release(psia);
             }
             IShellItem_Release(psi);
@@ -4989,15 +4994,15 @@ static void test_SHCreateShellItemArray(void)
         psia = (void*)0xdeadbeef;
         pidl_array[0] = NULL;
         hr = pSHCreateShellItemArrayFromIDLists(1, pidl_array, &psia);
-        todo_wine ok(hr == E_OUTOFMEMORY, "Got 0x%08lx\n", hr);
+        ok(hr == E_INVALIDARG, "Got 0x%08lx\n", hr);
         ok(psia == NULL, "Got %p\n", psia);
 
         psia = (void*)0xdeadbeef;
         pidl_array[0] = pidl_testdir;
         pidl_array[1] = NULL;
         hr = pSHCreateShellItemArrayFromIDLists(2, pidl_array, &psia);
-        todo_wine ok(hr == S_OK || broken(hr == E_INVALIDARG) /* Vista */, "Got 0x%08lx\n", hr);
-        todo_wine ok(psia != NULL || broken(psia == NULL) /* Vista */, "Got %p\n", psia);
+        ok(hr == E_INVALIDARG, "Got 0x%08lx\n", hr);
+        ok(psia == NULL, "Got %p\n", psia);
         if(SUCCEEDED(hr))
         {
             IShellItem *psi;
@@ -5381,11 +5386,35 @@ static void test_ShellItemArrayEnumItems(void)
                 ok(fetched == 0, "Got %ld\n", fetched);
                 ok(my_array[0] == (void*)0xdeadbeef, "Got %p\n", my_array[0]);
 
-                /* Cloning not implemented anywhere */
+                hr = IEnumShellItems_Skip(iesi, numitems - 1);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+
+                my_array[0] = (void *)0xdeadbeef;
+                fetched = 0;
+                hr = IEnumShellItems_Next(iesi, 1, my_array, &fetched);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+                ok(fetched == 1, "Got %ld\n", fetched);
+                ok(my_array[0] != NULL && my_array[0] != (void *)0xdeadbeef, "Got %p\n", my_array[0]);
+                if (my_array[0] != NULL && my_array[0] != (void *)0xdeadbeef)
+                    IShellItem_Release(my_array[0]);
+
+                hr = IEnumShellItems_Skip(iesi, 1);
+                ok(hr == S_FALSE, "Got 0x%08lx\n", hr);
+
                 iesi2 = (void*)0xdeadbeef;
                 hr = IEnumShellItems_Clone(iesi, &iesi2);
-                ok(hr == E_NOTIMPL, "Got 0x%08lx\n", hr);
-                ok(iesi2 == NULL || broken(iesi2 == (void*)0xdeadbeef) /* Vista */, "Got %p\n", iesi2);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+                ok(iesi2 != NULL && iesi2 != (void*)0xdeadbeef, "Got %p\n", iesi2);
+                if (SUCCEEDED(hr))
+                {
+                    my_array[0] = (void *)0xdeadbeef;
+                    fetched = 0;
+                    hr = IEnumShellItems_Next(iesi2, 1, my_array, &fetched);
+                    ok(hr == S_FALSE, "Got 0x%08lx\n", hr);
+                    ok(!fetched, "Got %ld\n", fetched);
+                    ok(my_array[0] == (void *)0xdeadbeef, "Got %p\n", my_array[0]);
+                    IEnumShellItems_Release(iesi2);
+                }
 
                 IEnumShellItems_Release(iesi);
             }
@@ -5788,12 +5817,14 @@ static void test_ShellItemArrayBindToHandler(void)
     IShellItemArray *psia;
     IShellItem *psi;
     LPITEMIDLIST apidl[2], pidl_desktop;
+    IPropertyDescriptionList *propdesc_list;
     IPropertyStore *store;
     IEnumShellItems *enum_items;
     IDataObject *data_object;
     IUnknown *punk;
     DWORD count;
     HRESULT hr;
+    static const PROPERTYKEY test_key = {{0}};
 
     if (!pSHCreateShellItem || !pSHCreateShellItemArray || !pSHCreateShellItemArrayFromShellItem)
     {
@@ -5834,9 +5865,21 @@ static void test_ShellItemArrayBindToHandler(void)
             ok(hr == S_OK, "Got 0x%08lx\n", hr);
             if (SUCCEEDED(hr)) IEnumShellItems_Release(enum_items);
 
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_StorageEnum, &IID_IUnknown, (void **)&punk);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr)) IUnknown_Release(punk);
+
             hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_EnumItems, &IID_IEnumShellItems, (void **)&enum_items);
             ok(hr == S_OK, "Got 0x%08lx\n", hr);
             if (SUCCEEDED(hr)) IEnumShellItems_Release(enum_items);
+
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_EnumItems, &IID_IUnknown, (void **)&punk);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr)) IUnknown_Release(punk);
+
+            hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_EnumItems, &IID_IShellItem, (void **)&punk);
+            ok(hr == E_NOINTERFACE, "Got 0x%08lx\n", hr);
+            ok(!punk, "Got unexpected object %p.\n", punk);
 
             hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_PropertyStore, &IID_IPropertyStore, (void **)&store);
             ok(hr == S_OK, "Got 0x%08lx\n", hr);
@@ -5847,6 +5890,22 @@ static void test_ShellItemArrayBindToHandler(void)
                 ok(!count, "Got count %lu.\n", count);
                 IPropertyStore_Release(store);
             }
+
+            hr = IShellItemArray_GetPropertyStore(psia, GPS_DEFAULT, &IID_IPropertyStore, (void **)&store);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IPropertyStore_GetCount(store, &count);
+                ok(hr == S_OK, "Got 0x%08lx\n", hr);
+                ok(!count, "Got count %lu.\n", count);
+                IPropertyStore_Release(store);
+            }
+
+            hr = IShellItemArray_GetPropertyDescriptionList(psia, &test_key, &IID_IPropertyDescriptionList,
+                                                            (void **)&propdesc_list);
+            ok(hr == S_OK, "Got 0x%08lx\n", hr);
+            if (SUCCEEDED(hr))
+                IPropertyDescriptionList_Release(propdesc_list);
 
             hr = IShellItemArray_BindToHandler(psia, NULL, &BHID_DataObject, &IID_IDataObject, (void **)&data_object);
             ok(hr == S_OK, "Got 0x%08lx\n", hr);
@@ -7073,7 +7132,8 @@ static void test_SHCreateDefaultContextMenu(void)
 static void test_enum_format(IDataObject *data_obj)
 {
     IEnumFORMATETC *enum1, *enum2;
-    FORMATETC formats[4];
+    IUnknown *unk;
+    FORMATETC formats[6];
     STGMEDIUM medium;
     ULONG count, ref;
     HRESULT hr;
@@ -7081,6 +7141,17 @@ static void test_enum_format(IDataObject *data_obj)
     hr = IDataObject_EnumFormatEtc(data_obj, DATADIR_GET, &enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
+    hr = IEnumFORMATETC_QueryInterface(enum1, &IID_IUnknown, NULL);
+    ok(hr == E_POINTER, "Got hr %#lx.\n", hr);
+    unk = (void *)0xdeadbeef;
+    hr = IEnumFORMATETC_QueryInterface(enum1, &IID_IUnknown, (void **)&unk);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    if (SUCCEEDED(hr)) IUnknown_Release(unk);
+    unk = (void *)0xdeadbeef;
+    hr = IEnumFORMATETC_QueryInterface(enum1, &IID_IDataObject, (void **)&unk);
+    ok(hr == E_NOINTERFACE, "Got hr %#lx.\n", hr);
+    ok(!unk, "Got %p.\n", unk);
+
     hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
@@ -7088,7 +7159,11 @@ static void test_enum_format(IDataObject *data_obj)
     hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
 
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
@@ -7104,44 +7179,58 @@ static void test_enum_format(IDataObject *data_obj)
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
     ok(count == 1, "Got count %lu.\n", count);
     hr = IEnumFORMATETC_Next(enum1, 1, formats, &count);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
-    todo_wine ok(!count, "Got count %lu.\n", count);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(count == 1, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 1, formats, &count);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(count == 1, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 1, formats, &count);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(!count, "Got count %lu.\n", count);
 
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
     hr = IEnumFORMATETC_Next(enum1, 2, formats, NULL);
-    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Next(enum1, 2, formats, &count);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
-    todo_wine ok(count == 1, "Got count %lu.\n", count);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(count == 2, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 2, formats, &count);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(count == 2, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 2, formats, &count);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(count == 1, "Got count %lu.\n", count);
 
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
-    hr = IEnumFORMATETC_Next(enum1, 4, formats, &count);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
-    todo_wine ok(count == 3, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 6, formats, &count);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(count == 5, "Got count %lu.\n", count);
 
+    hr = IEnumFORMATETC_Clone(enum1, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Clone(enum1, &enum2);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
-    hr = IEnumFORMATETC_Skip(enum1, 4);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    hr = IEnumFORMATETC_Skip(enum1, 6);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Skip(enum1, 1);
     ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
-    hr = IEnumFORMATETC_Skip(enum1, 3);
+    hr = IEnumFORMATETC_Skip(enum1, 4);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Skip(enum1, 1);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Next(enum1, 1, formats, NULL);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
     hr = IEnumFORMATETC_Next(enum2, 1, formats, NULL);
-    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
 
     /* Adding another format does not affect existing enum objects. */
     medium.tymed = TYMED_HGLOBAL;
@@ -7157,9 +7246,9 @@ static void test_enum_format(IDataObject *data_obj)
 
     hr = IEnumFORMATETC_Reset(enum1);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
-    hr = IEnumFORMATETC_Next(enum1, 4, formats, &count);
-    todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
-    todo_wine ok(count == 3, "Got count %lu.\n", count);
+    hr = IEnumFORMATETC_Next(enum1, 7, formats, &count);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(count == 6, "Got count %lu.\n", count);
 
     ref = IEnumFORMATETC_Release(enum1);
     ok(!ref, "Got outstanding refcount %ld.\n", ref);
@@ -7182,6 +7271,9 @@ static void test_DataObject(void)
     HGLOBAL global;
     int *value;
     int ret;
+    DWORD connection;
+    STGMEDIUM set_medium;
+    STGMEDIUM invalid_set_medium;
 
     static const DWORD enum_directions[] = {DATADIR_GET, DATADIR_SET};
 
@@ -7211,9 +7303,88 @@ static void test_DataObject(void)
     fmt.dwAspect = DVASPECT_CONTENT;
     fmt.lindex = -1;
     fmt.tymed = TYMED_HGLOBAL;
+
+    hr = IDataObject_QueryGetData(data_obj, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_QueryInterface(data_obj, &IID_IUnknown, NULL);
+    ok(hr == E_POINTER, "Got hr %#lx.\n", hr);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetData(data_obj, NULL, &medium);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    ok(medium.tymed == 0xcccccccc, "Got tymed %#lx.\n", medium.tymed);
+
+    hr = IDataObject_GetData(data_obj, &fmt, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetDataHere(data_obj, NULL, &medium);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    medium.tymed = TYMED_ISTREAM;
+    medium.hGlobal = NULL;
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == DV_E_TYMED, "Got hr %#lx.\n", hr);
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 1);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == STG_E_MEDIUMFULL, "Got hr %#lx.\n", hr);
+    GlobalFree(medium.hGlobal);
+    medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    GlobalFree(medium.hGlobal);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetCanonicalFormatEtc(data_obj, NULL, &fmt);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetCanonicalFormatEtc(data_obj, &fmt, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetCanonicalFormatEtc(data_obj, &fmt, &fmt);
+    ok(hr == DATA_S_SAMEFORMATETC, "Got hr %#lx.\n", hr);
+    ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
+    ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
+    ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
+    ok(fmt.tymed == TYMED_HGLOBAL, "Got tymed %#lx.\n", fmt.tymed);
+
     hr = IDataObject_QueryGetData(data_obj, &fmt);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
+    invalid_set_medium.tymed = TYMED_HGLOBAL;
+    invalid_set_medium.pUnkForRelease = NULL;
+    invalid_set_medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, sizeof(*value));
+    ok(invalid_set_medium.hGlobal != NULL, "Got %p.\n", invalid_set_medium.hGlobal);
+
+    fmt.dwAspect = DVASPECT_THUMBNAIL;
+    hr = IDataObject_QueryGetData(data_obj, &fmt);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    GlobalFree(medium.hGlobal);
+    hr = IDataObject_SetData(data_obj, &fmt, &invalid_set_medium, TRUE);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+
+    fmt.dwAspect = DVASPECT_CONTENT;
+    fmt.lindex = 0;
+    hr = IDataObject_QueryGetData(data_obj, &fmt);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    GlobalFree(medium.hGlobal);
+    hr = IDataObject_SetData(data_obj, &fmt, &invalid_set_medium, TRUE);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+
+    fmt.lindex = -1;
+    GlobalFree(invalid_set_medium.hGlobal);
     fmt.tymed = TYMED_HGLOBAL | TYMED_ISTREAM;
     hr = IDataObject_QueryGetData(data_obj, &fmt);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
@@ -7232,7 +7403,7 @@ static void test_DataObject(void)
 
     fmt.cfFormat = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECTW);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    todo_wine ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
     if (hr == S_OK)
     {
         ok(medium.tymed == TYMED_HGLOBAL, "medium.tymed = %lx\n", medium.tymed);
@@ -7244,13 +7415,16 @@ static void test_DataObject(void)
 
     fmt.cfFormat = CF_HDROP;
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    todo_wine ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ReleaseStgMedium(&medium);
     fmt.cfFormat = RegisterClipboardFormatA(CFSTR_FILENAMEA);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    todo_wine ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ReleaseStgMedium(&medium);
     fmt.cfFormat = RegisterClipboardFormatW(CFSTR_FILENAMEW);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    todo_wine ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ReleaseStgMedium(&medium);
 
     fmt.cfFormat = RegisterClipboardFormatW(L"bogus_format");
 
@@ -7263,13 +7437,35 @@ static void test_DataObject(void)
     value = GlobalLock(global);
     *value = 0xabacab;
     GlobalUnlock(global);
-    medium.tymed = TYMED_HGLOBAL;
-    medium.pUnkForRelease = NULL;
-    medium.hGlobal = global;
+    set_medium.tymed = TYMED_HGLOBAL;
+    set_medium.pUnkForRelease = NULL;
+    set_medium.hGlobal = global;
     fmt.tymed = TYMED_HGLOBAL;
-    hr = IDataObject_SetData(data_obj, &fmt, &medium, FALSE);
-    ok(hr == E_INVALIDARG || hr == E_NOTIMPL /* win 8+ */, "Got hr %#lx.\n", hr);
-    hr = IDataObject_SetData(data_obj, &fmt, &medium, TRUE);
+    hr = IDataObject_SetData(data_obj, NULL, &set_medium, TRUE);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_SetData(data_obj, &fmt, NULL, TRUE);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    hr = IDataObject_SetData(data_obj, &fmt, &set_medium, FALSE);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(medium.hGlobal && medium.hGlobal != global, "Got global %p.\n", medium.hGlobal);
+    value = GlobalLock(medium.hGlobal);
+    ok(*value == 0xabacab, "Got value %#x.\n", *value);
+    GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+
+    value = GlobalLock(global);
+    ok(value != NULL, "Got NULL.\n");
+    if (value)
+    {
+        ok(*value == 0xabacab, "Got value %#x.\n", *value);
+        GlobalUnlock(global);
+    }
+
+    hr = IDataObject_SetData(data_obj, &fmt, &set_medium, TRUE);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
     hr = IDataObject_QueryGetData(data_obj, &fmt);
@@ -7282,6 +7478,65 @@ static void test_DataObject(void)
     ok(*value == 0xabacab, "Got value %#x.\n", *value);
     GlobalUnlock(medium.hGlobal);
     ReleaseStgMedium(&medium);
+
+    fmt.cfFormat = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECTW);
+    global = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+    value = GlobalLock(global);
+    *value = DROPEFFECT_MOVE;
+    GlobalUnlock(global);
+    set_medium.tymed = TYMED_HGLOBAL;
+    set_medium.pUnkForRelease = NULL;
+    set_medium.hGlobal = global;
+
+    hr = IDataObject_SetData(data_obj, &fmt, &set_medium, FALSE);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(medium.hGlobal && medium.hGlobal != global, "Got global %p.\n", medium.hGlobal);
+    value = GlobalLock(medium.hGlobal);
+    ok(*value == DROPEFFECT_MOVE, "Got value %#x.\n", *value);
+    GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+
+    value = GlobalLock(global);
+    ok(value != NULL, "Got NULL.\n");
+    if (value)
+    {
+        ok(*value == DROPEFFECT_MOVE, "Got value %#x.\n", *value);
+        GlobalUnlock(global);
+    }
+
+    hr = IDataObject_SetData(data_obj, &fmt, &set_medium, TRUE);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    memset(&medium, 0xcc, sizeof(medium));
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(medium.hGlobal && medium.hGlobal != global, "Got global %p.\n", medium.hGlobal);
+    value = GlobalLock(medium.hGlobal);
+    ok(*value == DROPEFFECT_MOVE, "Got value %#x.\n", *value);
+    GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+
+    hr = IDataObject_EnumFormatEtc(data_obj, DATADIR_GET, NULL);
+    ok(hr == E_POINTER, "Got hr %#lx.\n", hr);
+
+    connection = 0xdeadbeef;
+    hr = IDataObject_DAdvise(data_obj, &fmt, 0, NULL, &connection);
+    ok(hr == OLE_E_ADVISENOTSUPPORTED, "Got hr %#lx.\n", hr);
+    ok(!connection, "Got connection %lu.\n", connection);
+    hr = IDataObject_DAdvise(data_obj, &fmt, 0, NULL, NULL);
+    ok(hr == OLE_E_ADVISENOTSUPPORTED, "Got hr %#lx.\n", hr);
+    hr = IDataObject_DUnadvise(data_obj, 1);
+    ok(hr == OLE_E_ADVISENOTSUPPORTED, "Got hr %#lx.\n", hr);
+    enum_format = (void *)0xdeadbeef;
+    hr = IDataObject_EnumDAdvise(data_obj, (IEnumSTATDATA **)&enum_format);
+    ok(hr == OLE_E_ADVISENOTSUPPORTED, "Got hr %#lx.\n", hr);
+    ok(!enum_format, "Got %p.\n", enum_format);
+    hr = IDataObject_EnumDAdvise(data_obj, NULL);
+    ok(hr == OLE_E_ADVISENOTSUPPORTED, "Got hr %#lx.\n", hr);
 
     for (unsigned int i = 0; i < ARRAY_SIZE(enum_directions); ++i)
     {
@@ -7302,9 +7557,8 @@ static void test_DataObject(void)
         hr = IEnumFORMATETC_Next(enum_format, 1, &fmt, NULL);
         ok(hr == S_OK, "Got hr %#lx.\n", hr);
         ret = GetClipboardFormatNameW(fmt.cfFormat, format_name, ARRAY_SIZE(format_name));
-        ok(ret > 0, "Got %d.\n",ret);
-        if (ret > 0)
-            todo_wine ok(!wcscmp(format_name, CFSTR_PREFERREDDROPEFFECTW), "Got clipboard format %s.\n", debugstr_w(format_name));
+        ok(!ret, "Got %d.\n",ret);
+        ok(fmt.cfFormat == CF_HDROP, "Got clipboard format %#x.\n", fmt.cfFormat);
         ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
         ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
         ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
@@ -7314,14 +7568,44 @@ static void test_DataObject(void)
         ok(hr == S_OK, "Got hr %#lx.\n", hr);
         ret = GetClipboardFormatNameW(fmt.cfFormat, format_name, ARRAY_SIZE(format_name));
         ok(ret > 0, "Got %d.\n",ret);
-        todo_wine ok(!wcscmp(format_name, L"bogus_format"), "Got clipboard format %s.\n", debugstr_w(format_name));
+        ok(!wcscmp(format_name, L"FileName"), "Got clipboard format %s.\n", debugstr_w(format_name));
         ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
         ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
         ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
         ok(fmt.tymed == TYMED_HGLOBAL, "Got tymed %#lx.\n", fmt.tymed);
 
         hr = IEnumFORMATETC_Next(enum_format, 1, &fmt, NULL);
-        todo_wine ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+        ok(hr == S_OK, "Got hr %#lx.\n", hr);
+        ret = GetClipboardFormatNameW(fmt.cfFormat, format_name, ARRAY_SIZE(format_name));
+        ok(ret > 0, "Got %d.\n",ret);
+        ok(!wcscmp(format_name, CFSTR_FILENAMEW), "Got clipboard format %s.\n", debugstr_w(format_name));
+        ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
+        ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
+        ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
+        ok(fmt.tymed == TYMED_HGLOBAL, "Got tymed %#lx.\n", fmt.tymed);
+
+        hr = IEnumFORMATETC_Next(enum_format, 1, &fmt, NULL);
+        ok(hr == S_OK, "Got hr %#lx.\n", hr);
+        ret = GetClipboardFormatNameW(fmt.cfFormat, format_name, ARRAY_SIZE(format_name));
+        ok(ret > 0, "Got %d.\n",ret);
+        ok(!wcscmp(format_name, CFSTR_PREFERREDDROPEFFECTW), "Got clipboard format %s.\n", debugstr_w(format_name));
+        ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
+        ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
+        ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
+        ok(fmt.tymed == TYMED_HGLOBAL, "Got tymed %#lx.\n", fmt.tymed);
+
+        hr = IEnumFORMATETC_Next(enum_format, 1, &fmt, NULL);
+        ok(hr == S_OK, "Got hr %#lx.\n", hr);
+        ret = GetClipboardFormatNameW(fmt.cfFormat, format_name, ARRAY_SIZE(format_name));
+        ok(ret > 0, "Got %d.\n",ret);
+        ok(!wcscmp(format_name, L"bogus_format"), "Got clipboard format %s.\n", debugstr_w(format_name));
+        ok(!fmt.ptd, "Got target device %p.\n", fmt.ptd);
+        ok(fmt.dwAspect == DVASPECT_CONTENT, "Got aspect %#lx.\n", fmt.dwAspect);
+        ok(fmt.lindex == -1, "Got index %ld.\n", fmt.lindex);
+        ok(fmt.tymed == TYMED_HGLOBAL, "Got tymed %#lx.\n", fmt.tymed);
+
+        hr = IEnumFORMATETC_Next(enum_format, 1, &fmt, NULL);
+        ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
 
         IEnumFORMATETC_Release(enum_format);
     }
@@ -7765,7 +8049,7 @@ static void test_copy_paste(void)
     *effect = DROPEFFECT_MOVE;
     GlobalUnlock(medium.hGlobal);
     hr = IDataObject_SetData(data_obj, &format, &medium, TRUE);
-    todo_wine ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
     IDataObject_Release(data_obj);
 

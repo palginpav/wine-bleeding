@@ -1002,26 +1002,78 @@ static HRESULT browse_dialog_to(FileDialogImpl *This, IShellItem *psi, const cha
 }
 
 static HRESULT create_itemarray_from_dialog_filename(FileDialogImpl *This, REFIID riid, void **ppv);
+static HRESULT get_effective_folder(FileDialogImpl *This, IShellItem **ppsi);
+
+static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWSTR filename,
+        REFIID riid, void **ppv)
+{
+    IShellItem *folder = NULL;
+    WCHAR *path = NULL, *basename;
+    HRESULT hr;
+
+    if (!ppv)
+        return E_INVALIDARG;
+
+    *ppv = NULL;
+
+    if (!filename || !filename[0])
+        return E_FAIL;
+
+    if (PathIsRelativeW(filename))
+    {
+        hr = get_effective_folder(This, &folder);
+        if (FAILED(hr))
+            return hr;
+
+        hr = SHCreateItemFromRelativeName(folder, filename, NULL, riid, ppv);
+        IShellItem_Release(folder);
+        return hr;
+    }
+
+    path = StrDupW(filename);
+    if (!path)
+        return E_OUTOFMEMORY;
+
+    basename = PathFindFileNameW(path);
+    if (basename && basename[0] && basename != path)
+    {
+        if (PathRemoveFileSpecW(path) && path[0])
+        {
+            hr = SHCreateItemFromParsingName(path, NULL, &IID_IShellItem, (void **)&folder);
+            if (SUCCEEDED(hr))
+            {
+                hr = SHCreateItemFromRelativeName(folder, basename, NULL, riid, ppv);
+                IShellItem_Release(folder);
+                LocalFree(path);
+                return hr;
+            }
+        }
+    }
+
+    hr = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
+    LocalFree(path);
+    return hr;
+}
 
 static HRESULT create_item_from_dialog_filename(FileDialogImpl *This, IShellItem **ppsi)
 {
-    IShellItemArray *array;
-    DWORD count;
+    LPWSTR files = NULL, tmp_files = NULL;
+    UINT file_count = 0, size_used;
     HRESULT hr;
 
     *ppsi = NULL;
 
-    hr = create_itemarray_from_dialog_filename(This, &IID_IShellItemArray, (void **)&array);
-    if (FAILED(hr))
-        return hr;
+    if (!get_file_name(This, &tmp_files))
+        return E_FAIL;
 
-    hr = IShellItemArray_GetCount(array, &count);
-    if (SUCCEEDED(hr) && count == 1)
-        hr = IShellItemArray_GetItemAt(array, 0, ppsi);
+    file_count = COMDLG32_SplitFileNames(tmp_files, lstrlenW(tmp_files), &files, &size_used);
+    CoTaskMemFree(tmp_files);
+    if (file_count == 1)
+        hr = create_shellitem_from_dialog_filename(This, files, &IID_IShellItem, (void **)ppsi);
     else
         hr = E_FAIL;
 
-    IShellItemArray_Release(array);
+    free(files);
     return hr;
 }
 
@@ -3732,6 +3784,7 @@ static HRESULT WINAPI IFileDialog2_fnGetResult(IFileDialog2 *iface, IShellItem *
 
     if(!ppsi)
         return E_INVALIDARG;
+    *ppsi = NULL;
 
     if(This->psia_results)
     {
@@ -4195,6 +4248,7 @@ static HRESULT WINAPI IFileOpenDialog_fnGetResults(IFileOpenDialog *iface, IShel
 static HRESULT WINAPI IFileOpenDialog_fnGetSelectedItems(IFileOpenDialog *iface, IShellItemArray **ppsai)
 {
     FileDialogImpl *This = impl_from_IFileOpenDialog(iface);
+    IShellItem *item = NULL;
     HRESULT hr;
 
     TRACE("%p (%p)\n", This, ppsai);
@@ -4214,6 +4268,15 @@ static HRESULT WINAPI IFileOpenDialog_fnGetSelectedItems(IFileOpenDialog *iface,
     hr = create_itemarray_from_dialog_filename(This, &IID_IShellItemArray, (void **)ppsai);
     if (FAILED(hr))
         hr = create_pickfolder_result_array_from_state(This, &IID_IShellItemArray, (void **)ppsai);
+    if (FAILED(hr))
+    {
+        hr = create_item_from_dialog_filename(This, &item);
+        if (SUCCEEDED(hr))
+        {
+            hr = SHCreateShellItemArrayFromShellItem(item, &IID_IShellItemArray, (void **)ppsai);
+            IShellItem_Release(item);
+        }
+    }
     if (FAILED(hr))
         return E_FAIL;
 
@@ -4747,7 +4810,7 @@ static HRESULT WINAPI IServiceProvider_fnQueryService(IServiceProvider *iface,
                                                       REFIID riid, void **ppv)
 {
     FileDialogImpl *This = impl_from_IServiceProvider(iface);
-    HRESULT hr = E_NOINTERFACE;
+    HRESULT hr = E_NOTIMPL;
     TRACE("%p (%s, %s, %p)\n", This, debugstr_guid(guidService), debugstr_guid(riid), ppv);
 
     if (!ppv)
@@ -4779,14 +4842,6 @@ static HRESULT WINAPI IServiceProvider_fnQueryService(IServiceProvider *iface,
     else if((IsEqualGUID(guidService, &IID_IFolderView) || IsEqualGUID(guidService, &IID_IFolderView2)) && This->peb)
     {
         hr = IExplorerBrowser_GetCurrentView(This->peb, riid, ppv);
-    }
-    else
-    {
-        TRACE("Service %s not matched, trying IFileDialog2 for riid %s\n",
-              debugstr_guid(guidService), debugstr_guid(riid));
-        hr = IFileDialog2_QueryInterface(&This->IFileDialog2_iface, riid, ppv);
-        if (FAILED(hr))
-            TRACE("IFileDialog2_QueryInterface(riid=%s) failed hr=%08lx\n", debugstr_guid(riid), hr);
     }
 
     return hr;
