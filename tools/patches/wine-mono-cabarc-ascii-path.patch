@@ -1,0 +1,43 @@
+diff --git a/tools/build-msi-tables.sh b/tools/build-msi-tables.sh
+index 776cdfa2..7c4d5fc5 100644
+--- a/tools/build-msi-tables.sh
++++ b/tools/build-msi-tables.sh
+@@ -7,7 +7,8 @@ rm -f "${CABFILENAME}" "${TABLEDIR}/*.idt"
+ mkdir -p "${TABLEDIR}"
+ cp "${TABLESRCDIR}"/*.idt "${TABLEDIR}"
+ 
+-IMAGECABWINPATH=`${WINE} winepath -w "${CABFILENAME}"`
++LOCALCAB_UNIX=`mktemp /tmp/winemono-cab.XXXXXX.cab`
++LOCALCAB_WINPATH=`${WINE} winepath -w "${LOCALCAB_UNIX}"`
+ 
+ CONTENTDIR="${TABLEDIR}/cab_contents"
+ rm -rf "${CONTENTDIR}"
+@@ -58,7 +59,9 @@ mono "$GENFILEHASHES" >> ${TABLEDIR}/msifilehash.idt
+ 
+ cd "${CONTENTDIR}"
+ 
+-${WINE} cabarc -m mszip -r -p N "$IMAGECABWINPATH" * || exit 1
++rm -f "${LOCALCAB_UNIX}"
++${WINE} cabarc -m mszip -r -p N "${LOCALCAB_WINPATH}" * || exit 1
++cp -f "${LOCALCAB_UNIX}" "${CABFILENAME}"
+ 
+ cd "${IMAGEDIR}"
+ 
+@@ -68,7 +71,7 @@ rm -rf "${CONTENTDIR}"
+ SEQ=0
+ rm -f "${TABLEDIR}/sequence"
+ 
+-${WINE} cabarc L "$IMAGECABWINPATH" | sed 's/\r//' | sed -e "$FILEKEY_REV_EXPR" | while read -r f; do
++${WINE} cabarc L "${LOCALCAB_WINPATH}" | sed 's/\r//' | sed -e "$FILEKEY_REV_EXPR" | while read -r f; do
+     FILEKEY=`echo $f|sed -e "$FILEKEY_EXPR"`
+     FILESIZE=`ls -l "$f" | awk '{print $5}'`
+     PARENT=`dirname "$f"`
+@@ -87,6 +90,8 @@ done
+ 
+ printf '1\t%s\t\t%s\t\t\n' `cat "${TABLEDIR}/sequence"` "$CABINET" >> ${TABLEDIR}/media.idt
+ 
++rm -f "${LOCALCAB_UNIX}"
++
+ if test x${WHICHMSI} = xsupport; then
+ 	PRODUCTCODE=`uuidgen -s -n 27ec5e1a-7f2f-445c-9e78-76ae42a51b6d -N "$MSI_VERSION" | tr [a-z] [A-Z]`
+ 	PACKAGECODE=`uuidgen -s -n 5b2a0add-9ec1-4c3c-b749-2c7d96db4656 -N "$MSI_VERSION" | tr [a-z] [A-Z]`

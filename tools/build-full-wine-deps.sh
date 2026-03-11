@@ -7,7 +7,7 @@
 #              или скачивается с musl.cc, или собирается из исходников (--build-mingw-from-source).
 # Запуск из корня дерева Wine: ./tools/build-full-wine-deps.sh [опции]
 # Самодостаточная сборка: Wine — из нашего дерева (если собран), нативные lib — с системы (gstreamer, vulkan и т.д.).
-# Опции: --build-mingw-from-source; --no-install-wine; --no-bundle-system-libs; --copy-native-from=DIR; --only-mingw; --force-rebuild; --no-wine-icu (не ставить wine-icu под системную libicu).
+# Опции: --build-mingw-from-source; --no-install-wine; --no-bundle-system-libs; --copy-native-from=DIR; --only-mingw; --force-rebuild; --no-wine-icu (не ставить wine-icu под системную libicu); --no-wine-mono (не собирать локальный wine-mono).
 # По завершении создаётся дистрибутив в подпапке dist: $WINE_ROOT/dist/$DIST_NAME. Подробнее: README.md
 
 set -e
@@ -19,6 +19,7 @@ COPY_NATIVE_FROM=""
 ONLY_MINGW=0
 FORCE_REBUILD_DEPS=0
 WITH_WINE_ICU=1
+WITH_WINE_MONO=1
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --build-mingw-from-source) BUILD_MINGW_FROM_SOURCE=1 ;;
@@ -31,6 +32,7 @@ while [ "$#" -gt 0 ]; do
         --only-mingw)             ONLY_MINGW=1 ;;
         --force-rebuild)          FORCE_REBUILD_DEPS=1 ;;
         --no-wine-icu)            WITH_WINE_ICU=0 ;;
+        --no-wine-mono)           WITH_WINE_MONO=0 ;;
         *) echo "Неизвестный аргумент: $1. См. заголовок скрипта или README.md." >&2; exit 1 ;;
     esac
     shift
@@ -521,5 +523,16 @@ if [ "$ONLY_MINGW" -eq 0 ] && [ "$WITH_WINE_ICU" -eq 1 ] && [ -n "$OUT_DIST" ] &
         echo "  wine-icu установлен в lib/wine/icu/."
     else
         echo "  Предупреждение: wine-icu не установлен (нужны: git, cmake, libicu-devel). См. README.md (Troubleshooting: installers and ICU) или ./tools/install-wine-icu.sh" >&2
+    fi
+fi
+
+# Локальный wine-mono с патчем IconConverter (замена IL-хака source-патчем)
+if [ "$ONLY_MINGW" -eq 0 ] && [ "$WITH_WINE_MONO" -eq 1 ] && [ -n "$OUT_DIST" ] && [ -d "$OUT_DIST" ]; then
+    echo ""
+    echo "Сборка и установка локального wine-mono (patched IconConverter) в дистрибутив..."
+    if DEPS_DIR="$DEPS_DIR" WINE_MONO_FORCE_REBUILD="$FORCE_REBUILD_DEPS" "$WINE_ROOT/tools/install-wine-mono.sh" "$OUT_DIST" 2>&1; then
+        echo "  wine-mono установлен в share/wine/mono/."
+    else
+        echo "  Предупреждение: wine-mono не установлен. Проверьте зависимости (wine, make, git, toolchain mono) и лог выше." >&2
     fi
 fi

@@ -1,0 +1,26 @@
+diff --git a/mono/mcs/class/System.Drawing/System.Drawing/IconConverter.cs b/mono/mcs/class/System.Drawing/System.Drawing/IconConverter.cs
+index 8f35eb2e6f0..5f4f78087cb 100644
+--- a/mono/mcs/class/System.Drawing/System.Drawing/IconConverter.cs
++++ b/mono/mcs/class/System.Drawing/System.Drawing/IconConverter.cs
+@@ -55,7 +55,9 @@ namespace System.Drawing {
+ 
+ 		public override bool CanConvertTo (ITypeDescriptorContext context, Type destinationType)
+ 		{
+-			if ((destinationType == typeof (System.Byte [])) || (destinationType == typeof (System.String)))
++			if ((destinationType == typeof (System.Byte [])) ||
++			    (destinationType == typeof (System.String)) ||
++			    (destinationType == typeof (System.Drawing.Image)))
+ 				return true;
+ 			else
+ 				return false;
+@@ -75,7 +77,9 @@ namespace System.Drawing {
+ 
+ 		public override object ConvertTo (ITypeDescriptorContext context, CultureInfo culture, object value, Type destinationType)
+ 		{
+-			if ((value is Icon) && (destinationType == typeof (string)))
++			if ((value is Icon) && (destinationType == typeof (Image)))
++				return ((Icon) value).ToBitmap ();
++			else if ((value is Icon) && (destinationType == typeof (string)))
+ 				return value.ToString ();
+ 			else if (value == null && destinationType == typeof (string))
+ 				return "(none)";

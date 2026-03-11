@@ -257,6 +257,8 @@ typedef struct tagLISTVIEW_INFO
   DWORD dwStyle;		/* the cached window GWL_STYLE */
   DWORD dwLvExStyle;		/* extended listview style */
   DWORD uView;			/* current view available through LVM_[G,S]ETVIEW */
+  BOOL group_view_enabled;
+  LVTILEVIEWINFO tile_view_info;
 
   /* edit item */
   HWND hwndEdit;
@@ -9259,6 +9261,33 @@ static BOOL LISTVIEW_SetTextColor (LISTVIEW_INFO *infoPtr, COLORREF color)
     return TRUE;
 }
 
+static BOOL LISTVIEW_EnableGroupView(LISTVIEW_INFO *infoPtr, BOOL enable)
+{
+    BOOL old = infoPtr->group_view_enabled;
+
+    infoPtr->group_view_enabled = !!enable;
+    return old;
+}
+
+static BOOL LISTVIEW_GetTileViewInfo(const LISTVIEW_INFO *infoPtr, LVTILEVIEWINFO *info)
+{
+    if (!info || info->cbSize < sizeof(*info))
+        return FALSE;
+
+    *info = infoPtr->tile_view_info;
+    info->cbSize = sizeof(*info);
+    return TRUE;
+}
+
+static BOOL LISTVIEW_SetTileViewInfo(LISTVIEW_INFO *infoPtr, const LVTILEVIEWINFO *info)
+{
+    if (!info || info->cbSize < sizeof(*info))
+        return FALSE;
+
+    infoPtr->tile_view_info = *info;
+    return TRUE;
+}
+
 /***
  * DESCRIPTION:
  * Sets new ToolTip window to ListView control.
@@ -9662,6 +9691,7 @@ static LRESULT LISTVIEW_Create(HWND hwnd, const CREATESTRUCTW *lpcs)
 
   infoPtr->dwStyle = lpcs->style;
   map_style_view(infoPtr);
+  infoPtr->tile_view_info.cbSize = sizeof(infoPtr->tile_view_info);
 
   infoPtr->notifyFormat = SendMessageW(infoPtr->hwndNotify, WM_NOTIFYFORMAT,
                                        (WPARAM)infoPtr->hwndSelf, NF_QUERY);
@@ -11471,7 +11501,8 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
   case LVM_EDITLABELW:
     return (LRESULT)LISTVIEW_EditLabelT(infoPtr, (INT)wParam,
                                         uMsg == LVM_EDITLABELW);
-  /* case LVM_ENABLEGROUPVIEW: */
+  case LVM_ENABLEGROUPVIEW:
+    return LISTVIEW_EnableGroupView(infoPtr, (BOOL)wParam);
 
   case LVM_ENSUREVISIBLE:
     return LISTVIEW_EnsureVisible(infoPtr, (INT)wParam, (BOOL)lParam);
@@ -11614,7 +11645,8 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
   /* case LVM_GETTILEINFO: */
 
-  /* case LVM_GETTILEVIEWINFO: */
+  case LVM_GETTILEVIEWINFO:
+    return LISTVIEW_GetTileViewInfo(infoPtr, (LVTILEVIEWINFO *)lParam);
 
   case LVM_GETTOOLTIPS:
     if( !infoPtr->hwndToolTip )
@@ -11657,7 +11689,8 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
   /* case LVM_INSERTMARKHITTEST: */
 
-  /* case LVM_ISGROUPVIEWENABLED: */
+  case LVM_ISGROUPVIEWENABLED:
+    return infoPtr->group_view_enabled;
 
   case LVM_ISITEMVISIBLE:
     return LISTVIEW_IsItemVisible(infoPtr, (INT)wParam);
@@ -11780,7 +11813,8 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
   /* case LVM_SETTILEINFO: */
 
-  /* case LVM_SETTILEVIEWINFO: */
+  case LVM_SETTILEVIEWINFO:
+    return LISTVIEW_SetTileViewInfo(infoPtr, (const LVTILEVIEWINFO *)lParam);
 
   /* case LVM_SETTILEWIDTH: */
 

@@ -9,6 +9,7 @@
 #   --no-bundle-system-libs    — не копировать нативные lib с системы
 #   --copy-native-from=DIR     — взять нативные lib из готового дистрибутива
 #   --no-wine-icu              — не ставить wine-icu (системная libicu, x86_64 + i386) в дистрибутив
+#   --no-wine-mono             — не собирать и не устанавливать локальный wine-mono в дистрибутив
 #
 # See README.md for details.
 
@@ -19,7 +20,7 @@ DEPS_DIR="$WINE_ROOT/build-deps"
 PASSTHROUGH=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --build-mingw-from-source|--no-install-wine|--no-bundle-system-libs|--force-rebuild|--no-wine-icu) PASSTHROUGH+=("$1") ;;
+        --build-mingw-from-source|--no-install-wine|--no-bundle-system-libs|--force-rebuild|--no-wine-icu|--no-wine-mono) PASSTHROUGH+=("$1") ;;
         --copy-native-from=*) PASSTHROUGH+=("$1") ;;
         --copy-native-from) [ -n "${2:-}" ] && PASSTHROUGH+=("$1" "$2") && shift || { echo "Требуется аргумент для --copy-native-from" >&2; exit 1; }; shift ;;
         *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;

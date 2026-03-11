@@ -1,6 +1,6 @@
 # wine-bleeding
 
-`wine-bleeding` is a Wine fork aimed at one practical result: a standalone, ready-to-run compatibility runtime rather than a bare upstream source checkout. It carries targeted compatibility work for real-world Windows software, including WinRT USB, shell/file dialogs, MSI, Mono/.NET, WPF, and related integration paths, then packages the result into a Proton-style `dist/WINE-BLEEDING-*` layout with DXVK, VKD3D-Proton, DXVK-NVAPI, optional native Linux libraries, and optional `wine-icu`. In short: upstream Wine is the base, `wine-bleeding` is the runtime product built on top of it.
+`wine-bleeding` is a Wine fork aimed at one practical result: a standalone, ready-to-run compatibility runtime rather than a bare upstream source checkout. It carries targeted compatibility work for real-world Windows software, including WinRT USB, shell/file dialogs, MSI, Mono/.NET, WPF, and related integration paths, then packages the result into a Proton-style `dist/WINE-BLEEDING-*` layout with DXVK, VKD3D-Proton, DXVK-NVAPI, patched local `wine-mono`, optional native Linux libraries, and optional `wine-icu`. In short: upstream Wine is the base, `wine-bleeding` is the runtime product built on top of it.
 
 ## Quick start (recommended)
 
@@ -19,6 +19,7 @@ This script will:
 5. Build **DXVK**, **VKD3D-Proton**, **DXVK-NVAPI** (x64 and x32).
 6. Create the **dist** under `dist/WINE-BLEEDING-DDMMYYYY/`: install Wine from this tree, copy DXVK/VKD3D/NVAPI DLLs, and optionally copy native libs from the system.
 7. Build and install **wine-icu** (under system libicu) into `dist/.../lib/wine/icu/` so installers and .NET apps that need ICU work without libicu68 (use `--no-wine-icu` to skip).
+8. Build and install a patched local **wine-mono** into `dist/.../share/wine/mono/wine-mono-<WINE_MONO_VERSION>/` (use `--no-wine-mono` to skip).
 
 After a successful run, use:
 
@@ -34,7 +35,8 @@ After a successful run, use:
 |--------|---------|
 | `./tools/full-build.sh` | Full pipeline: env check → MinGW → configure Wine → build Wine → build deps → create dist. |
 | `./tools/configure-wine-full.sh` | Configure Wine with max features (WoW64, X, build-id; no optional features disabled). |
-| `./tools/build-full-wine-deps.sh` | Build DXVK, VKD3D-Proton, DXVK-NVAPI and create dist; install Wine into dist if already built. |
+| `./tools/build-full-wine-deps.sh` | Build DXVK, VKD3D-Proton, DXVK-NVAPI, patched local wine-mono and create dist; install Wine into dist if already built. |
+| `./tools/install-wine-mono.sh` | Build patched local wine-mono and install it into `share/wine/mono` of a dist. |
 
 All commands are meant to be run from the **wine-bleeding tree root**.
 
@@ -52,6 +54,7 @@ Same options as `build-full-wine-deps.sh`:
 | `--copy-native-from=DIR` | Copy native libs from an existing dist (e.g. another Proton) instead of the system. Implies no system bundling. |
 | `--force-rebuild` | Always rebuild DXVK, VKD3D-Proton, DXVK-NVAPI (ignore saved rev). |
 | `--no-wine-icu` | Do not build/install wine-icu (system libicu) into the dist. Use if you have libicu68 or do not need ICU for installers. |
+| `--no-wine-mono` | Do not build/install patched local wine-mono into the dist. |
 
 Examples:
 
@@ -96,6 +99,7 @@ If you prefer to run steps manually:
 - **Build tools:** gcc, g++, make, flex, bison, pkg-config, **meson**, **ninja**.
 - **For DXVK/VKD3D:** **glslang** (glslangValidator), **Vulkan** (vulkan-headers, vulkan-loader).
 - **MinGW:** Either from the system (e.g. `mingw-w64`), or the scripts will download a prebuilt cross-compiler from [musl.cc](https://musl.cc) into `build-deps/`, or you can use `--build-mingw-from-source` to build MinGW (needs gcc, g++, make, bison, flex, git, texinfo, etc.).
+- **For local wine-mono build:** `libtoolize` (libtool), `python3`, `cmake`, autotools stack required by Mono.
 
 More optional packages (X11, Pulse, GStreamer, FFmpeg, libusb, udev, etc.) enable more Wine features; `configure` will report what is missing. See your distro’s Wine build docs for package names (e.g. Fedora: `libX11-devel`, `vulkan-headers`; Debian: `libx11-dev`, `libvulkan-dev`, `mingw-w64`).
 
@@ -112,7 +116,7 @@ The output lives under `dist/WINE-BLEEDING-DDMMYYYY/` (or `DIST_NAME` if set):
 | `lib64` | Symlink to `lib/wine`. |
 | `lib/wine/` | Wine DLLs and loaders; subdirs `dxvk`, `vkd3d-proton`, `nvapi`, and (if built) `icu` with DXVK, D3D12, NVAPI and wine-icu DLLs. Standalone libvkd3d is not built. |
 | `lib/$(uname -m)-linux-gnu/` | Native libs copied from the system (if not disabled). |
-| `share/` | Wine data (fonts, nls, etc.). |
+| `share/` | Wine data (fonts, nls, etc.), including local `wine-mono` in `share/wine/mono/` (unless disabled). |
 
 Use this dist as a standalone Wine runtime or drop it into PortProton-style launchers.
 
