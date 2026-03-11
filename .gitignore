@@ -1,29 +1,28 @@
-# This repository should contain source code, vendored dependency sources,
-# and build scripts only. Ignore local build output, packaged artifacts,
-# generated files, and editor metadata.
+# Keep the repository focused on source code, vendored dependency sources,
+# and build/publishing scripts. Ignore generated output and local workspace data.
 
 # Top-level configure/build output
 /autom4te.cache/
 /config.status
 /config.log
 /compile_commands.json
-/TAGS
-/tags
+/Makefile
 /loader-wow64
 /wine
+/TAGS
+/tags
 /tmp*/
+/configure~
 
-# Generated headers and makefiles
+# Generated headers and stamps
 /include/config.h
 /include/stamp-h
-/Makefile
 
-# Distribution artifacts and helper build payloads
+# Distribution and local packaging output
 /dist/
-/build-deps/
 /tools/publish-release.sh
 
-# In-tree per-module build output
+# In-tree build output
 **/i386-windows/
 **/x86_64-windows/
 **/*.ok
