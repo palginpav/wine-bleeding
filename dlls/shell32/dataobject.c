@@ -235,7 +235,21 @@ static void release_data_entries(struct data *data, size_t count)
 
 static BOOL data_object_format_matches(const struct data *data, const FORMATETC *format)
 {
-    return data->cf == format->cfFormat && format->dwAspect == DVASPECT_CONTENT && format->lindex == -1;
+    return data->cf == format->cfFormat && !format->ptd
+            && format->dwAspect == DVASPECT_CONTENT && format->lindex == -1;
+}
+
+static HRESULT data_object_validate_format(const FORMATETC *format)
+{
+    if (format->ptd)
+        return DV_E_DVTARGETDEVICE;
+    if (format->dwAspect != DVASPECT_CONTENT)
+        return DV_E_DVASPECT;
+    if (format->lindex != -1)
+        return DV_E_LINDEX;
+    if (!(format->tymed & TYMED_HGLOBAL))
+        return DV_E_TYMED;
+    return S_OK;
 }
 
 static HGLOBAL render_preferred_drop_effect(DWORD effect)
@@ -351,17 +365,16 @@ static ULONG WINAPI IDataObject_fnRelease(IDataObject *iface)
 static HRESULT WINAPI IDataObject_fnGetData(IDataObject *iface, FORMATETC *format, STGMEDIUM *medium)
 {
     IDataObjectImpl *obj = impl_from_IDataObject(iface);
+    HRESULT hr;
 
     TRACE("iface %p, format %p, medium %p.\n", iface, format, medium);
 
     if (!format || !medium) return E_INVALIDARG;
     memset(medium, 0, sizeof(*medium));
 
-    if (!(format->tymed & TYMED_HGLOBAL))
-    {
-        FIXME("Unrecognized tymed %#lx, returning DV_E_FORMATETC.\n", format->tymed);
-        return DV_E_FORMATETC;
-    }
+    hr = data_object_validate_format(format);
+    if (FAILED(hr))
+        return hr;
 
     for (size_t i = 0; i < obj->data_count; ++i)
     {
@@ -394,12 +407,16 @@ static HRESULT WINAPI IDataObject_fnGetData(IDataObject *iface, FORMATETC *forma
 static HRESULT WINAPI IDataObject_fnGetDataHere(IDataObject *iface, LPFORMATETC pformatetc, STGMEDIUM *pmedium)
 {
 	IDataObjectImpl *This = impl_from_IDataObject(iface);
+        HRESULT hr;
 	TRACE("(%p)->(%p,%p)\n", This, pformatetc, pmedium);
 
         if (!pformatetc || !pmedium) return E_INVALIDARG;
         if (pmedium->tymed != TYMED_HGLOBAL) return DV_E_TYMED;
-        if (!(pformatetc->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
         if (!pmedium->hGlobal) return STG_E_MEDIUMFULL;
+
+        hr = data_object_validate_format(pformatetc);
+        if (FAILED(hr))
+            return hr;
 
         for (size_t i = 0; i < This->data_count; ++i)
         {
@@ -436,16 +453,14 @@ static HRESULT WINAPI IDataObject_fnGetDataHere(IDataObject *iface, LPFORMATETC 
 static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *format)
 {
     IDataObjectImpl *obj = impl_from_IDataObject(iface);
+    HRESULT hr;
 
     TRACE("iface %p, format %p.\n", iface, format);
 
     if (!format) return E_INVALIDARG;
-
-    if (!(format->tymed & TYMED_HGLOBAL))
-    {
-        FIXME("Unrecognized tymed %#lx, returning S_FALSE.\n", format->tymed);
-        return S_FALSE;
-    }
+    hr = data_object_validate_format(format);
+    if (FAILED(hr))
+        return hr;
 
     for (size_t i = 0; i < obj->data_count; ++i)
     {
@@ -453,7 +468,7 @@ static HRESULT WINAPI IDataObject_fnQueryGetData(IDataObject *iface, FORMATETC *
             return S_OK;
     }
 
-    return S_FALSE;
+    return DV_E_FORMATETC;
 }
 
 static HRESULT WINAPI IDataObject_fnGetCanonicalFormatEtc(IDataObject *iface, LPFORMATETC pformatectIn, LPFORMATETC pformatetcOut)
@@ -479,25 +494,23 @@ static HRESULT WINAPI IDataObject_fnSetData(IDataObject *iface,
 
     if (!format || !medium) return E_INVALIDARG;
 
-    if (format->tymed != TYMED_HGLOBAL)
-    {
-        FIXME("Unhandled format tymed %#lx.\n", format->tymed);
-        return E_NOTIMPL;
-    }
+    if (!(format->tymed & TYMED_HGLOBAL))
+        return DV_E_TYMED;
 
     if (medium->tymed != TYMED_HGLOBAL)
-    {
-        FIXME("Unhandled medium tymed %#lx.\n", format->tymed);
-        return E_NOTIMPL;
-    }
+        return DV_E_TYMED;
 
     if (medium->pUnkForRelease)
         FIXME("Ignoring IUnknown %p.\n", medium->pUnkForRelease);
 
     if (!medium->hGlobal)
         return E_INVALIDARG;
-    if (format->dwAspect != DVASPECT_CONTENT || format->lindex != -1)
-        return DV_E_FORMATETC;
+    if (format->ptd)
+        return DV_E_DVTARGETDEVICE;
+    if (format->dwAspect != DVASPECT_CONTENT)
+        return DV_E_DVASPECT;
+    if (format->lindex != -1)
+        return DV_E_LINDEX;
 
     if (release) global = medium->hGlobal;
     else if (!(global = duplicate_hglobal(medium->hGlobal))) return E_OUTOFMEMORY;

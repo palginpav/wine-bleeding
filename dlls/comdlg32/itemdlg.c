@@ -985,6 +985,12 @@ static void clear_dialog_results(FileDialogImpl *This, BOOL clear_selection)
         events_OnSelectionChange(This);
 }
 
+static void clear_dialog_results_if_closed(FileDialogImpl *This, BOOL clear_selection)
+{
+    if (!This->dlg_hwnd)
+        clear_dialog_results(This, clear_selection);
+}
+
 static HRESULT browse_dialog_to(FileDialogImpl *This, IShellItem *psi, const char *reason)
 {
     HRESULT hr;
@@ -1008,7 +1014,8 @@ static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWS
         REFIID riid, void **ppv)
 {
     IShellItem *folder = NULL;
-    WCHAR *path = NULL, *basename;
+    LPITEMIDLIST pidl = NULL;
+    WCHAR *path = NULL, *basename, *folder_path = NULL;
     HRESULT hr;
 
     if (!ppv)
@@ -1026,6 +1033,31 @@ static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWS
             return hr;
 
         hr = SHCreateItemFromRelativeName(folder, filename, NULL, riid, ppv);
+        if (FAILED(hr))
+        {
+            hr = IShellItem_GetDisplayName(folder, SIGDN_FILESYSPATH, &folder_path);
+            if (SUCCEEDED(hr))
+            {
+                WCHAR combined[MAX_PATH];
+
+                if (PathCombineW(combined, folder_path, filename))
+                {
+                    hr = SHCreateItemFromParsingName(combined, NULL, riid, ppv);
+                    if (FAILED(hr))
+                    {
+                        pidl = SHSimpleIDListFromPath(combined);
+                        if (pidl)
+                        {
+                            hr = SHCreateItemFromIDList(pidl, riid, ppv);
+                            ILFree(pidl);
+                            pidl = NULL;
+                        }
+                    }
+                }
+
+                CoTaskMemFree(folder_path);
+            }
+        }
         IShellItem_Release(folder);
         return hr;
     }
@@ -1044,13 +1076,25 @@ static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWS
             {
                 hr = SHCreateItemFromRelativeName(folder, basename, NULL, riid, ppv);
                 IShellItem_Release(folder);
-                LocalFree(path);
-                return hr;
+                if (SUCCEEDED(hr))
+                {
+                    LocalFree(path);
+                    return hr;
+                }
             }
         }
     }
 
     hr = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
+    if (FAILED(hr))
+    {
+        pidl = SHSimpleIDListFromPath(filename);
+        if (pidl)
+        {
+            hr = SHCreateItemFromIDList(pidl, riid, ppv);
+            ILFree(pidl);
+        }
+    }
     LocalFree(path);
     return hr;
 }
@@ -1077,16 +1121,79 @@ static HRESULT create_item_from_dialog_filename(FileDialogImpl *This, IShellItem
     return hr;
 }
 
+static HRESULT create_itemarray_from_filename_list(FileDialogImpl *This, LPCWSTR files, UINT file_count,
+        REFIID riid, void **ppv)
+{
+    LPITEMIDLIST *pidls = NULL;
+    IShellItemArray *array = NULL;
+    IShellItem *item = NULL;
+    LPCWSTR fn_iter;
+    HRESULT hr = E_FAIL;
+    UINT i;
+
+    if (!ppv)
+        return E_INVALIDARG;
+    *ppv = NULL;
+
+    if (!files || !file_count)
+        return E_FAIL;
+
+    if (file_count == 1)
+    {
+        hr = create_shellitem_from_dialog_filename(This, files, &IID_IShellItem, (void **)&item);
+        if (FAILED(hr))
+            return hr;
+
+        hr = SHCreateShellItemArrayFromShellItem(item, riid, ppv);
+        IShellItem_Release(item);
+        return hr;
+    }
+
+    pidls = calloc(file_count, sizeof(*pidls));
+    if (!pidls)
+        return E_OUTOFMEMORY;
+
+    fn_iter = files;
+    for (i = 0; i < file_count; ++i)
+    {
+        hr = create_shellitem_from_dialog_filename(This, fn_iter, &IID_IShellItem, (void **)&item);
+        if (FAILED(hr))
+            goto done;
+
+        hr = SHGetIDListFromObject((IUnknown *)item, &pidls[i]);
+        IShellItem_Release(item);
+        item = NULL;
+        if (FAILED(hr))
+            goto done;
+
+        fn_iter += lstrlenW(fn_iter) + 1;
+    }
+
+    hr = SHCreateShellItemArrayFromIDLists(file_count, (PCIDLIST_ABSOLUTE_ARRAY)pidls, &array);
+    if (FAILED(hr))
+        goto done;
+
+    hr = IShellItemArray_QueryInterface(array, riid, ppv);
+
+done:
+    if (item)
+        IShellItem_Release(item);
+    if (array)
+        IShellItemArray_Release(array);
+    if (pidls)
+    {
+        for (i = 0; i < file_count; ++i)
+            ILFree(pidls[i]);
+        free(pidls);
+    }
+    return hr;
+}
+
 static HRESULT create_itemarray_from_dialog_filename(FileDialogImpl *This, REFIID riid, void **ppv)
 {
-    IShellFolder *psf_desktop = NULL;
-    IShellItemArray *array = NULL;
-    IShellItem *folder = NULL;
-    LPITEMIDLIST current_folder = NULL, *pidla = NULL;
-    LPWSTR fn_iter, files = NULL, tmp_files;
-    UINT file_count = 0, size_used, i;
+    LPWSTR files = NULL, tmp_files;
+    UINT file_count = 0, size_used;
     HRESULT hr;
-    BOOL needs_current_folder = FALSE;
 
     if (!ppv) return E_INVALIDARG;
     *ppv = NULL;
@@ -1099,80 +1206,106 @@ static HRESULT create_itemarray_from_dialog_filename(FileDialogImpl *This, REFII
     if (!file_count)
         return E_FAIL;
 
-    for (fn_iter = files, i = 0; i < file_count; ++i)
-    {
-        if (PathIsRelativeW(fn_iter))
-        {
-            needs_current_folder = TRUE;
-            break;
-        }
-        fn_iter += lstrlenW(fn_iter) + 1;
-    }
+    hr = create_itemarray_from_filename_list(This, files, file_count, riid, ppv);
+    free(files);
+    return hr;
+}
 
-    if (needs_current_folder)
+static HRESULT create_itemarray_from_filename_vector(FileDialogImpl *This, const WCHAR *const *filenames,
+        UINT file_count, REFIID riid, void **ppv)
+{
+    LPITEMIDLIST *pidls = NULL;
+    IShellItemArray *array = NULL;
+    IShellItem *item = NULL;
+    HRESULT hr = E_FAIL;
+    UINT i;
+
+    if (!ppv)
+        return E_INVALIDARG;
+    *ppv = NULL;
+
+    if (!filenames || !file_count)
+        return E_FAIL;
+
+    if (file_count == 1)
     {
-        hr = IFileDialog2_GetFolder(&This->IFileDialog2_iface, &folder);
+        hr = create_shellitem_from_dialog_filename(This, filenames[0], &IID_IShellItem, (void **)&item);
         if (FAILED(hr))
-            goto done;
+            return hr;
 
-        hr = SHGetIDListFromObject((IUnknown *)folder, &current_folder);
-        if (FAILED(hr))
-            goto done;
+        hr = SHCreateShellItemArrayFromShellItem(item, riid, ppv);
+        IShellItem_Release(item);
+        return hr;
     }
 
-    pidla = calloc(file_count, sizeof(*pidla));
-    if (!pidla)
-    {
-        hr = E_OUTOFMEMORY;
-        goto done;
-    }
+    pidls = calloc(file_count, sizeof(*pidls));
+    if (!pidls)
+        return E_OUTOFMEMORY;
 
-    fn_iter = files;
     for (i = 0; i < file_count; ++i)
     {
-        WCHAR canon_filename[MAX_PATH];
-
-        if (PathIsRelativeW(fn_iter))
-            COMDLG32_GetCanonicalPath(current_folder, fn_iter, canon_filename);
-        else
-            lstrcpynW(canon_filename, fn_iter, ARRAY_SIZE(canon_filename));
-
-        pidla[i] = SHSimpleIDListFromPath(canon_filename);
-        if (!pidla[i])
-        {
-            hr = E_FAIL;
+        hr = create_shellitem_from_dialog_filename(This, filenames[i], &IID_IShellItem, (void **)&item);
+        if (FAILED(hr))
             goto done;
-        }
 
-        fn_iter += lstrlenW(fn_iter) + 1;
+        hr = SHGetIDListFromObject((IUnknown *)item, &pidls[i]);
+        IShellItem_Release(item);
+        item = NULL;
+        if (FAILED(hr))
+            goto done;
     }
 
-    hr = SHGetDesktopFolder(&psf_desktop);
-    if (FAILED(hr))
-        goto done;
-
-    hr = SHCreateShellItemArray(NULL, psf_desktop, file_count, (PCUITEMID_CHILD_ARRAY)pidla, &array);
+    hr = SHCreateShellItemArrayFromIDLists(file_count, (PCIDLIST_ABSOLUTE_ARRAY)pidls, &array);
     if (FAILED(hr))
         goto done;
 
     hr = IShellItemArray_QueryInterface(array, riid, ppv);
 
 done:
+    if (item)
+        IShellItem_Release(item);
     if (array)
         IShellItemArray_Release(array);
-    if (psf_desktop)
-        IShellFolder_Release(psf_desktop);
-    if (pidla)
+    if (pidls)
     {
         for (i = 0; i < file_count; ++i)
-            ILFree(pidla[i]);
-        free(pidla);
+            ILFree(pidls[i]);
+        free(pidls);
     }
-    ILFree(current_folder);
-    if (folder)
-        IShellItem_Release(folder);
-    free(files);
     return hr;
+}
+
+static HRESULT create_results_from_resolved_names(FileDialogImpl *This, WCHAR **resolved_names, UINT file_count)
+{
+    if (This->psia_results)
+    {
+        IShellItemArray_Release(This->psia_results);
+        This->psia_results = NULL;
+    }
+
+    return create_itemarray_from_filename_vector(This, (const WCHAR *const *)resolved_names,
+            file_count, &IID_IShellItemArray, (void **)&This->psia_results);
+}
+
+static HRESULT create_single_result_from_state(FileDialogImpl *This, IShellItem **ppsi)
+{
+    DWORD item_count;
+    HRESULT hr;
+
+    if (!ppsi)
+        return E_INVALIDARG;
+    *ppsi = NULL;
+
+    if (!This->psia_results)
+        return E_FAIL;
+
+    hr = IShellItemArray_GetCount(This->psia_results, &item_count);
+    if (FAILED(hr))
+        return hr;
+    if (item_count != 1)
+        return E_FAIL;
+
+    return IShellItemArray_GetItemAt(This->psia_results, 0, ppsi);
 }
 
 static HRESULT get_effective_folder(FileDialogImpl *This, IShellItem **ppsi)
@@ -1183,6 +1316,13 @@ static HRESULT get_effective_folder(FileDialogImpl *This, IShellItem **ppsi)
         return E_INVALIDARG;
 
     *ppsi = NULL;
+
+    if ((This->options & FOS_PICKFOLDERS) && This->psia_results)
+    {
+        HRESULT hr = create_single_result_from_state(This, ppsi);
+        if (SUCCEEDED(hr))
+            return hr;
+    }
 
     if (This->psi_folder)
         folder = This->psi_folder;
@@ -1247,6 +1387,7 @@ static HRESULT create_pickfolder_result_array_from_state(FileDialogImpl *This, R
 static HRESULT sync_dialog_to_absolute_filename(FileDialogImpl *This, LPCWSTR pszName)
 {
     WCHAR *path, *filename;
+    int order = 1;
     IShellItem *folder;
     HRESULT hr;
 
@@ -1275,7 +1416,11 @@ static HRESULT sync_dialog_to_absolute_filename(FileDialogImpl *This, LPCWSTR ps
     hr = SHCreateItemFromParsingName(path, NULL, &IID_IShellItem, (void **)&folder);
     if (SUCCEEDED(hr))
     {
-        browse_dialog_to(This, folder, "SetFileName absolute path");
+        if (!This->psi_folder ||
+            FAILED(IShellItem_Compare(folder, This->psi_folder,
+                    SICHINT_CANONICAL | SICHINT_TEST_FILESYSPATH_IF_NOT_EQUAL, &order)) ||
+            order != 0)
+            browse_dialog_to(This, folder, "SetFileName absolute path");
         set_file_name(This, filename);
         IShellItem_Release(folder);
     }
@@ -1331,7 +1476,7 @@ static BOOL shell_item_exists(IShellItem* shellitem)
 static HRESULT on_default_action(FileDialogImpl *This)
 {
     IShellFolder *psf_parent, *psf_desktop;
-    LPITEMIDLIST *pidla;
+    WCHAR **resolved_names = NULL;
     LPITEMIDLIST current_folder;
     LPWSTR fn_iter, files = NULL, tmp_files, filter = NULL;
     UINT file_count = 0, len, i;
@@ -1357,9 +1502,17 @@ static HRESULT on_default_action(FileDialogImpl *This)
 
     TRACE("Acting on %d file(s).\n", file_count);
 
-    pidla = malloc(sizeof(LPITEMIDLIST) * file_count);
+    resolved_names = calloc(file_count, sizeof(*resolved_names));
     open_action = ONOPEN_OPEN;
     fn_iter = files;
+
+    if (!resolved_names)
+    {
+        free(resolved_names);
+        free(files);
+        ILFree(current_folder);
+        return E_OUTOFMEMORY;
+    }
 
     for(i = 0; i < file_count && open_action == ONOPEN_OPEN; i++)
     {
@@ -1434,7 +1587,14 @@ static HRESULT on_default_action(FileDialogImpl *This)
             filter = fn_iter;
         }
 
-        pidla[i] = SHSimpleIDListFromPath(canon_filename);
+        resolved_names[i] = StrDupW(canon_filename);
+        if (!resolved_names[i])
+        {
+            hr = E_OUTOFMEMORY;
+            if (psf_parent)
+                IShellFolder_Release(psf_parent);
+            goto done;
+        }
 
         if(psf_parent && !(open_action == ONOPEN_BROWSE))
             IShellFolder_Release(psf_parent);
@@ -1465,14 +1625,7 @@ static HRESULT on_default_action(FileDialogImpl *This)
         hr = SHGetDesktopFolder(&psf_desktop);
         if(SUCCEEDED(hr))
         {
-            if(This->psia_results)
-            {
-                IShellItemArray_Release(This->psia_results);
-                This->psia_results = NULL;
-            }
-
-            hr = SHCreateShellItemArray(NULL, psf_desktop, file_count, (PCUITEMID_CHILD_ARRAY)pidla,
-                                        &This->psia_results);
+            hr = create_results_from_resolved_names(This, resolved_names, file_count);
 
             IShellFolder_Release(psf_desktop);
 
@@ -1526,12 +1679,13 @@ static HRESULT on_default_action(FileDialogImpl *This)
         break;
     }
 
+done:
     /* Clean up */
     free(files);
     ILFree(current_folder);
     for(i = 0; i < file_count; i++)
-        ILFree(pidla[i]);
-    free(pidla);
+        LocalFree(resolved_names[i]);
+    free(resolved_names);
 
     /* Success closes the dialog */
     return ret;
@@ -3326,6 +3480,15 @@ static HRESULT WINAPI IFileDialog2_fnQueryInterface(IFileDialog2 *iface,
     {
         *ppvObject = &This->IFileDialogCustomize_iface;
     }
+    else if(IsEqualGUID(riid, &IID_IFileOpenDialog) ||
+            IsEqualGUID(riid, &IID_IFileSaveDialog) ||
+            IsEqualGUID(riid, &IID_IFileDialogEvents) ||
+            IsEqualGUID(riid, &IID_IExplorerBrowser) ||
+            IsEqualGUID(riid, &IID_IShellBrowser))
+    {
+        /* These are common capability probes, but this object only exposes them
+         * via dialog type selection or QueryService(), not direct QI. */
+    }
     else
         FIXME("Unknown interface requested: %s.\n", debugstr_guid(riid));
 
@@ -3408,6 +3571,7 @@ static HRESULT WINAPI IFileDialog2_fnSetFileTypes(IFileDialog2 *iface, UINT cFil
     if(!rgFilterSpec)
         return E_INVALIDARG;
 
+    clear_dialog_results_if_closed(This, TRUE);
     clear_filter_specs(This);
 
     if(!cFileTypes)
@@ -3484,6 +3648,7 @@ static HRESULT WINAPI IFileDialog2_fnSetFileTypeIndex(IFileDialog2 *iface, UINT 
     if (prev_index == This->filetypeindex)
         return S_OK;
 
+    clear_dialog_results_if_closed(This, TRUE);
     set_current_filter(This, This->filterspecs[This->filetypeindex].pszSpec);
     apply_save_filetype_to_filename(This, prev_index);
 
@@ -3591,6 +3756,7 @@ static HRESULT WINAPI IFileDialog2_fnSetOptions(IFileDialog2 *iface, FILEOPENDIA
     pickfolders_changed = !!((old_options ^ fos) & FOS_PICKFOLDERS);
     multiselect_disabled = !!((old_options & FOS_ALLOWMULTISELECT) && !(fos & FOS_ALLOWMULTISELECT));
 
+    clear_dialog_results_if_closed(This, TRUE);
     This->options = fos;
 
     if (This->peb)
@@ -3646,6 +3812,9 @@ static HRESULT WINAPI IFileDialog2_fnSetDefaultFolder(IFileDialog2 *iface, IShel
 {
     FileDialogImpl *This = impl_from_IFileDialog2(iface);
     TRACE("%p (%p)\n", This, psi);
+
+    clear_dialog_results(This, TRUE);
+
     if(This->psi_defaultfolder)
         IShellItem_Release(This->psi_defaultfolder);
 
@@ -3664,6 +3833,9 @@ static HRESULT WINAPI IFileDialog2_fnSetFolder(IFileDialog2 *iface, IShellItem *
 {
     FileDialogImpl *This = impl_from_IFileDialog2(iface);
     TRACE("%p (%p)\n", This, psi);
+
+    clear_dialog_results(This, TRUE);
+
     if(This->psi_setfolder)
         IShellItem_Release(This->psi_setfolder);
 
@@ -3699,6 +3871,10 @@ static HRESULT WINAPI IFileDialog2_fnGetCurrentSelection(IFileDialog2 *iface, IS
     {
         return IShellItemArray_GetItemAt(This->psia_selection, 0, ppsi);
     }
+
+    hr = create_single_result_from_state(This, ppsi);
+    if (SUCCEEDED(hr))
+        return hr;
 
     hr = create_item_from_dialog_filename(This, ppsi);
     if (FAILED(hr))
@@ -3786,21 +3962,9 @@ static HRESULT WINAPI IFileDialog2_fnGetResult(IFileDialog2 *iface, IShellItem *
         return E_INVALIDARG;
     *ppsi = NULL;
 
-    if(This->psia_results)
-    {
-        DWORD item_count;
-        hr = IShellItemArray_GetCount(This->psia_results, &item_count);
-        if(SUCCEEDED(hr))
-        {
-            if(item_count != 1)
-                return E_FAIL;
-
-            /* Adds a reference. */
-            hr = IShellItemArray_GetItemAt(This->psia_results, 0, ppsi);
-        }
-
+    hr = create_single_result_from_state(This, ppsi);
+    if (SUCCEEDED(hr) || This->psia_results)
         return hr;
-    }
 
     if (This->dlg_hwnd)
     {
@@ -3867,6 +4031,7 @@ static HRESULT WINAPI IFileDialog2_fnSetDefaultExtension(IFileDialog2 *iface, LP
 
     TRACE("%p (%s)\n", This, debugstr_w(pszDefaultExtension));
 
+    clear_dialog_results_if_closed(This, TRUE);
     LocalFree(This->default_ext);
     This->default_ext = StrDupW(pszDefaultExtension);
 
@@ -3927,6 +4092,7 @@ static HRESULT WINAPI IFileDialog2_fnClearClientData(IFileDialog2 *iface)
     TRACE("%p\n", This);
 
     /* Clear any per-client state so the dialog can be reused. */
+    clear_dialog_results(This, TRUE);
     This->client_guid = GUID_NULL;
     if (This->save_props)
     {
@@ -3952,6 +4118,8 @@ static HRESULT WINAPI IFileDialog2_fnSetFilter(IFileDialog2 *iface, IShellItemFi
 
     if (This->psifilter == pFilter)
         return S_OK;
+
+    clear_dialog_results_if_closed(This, TRUE);
 
     if (This->psifilter)
         IShellItemFilter_Release(This->psifilter);
@@ -3992,6 +4160,11 @@ static HRESULT WINAPI IFileDialog2_fnSetNavigationRoot(IFileDialog2 *iface, IShe
 {
     FileDialogImpl *This = impl_from_IFileDialog2(iface);
     TRACE("%p (%p)\n", This, psi);
+
+    if (!psi)
+        return E_INVALIDARG;
+
+    clear_dialog_results(This, TRUE);
 
     if (This->psi_nav_root == psi)
         return S_OK;
@@ -4233,6 +4406,9 @@ static HRESULT WINAPI IFileOpenDialog_fnGetResults(IFileOpenDialog *iface, IShel
         return S_OK;
     }
 
+    if (!This->dlg_hwnd)
+        return E_FAIL;
+
     hr = create_itemarray_from_dialog_filename(This, &IID_IShellItemArray, (void **)ppenum);
     if (FAILED(hr))
         hr = create_pickfolder_result_array_from_state(This, &IID_IShellItemArray, (void **)ppenum);
@@ -4261,6 +4437,13 @@ static HRESULT WINAPI IFileOpenDialog_fnGetSelectedItems(IFileOpenDialog *iface,
     if (This->psia_selection)
     {
         *ppsai = This->psia_selection;
+        IShellItemArray_AddRef(*ppsai);
+        return S_OK;
+    }
+
+    if (This->psia_results)
+    {
+        *ppsai = This->psia_results;
         IShellItemArray_AddRef(*ppsai);
         return S_OK;
     }
@@ -4540,6 +4723,8 @@ static HRESULT WINAPI IFileSaveDialog_fnSetProperties(IFileSaveDialog* iface, IP
     IPropertyStore *store = NULL;
     TRACE("%p (%p)\n", This, pStore);
 
+    clear_dialog_results_if_closed(This, TRUE);
+
     if (pStore)
     {
         HRESULT hr = clone_property_store(pStore, &store);
@@ -4561,6 +4746,8 @@ static HRESULT WINAPI IFileSaveDialog_fnSetCollectedProperties(IFileSaveDialog* 
 {
     FileDialogImpl *This = impl_from_IFileSaveDialog(iface);
     TRACE("%p (%p, %d)\n", This, pList, fAppendDefault);
+
+    clear_dialog_results_if_closed(This, TRUE);
 
     if (This->collected_props)
         IPropertyDescriptionList_Release(This->collected_props);
@@ -4939,27 +5126,69 @@ static HRESULT WINAPI ICommDlgBrowser3_fnIncludeObject(ICommDlgBrowser3 *iface,
                                                        IShellView *shv, LPCITEMIDLIST pidl)
 {
     FileDialogImpl *This = impl_from_ICommDlgBrowser3(iface);
-    IShellItem *psi;
+    IFolderView *folder_view = NULL;
+    IShellFolder *shell_folder = NULL;
+    IPersistFolder2 *persist_folder = NULL;
+    IShellItem *psi = NULL;
     LPWSTR filename;
     LPITEMIDLIST parent_pidl;
-    HRESULT hr;
+    HRESULT hr = E_FAIL;
     ULONG attr;
     TRACE("%p (%p, %p)\n", This, shv, pidl);
 
     if(!This->current_filter && !(This->options & FOS_PICKFOLDERS))
         return S_OK;
 
-    hr = SHGetIDListFromObject((IUnknown*)shv, &parent_pidl);
-    if(SUCCEEDED(hr))
+    parent_pidl = NULL;
+    if (SUCCEEDED(IShellView_QueryInterface(shv, &IID_IFolderView, (void **)&folder_view)))
     {
-        LPITEMIDLIST full_pidl = ILCombine(parent_pidl, pidl);
+        hr = IFolderView_GetFolder(folder_view, &IID_IPersistFolder2, (void **)&persist_folder);
+        if (SUCCEEDED(hr))
+        {
+            hr = IPersistFolder2_GetCurFolder(persist_folder, &parent_pidl);
+            IPersistFolder2_Release(persist_folder);
+        }
+
+        if (SUCCEEDED(hr))
+            hr = IFolderView_GetFolder(folder_view, &IID_IShellFolder, (void **)&shell_folder);
+
+        if (SUCCEEDED(hr))
+        {
+            if (parent_pidl && ILIsParent(parent_pidl, pidl, FALSE))
+                hr = SHCreateItemFromIDList(pidl, &IID_IShellItem, (void **)&psi);
+            else
+                hr = SHCreateItemWithParent(parent_pidl, shell_folder, pidl, &IID_IShellItem, (void **)&psi);
+        }
+
+        if (FAILED(hr) && shell_folder)
+            hr = SHCreateItemWithParent(NULL, shell_folder, pidl, &IID_IShellItem, (void **)&psi);
+
+        if (shell_folder)
+            IShellFolder_Release(shell_folder);
+        IFolderView_Release(folder_view);
+    }
+
+    if (FAILED(hr) && This->psi_folder)
+        hr = SHGetIDListFromObject((IUnknown *)This->psi_folder, &parent_pidl);
+    else if (FAILED(hr))
+        hr = SHGetIDListFromObject((IUnknown*)shv, &parent_pidl);
+
+    if (SUCCEEDED(hr) && !psi)
+    {
+        LPITEMIDLIST full_pidl;
+
+        if (parent_pidl && ILIsParent(parent_pidl, pidl, FALSE))
+            full_pidl = ILClone(pidl);
+        else
+            full_pidl = ILCombine(parent_pidl, pidl);
+
         hr = SHCreateItemFromIDList(full_pidl, &IID_IShellItem, (void**)&psi);
-        ILFree(parent_pidl);
         ILFree(full_pidl);
     }
+    ILFree(parent_pidl);
     if(FAILED(hr))
     {
-        ERR("Failed to get shellitem (%08lx).\n", hr);
+        TRACE("Failed to get shellitem (%08lx).\n", hr);
         return S_OK;
     }
 

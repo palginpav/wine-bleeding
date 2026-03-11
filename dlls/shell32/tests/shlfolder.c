@@ -7358,32 +7358,52 @@ static void test_DataObject(void)
 
     fmt.dwAspect = DVASPECT_THUMBNAIL;
     hr = IDataObject_QueryGetData(data_obj, &fmt);
-    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_DVASPECT, "Got hr %#lx.\n", hr);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_DVASPECT, "Got hr %#lx.\n", hr);
     medium.tymed = TYMED_HGLOBAL;
     medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
     hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_DVASPECT, "Got hr %#lx.\n", hr);
     GlobalFree(medium.hGlobal);
     hr = IDataObject_SetData(data_obj, &fmt, &invalid_set_medium, TRUE);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_DVASPECT, "Got hr %#lx.\n", hr);
 
     fmt.dwAspect = DVASPECT_CONTENT;
     fmt.lindex = 0;
     hr = IDataObject_QueryGetData(data_obj, &fmt);
-    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_LINDEX, "Got hr %#lx.\n", hr);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_LINDEX, "Got hr %#lx.\n", hr);
     medium.tymed = TYMED_HGLOBAL;
     medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
     hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_LINDEX, "Got hr %#lx.\n", hr);
     GlobalFree(medium.hGlobal);
     hr = IDataObject_SetData(data_obj, &fmt, &invalid_set_medium, TRUE);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_LINDEX, "Got hr %#lx.\n", hr);
 
     fmt.lindex = -1;
+    GlobalFree(invalid_set_medium.hGlobal);
+    fmt.ptd = (DVTARGETDEVICE *)0xdeadbeef;
+    hr = IDataObject_QueryGetData(data_obj, &fmt);
+    ok(hr == DV_E_DVTARGETDEVICE, "Got hr %#lx.\n", hr);
+    hr = IDataObject_GetData(data_obj, &fmt, &medium);
+    ok(hr == DV_E_DVTARGETDEVICE, "Got hr %#lx.\n", hr);
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, 4096);
+    hr = IDataObject_GetDataHere(data_obj, &fmt, &medium);
+    ok(hr == DV_E_DVTARGETDEVICE, "Got hr %#lx.\n", hr);
+    GlobalFree(medium.hGlobal);
+
+    invalid_set_medium.tymed = TYMED_HGLOBAL;
+    invalid_set_medium.pUnkForRelease = NULL;
+    invalid_set_medium.hGlobal = GlobalAlloc(GMEM_MOVEABLE, sizeof(*value));
+    ok(invalid_set_medium.hGlobal != NULL, "Got %p.\n", invalid_set_medium.hGlobal);
+    hr = IDataObject_SetData(data_obj, &fmt, &invalid_set_medium, TRUE);
+    ok(hr == DV_E_DVTARGETDEVICE, "Got hr %#lx.\n", hr);
+
+    fmt.ptd = NULL;
     GlobalFree(invalid_set_medium.hGlobal);
     fmt.tymed = TYMED_HGLOBAL | TYMED_ISTREAM;
     hr = IDataObject_QueryGetData(data_obj, &fmt);
@@ -7391,9 +7411,9 @@ static void test_DataObject(void)
 
     fmt.tymed = TYMED_ISTREAM;
     hr = IDataObject_QueryGetData(data_obj, &fmt);
-    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_TYMED, "Got hr %#lx.\n", hr);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
-    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_TYMED, "Got hr %#lx.\n", hr);
 
     fmt.tymed = TYMED_HGLOBAL | TYMED_ISTREAM;
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
@@ -7429,7 +7449,7 @@ static void test_DataObject(void)
     fmt.cfFormat = RegisterClipboardFormatW(L"bogus_format");
 
     hr = IDataObject_QueryGetData(data_obj, &fmt);
-    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+    ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
     hr = IDataObject_GetData(data_obj, &fmt, &medium);
     ok(hr == DV_E_FORMATETC, "Got hr %#lx.\n", hr);
 
@@ -8058,7 +8078,7 @@ static void test_copy_paste(void)
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
     ret = MoveFileExW(L"testcopy_dst/testcopy_src", L"testcopy_src", 0);
-    todo_wine ok(ret, "Got error %lu.\n", GetLastError());
+    ok(ret, "Got error %lu.\n", GetLastError());
     if (!ret && GetLastError() == ERROR_ALREADY_EXISTS)
         RemoveDirectoryW(L"testcopy_dst/testcopy_src");
 

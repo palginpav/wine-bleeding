@@ -70,6 +70,13 @@ struct bind_unknown_placeholder
     LONG ref;
 };
 
+struct transfer_placeholder
+{
+    ITransferSource ITransferSource_iface;
+    ITransferDestination ITransferDestination_iface;
+    LONG ref;
+};
+
 static inline struct empty_property_store *impl_from_empty_IPropertyStore(IPropertyStore *iface)
 {
     return CONTAINING_RECORD(iface, struct empty_property_store, IPropertyStore_iface);
@@ -85,10 +92,21 @@ static inline struct bind_unknown_placeholder *impl_from_bind_unknown_placeholde
     return CONTAINING_RECORD(iface, struct bind_unknown_placeholder, IUnknown_iface);
 }
 
+static inline struct transfer_placeholder *impl_from_ITransferSource(ITransferSource *iface)
+{
+    return CONTAINING_RECORD(iface, struct transfer_placeholder, ITransferSource_iface);
+}
+
+static inline struct transfer_placeholder *impl_from_ITransferDestination(ITransferDestination *iface)
+{
+    return CONTAINING_RECORD(iface, struct transfer_placeholder, ITransferDestination_iface);
+}
+
 static HRESULT create_empty_property_store(REFIID riid, void **ppv);
 static HRESULT create_empty_property_description_list(REFIID riid, void **ppv);
 HRESULT WINAPI SHCreateDataObject(PCIDLIST_ABSOLUTE pidl_folder, UINT count, PCUITEMID_CHILD_ARRAY pidl_array,
                                   IDataObject *object, REFIID riid, void **ppv);
+static HRESULT create_transfer_placeholder(REFIID riid, void **ppv);
 
 static HRESULT WINAPI bind_unknown_placeholder_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
 {
@@ -149,6 +167,219 @@ static HRESULT create_bind_unknown_placeholder(REFIID riid, void **ppv)
 
     hr = IUnknown_QueryInterface(&placeholder->IUnknown_iface, riid, ppv);
     IUnknown_Release(&placeholder->IUnknown_iface);
+    return hr;
+}
+
+static HRESULT WINAPI transfer_placeholder_source_QueryInterface(ITransferSource *iface, REFIID riid, void **ppv)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferSource(iface);
+
+    if (!ppv) return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ITransferSource))
+        *ppv = &placeholder->ITransferSource_iface;
+    else if (IsEqualIID(riid, &IID_ITransferDestination))
+        *ppv = &placeholder->ITransferDestination_iface;
+    else
+    {
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI transfer_placeholder_source_AddRef(ITransferSource *iface)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferSource(iface);
+    return InterlockedIncrement(&placeholder->ref);
+}
+
+static ULONG WINAPI transfer_placeholder_source_Release(ITransferSource *iface)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferSource(iface);
+    LONG ref = InterlockedDecrement(&placeholder->ref);
+
+    if (!ref)
+        free(placeholder);
+
+    return ref;
+}
+
+static HRESULT WINAPI transfer_placeholder_dest_QueryInterface(ITransferDestination *iface, REFIID riid, void **ppv)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferDestination(iface);
+    return ITransferSource_QueryInterface(&placeholder->ITransferSource_iface, riid, ppv);
+}
+
+static ULONG WINAPI transfer_placeholder_dest_AddRef(ITransferDestination *iface)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferDestination(iface);
+    return InterlockedIncrement(&placeholder->ref);
+}
+
+static ULONG WINAPI transfer_placeholder_dest_Release(ITransferDestination *iface)
+{
+    struct transfer_placeholder *placeholder = impl_from_ITransferDestination(iface);
+    LONG ref = InterlockedDecrement(&placeholder->ref);
+
+    if (!ref)
+        free(placeholder);
+
+    return ref;
+}
+
+static HRESULT WINAPI transfer_placeholder_Advise(ITransferSource *iface, ITransferAdviseSink *sink, DWORD *cookie)
+{
+    if (cookie) *cookie = 0;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_Unadvise(ITransferSource *iface, DWORD cookie)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_SetProperties(ITransferSource *iface, IPropertyChangeArray *array)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_OpenItem(ITransferSource *iface, IShellItem *item,
+        TRANSFER_SOURCE_FLAGS flags, REFIID riid, void **ppv)
+{
+    if (ppv) *ppv = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_MoveItem(ITransferSource *iface, IShellItem *item,
+        IShellItem *parent_dest, LPCWSTR name_dest, TRANSFER_SOURCE_FLAGS flags, IShellItem **newitem)
+{
+    if (newitem) *newitem = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_RecycleItem(ITransferSource *iface, IShellItem *source,
+        IShellItem *parent_dest, TRANSFER_SOURCE_FLAGS flags, IShellItem **new_dest)
+{
+    if (new_dest) *new_dest = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_RemoveItem(ITransferSource *iface, IShellItem *source,
+        TRANSFER_SOURCE_FLAGS flags)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_RenameItem(ITransferSource *iface, IShellItem *source,
+        LPCWSTR newname, TRANSFER_SOURCE_FLAGS flags, IShellItem **new_dest)
+{
+    if (new_dest) *new_dest = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_LinkItem(ITransferSource *iface, IShellItem *source,
+        IShellItem *parent_dest, LPCWSTR new_name, TRANSFER_SOURCE_FLAGS flags, IShellItem **new_dest)
+{
+    if (new_dest) *new_dest = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_ApplyPropertiesToItem(ITransferSource *iface,
+        IShellItem *source, IShellItem **newitem)
+{
+    if (newitem) *newitem = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_GetDefaultDestinationName(ITransferSource *iface,
+        IShellItem *source, IShellItem *parent_dest, LPWSTR *dest_name)
+{
+    if (dest_name) *dest_name = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_EnterFolder(ITransferSource *iface, IShellItem *child_folder)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_LeaveFolder(ITransferSource *iface, IShellItem *child_folder)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_dest_Advise(ITransferDestination *iface,
+        ITransferAdviseSink *sink, DWORD *cookie)
+{
+    if (cookie) *cookie = 0;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_dest_Unadvise(ITransferDestination *iface, DWORD cookie)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI transfer_placeholder_CreateItem(ITransferDestination *iface, LPCWSTR name,
+        DWORD attr, ULONGLONG size, TRANSFER_SOURCE_FLAGS flags, REFIID riid, void **ppv,
+        REFIID resources, void **presources)
+{
+    if (ppv) *ppv = NULL;
+    if (presources) *presources = NULL;
+    return E_NOTIMPL;
+}
+
+static const ITransferSourceVtbl transfer_placeholder_source_vtbl =
+{
+    transfer_placeholder_source_QueryInterface,
+    transfer_placeholder_source_AddRef,
+    transfer_placeholder_source_Release,
+    transfer_placeholder_Advise,
+    transfer_placeholder_Unadvise,
+    transfer_placeholder_SetProperties,
+    transfer_placeholder_OpenItem,
+    transfer_placeholder_MoveItem,
+    transfer_placeholder_RecycleItem,
+    transfer_placeholder_RemoveItem,
+    transfer_placeholder_RenameItem,
+    transfer_placeholder_LinkItem,
+    transfer_placeholder_ApplyPropertiesToItem,
+    transfer_placeholder_GetDefaultDestinationName,
+    transfer_placeholder_EnterFolder,
+    transfer_placeholder_LeaveFolder,
+};
+
+static const ITransferDestinationVtbl transfer_placeholder_dest_vtbl =
+{
+    transfer_placeholder_dest_QueryInterface,
+    transfer_placeholder_dest_AddRef,
+    transfer_placeholder_dest_Release,
+    transfer_placeholder_dest_Advise,
+    transfer_placeholder_dest_Unadvise,
+    transfer_placeholder_CreateItem,
+};
+
+static HRESULT create_transfer_placeholder(REFIID riid, void **ppv)
+{
+    struct transfer_placeholder *placeholder;
+    HRESULT hr;
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    placeholder = calloc(1, sizeof(*placeholder));
+    if (!placeholder)
+        return E_OUTOFMEMORY;
+
+    placeholder->ITransferSource_iface.lpVtbl = &transfer_placeholder_source_vtbl;
+    placeholder->ITransferDestination_iface.lpVtbl = &transfer_placeholder_dest_vtbl;
+    placeholder->ref = 1;
+
+    hr = ITransferSource_QueryInterface(&placeholder->ITransferSource_iface, riid, ppv);
+    ITransferSource_Release(&placeholder->ITransferSource_iface);
     return hr;
 }
 
@@ -514,6 +745,15 @@ static HRESULT WINAPI ShellItem_QueryInterface(IShellItem2 *iface, REFIID riid,
     else if (IsEqualIID(&IID_IShellItemImageFactory, riid))
     {
         *ppv = &This->IShellItemImageFactory_iface;
+    }
+    else if (IsEqualIID(&IID_ITransferSource, riid) || IsEqualIID(&IID_ITransferDestination, riid))
+    {
+        return create_transfer_placeholder(riid, ppv);
+    }
+    else if (IsEqualIID(&IID_IShellItemArray, riid))
+    {
+        *ppv = NULL;
+        return E_NOINTERFACE;
     }
     else {
         FIXME("not implemented for %s\n", shdebugstr_guid(riid));
@@ -1699,6 +1939,8 @@ static HRESULT WINAPI ShellItem_BindToHandler(IShellItem2 *iface, IBindCtx *pbc,
     }
     else if (IsEqualGUID(rbhid, &BHID_Transfer))
     {
+        if (IsEqualIID(riid, &IID_ITransferSource) || IsEqualIID(riid, &IID_ITransferDestination))
+            return create_transfer_placeholder(riid, ppvOut);
         return create_bind_unknown_placeholder(riid, ppvOut);
     }
     else if (IsEqualGUID(rbhid, &BHID_EnumAssocHandlers))
@@ -3056,7 +3298,10 @@ HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
     ret = IUnknown_QueryInterface(punk, &IID_IShellItem, (void **)&item);
     if (SUCCEEDED(ret))
     {
-        ret = IShellItem_QueryInterface(item, riid, ppv);
+        if (IsEqualIID(riid, &IID_IShellItemArray))
+            ret = SHCreateShellItemArrayFromShellItem(item, riid, ppv);
+        else
+            ret = IShellItem_QueryInterface(item, riid, ppv);
         IShellItem_Release(item);
         return ret;
     }
@@ -3064,6 +3309,12 @@ HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
     ret = IUnknown_QueryInterface(punk, &IID_IShellItemArray, (void **)&array);
     if (SUCCEEDED(ret))
     {
+        if (IsEqualIID(riid, &IID_IShellItemArray))
+        {
+            *ppv = array;
+            return S_OK;
+        }
+
         DWORD count;
 
         ret = IShellItemArray_GetCount(array, &count);

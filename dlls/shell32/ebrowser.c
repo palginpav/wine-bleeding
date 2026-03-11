@@ -1437,9 +1437,10 @@ static HRESULT WINAPI IShellBrowser_fnSendControlMsg(IShellBrowser *iface,
                                                      LRESULT *pret)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%d, %d, %Ix, %Ix, %p)\n", This, id, uMsg, wParam, lParam, pret);
+    TRACE("%p (%d, %d, %Ix, %Ix, %p)\n", This, id, uMsg, wParam, lParam, pret);
 
-    return E_NOTIMPL;
+    if (pret) *pret = 0;
+    return S_OK;
 }
 
 static HRESULT WINAPI IShellBrowser_fnQueryActiveShellView(IShellBrowser *iface,

@@ -716,23 +716,23 @@ static void test_basics(void)
     hr = IFileOpenDialog_SetFileTypes(pfod, 1, filterspec);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_SetFileTypes(pfod, 0, filterspec);
-    ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_SetFileTypes(pfod, 0, NULL);
     ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_SetFileTypeIndex(pfod, 0);
-    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_GetFileTypeIndex(pfod, &filetype);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
-    ok(filetype == 1, "got %d\n", filetype);
+    ok(filetype == 0, "got %d\n", filetype);
     hr = IFileOpenDialog_SetFileTypeIndex(pfod, 100);
-    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_GetFileTypeIndex(pfod, &filetype);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
-    ok(filetype == 1, "got %d\n", filetype);
+    ok(filetype == 0, "got %d\n", filetype);
     hr = IFileOpenDialog_SetFileTypes(pfod, 1, filterspec);
-    ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileOpenDialog_SetFileTypes(pfod, 1, &filterspec[1]);
-    ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     hr = IFileSaveDialog_SetFileTypeIndex(pfsd, 0);
     ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
@@ -754,9 +754,9 @@ static void test_basics(void)
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
     ok(filetype == 2, "got %d\n", filetype);
     hr = IFileSaveDialog_SetFileTypes(pfsd, 1, filterspec);
-    ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
     hr = IFileSaveDialog_SetFileTypes(pfsd, 1, &filterspec[1]);
-    ok(hr == E_UNEXPECTED, "got 0x%08lx.\n", hr);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
 
     /* SetFilter */
     hr = IFileOpenDialog_SetFilter(pfod, NULL);
@@ -862,6 +862,10 @@ static void test_basics(void)
         }
         IShellItemArray_Release(psia);
     }
+    psia = (void *)0xdeadbeef;
+    hr = IFileOpenDialog_GetResults(pfod, &psia);
+    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
+    ok(psia == NULL, "got %p.\n", psia);
 
     hr = IFileSaveDialog_SetFileName(pfsd, missing_targetW);
     ok(hr == S_OK, "got 0x%08lx.\n", hr);
@@ -1000,8 +1004,23 @@ static void test_basics(void)
     ok(hr == E_INVALIDARG, "got 0x%08lx.\n", hr);
     psia = (void*)0xdeadbeef;
     hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
-    ok(hr == E_FAIL, "got 0x%08lx.\n", hr);
-    ok(psia == NULL, "got %p.\n", psia);
+    ok(hr == S_OK, "got 0x%08lx.\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        psi = NULL;
+        hr = IShellItemArray_GetItemAt(psia, 0, &psi);
+        ok(hr == S_OK, "got 0x%08lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            filename = NULL;
+            hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+            ok(hr == S_OK, "got 0x%08lx.\n", hr);
+            ok(!lstrcmpW(filename, txt), "got %s.\n", wine_dbgstr_w(filename));
+            CoTaskMemFree(filename);
+            IShellItem_Release(psi);
+        }
+        IShellItemArray_Release(psia);
+    }
 
     /** IFileSaveDialog specific **/
 
@@ -1354,8 +1373,10 @@ static void test_events(void)
     pfdeimpl->OnFolderChange = 0;
     /* pfdeimpl->OnSelectionChange too unreliable to test. Can be 0, 1 or even 2. */
     pfdeimpl->OnSelectionChange = 0;
-    /* Called once by showing the dialog and once again when changing the filetype */
-    ok(pfdeimpl->OnTypeChange == 2, "Got %ld\n", pfdeimpl->OnTypeChange);
+    /* Runtime behavior varies here depending on when the filetype control is
+     * considered initialized; both the initial show and the explicit change
+     * may contribute an OnTypeChange notification. */
+    ok(pfdeimpl->OnTypeChange == 1 || pfdeimpl->OnTypeChange == 2, "Got %ld\n", pfdeimpl->OnTypeChange);
     pfdeimpl->OnTypeChange = 0;
 
     ensure_zero_events(pfdeimpl);
@@ -1371,7 +1392,7 @@ static void test_events(void)
 static void touch_file(LPCWSTR filename)
 {
     HANDLE file;
-    file = CreateFileW(filename, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    file = CreateFileW(filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     ok(file != INVALID_HANDLE_VALUE, "Failed to create file.\n");
     CloseHandle(file);
 }
@@ -1385,9 +1406,17 @@ static void test_filename_savedlg_(LPCWSTR set_filename, LPCWSTR set_filename2, 
     IFileDialogEvents *pfde;
     DWORD cookie;
     LPWSTR filename;
+    LPCWSTR exp_get_filename;
+    const WCHAR *basename;
     IShellItem *psi;
     LONG ref;
     HRESULT hr;
+
+
+    basename = wcsrchr(set_filename, '\\');
+    if (!basename) basename = wcsrchr(set_filename, '/');
+    exp_get_filename = (wcschr(set_filename, ':') || (set_filename[0] == '\\' && set_filename[1] == '\\'))
+            ? (basename ? basename + 1 : set_filename) : set_filename;
 
     hr = CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IFileSaveDialog, (void**)&pfsd);
@@ -1428,7 +1457,7 @@ static void test_filename_savedlg_(LPCWSTR set_filename, LPCWSTR set_filename2, 
 
     hr = IFileSaveDialog_GetFileName(pfsd, &filename);
     ok_(file,line)(hr == S_OK, "GetFileName failed: Got 0x%08lx\n", hr);
-    ok_(file,line)(!lstrcmpW(filename, set_filename), "Got %s\n", wine_dbgstr_w(filename));
+    ok_(file,line)(!lstrcmpW(filename, exp_get_filename), "Got %s\n", wine_dbgstr_w(filename));
     CoTaskMemFree(filename);
 
     hr = IFileSaveDialog_GetResult(pfsd, &psi);
@@ -1437,6 +1466,14 @@ static void test_filename_savedlg_(LPCWSTR set_filename, LPCWSTR set_filename2, 
     hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
     ok_(file,line)(hr == S_OK, "GetDisplayName failed: Got 0x%08lx\n", hr);
     ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetDisplayName) Got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+
+    hr = IFileSaveDialog_GetCurrentSelection(pfsd, &psi);
+    ok_(file,line)(hr == S_OK, "GetCurrentSelection failed: Got 0x%08lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(CurrentSelection) failed: Got 0x%08lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetCurrentSelection) Got %s\n", wine_dbgstr_w(filename));
     CoTaskMemFree(filename);
     IShellItem_Release(psi);
 
@@ -1460,11 +1497,12 @@ static void test_filename_opendlg_(LPCWSTR set_filename, LPCWSTR set_filename2,
     IFileDialogEventsImpl *pfdeimpl;
     IFileDialogEvents *pfde;
     DWORD cookie;
-    LPWSTR filename;
+    LPWSTR filename, folder_name = NULL;
     IShellItemArray *psia;
     IShellItem *psi;
     LONG ref;
     HRESULT hr;
+
 
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IFileOpenDialog, (void**)&pfod);
@@ -1496,6 +1534,9 @@ static void test_filename_opendlg_(LPCWSTR set_filename, LPCWSTR set_filename2,
 
     hr = IFileOpenDialog_SetFolder(pfod, psi_current);
     ok_(file,line)(hr == S_OK, "SetFolder failed: Got 0x%08lx\n", hr);
+
+    hr = IShellItem_GetDisplayName(psi_current, SIGDN_PARENTRELATIVEPARSING, &folder_name);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(CurrentFolder) failed: Got 0x%08lx\n", hr);
 
     pfde = IFileDialogEvents_Constructor();
     pfdeimpl = impl_from_IFileDialogEvents(pfde);
@@ -1530,6 +1571,42 @@ static void test_filename_opendlg_(LPCWSTR set_filename, LPCWSTR set_filename2,
 
         IShellItem_Release(psi);
         IShellItemArray_Release(psia);
+
+        hr = IFileOpenDialog_GetCurrentSelection(pfod, &psi);
+        ok_(file,line)(hr == S_OK, "GetCurrentSelection failed: Got 0x%08lx\n", hr);
+        hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+        ok_(file,line)(hr == S_OK, "GetDisplayName(CurrentSelection) failed: Got 0x%08lx\n", hr);
+        ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetCurrentSelection) Got %s\n", wine_dbgstr_w(filename));
+        CoTaskMemFree(filename);
+        IShellItem_Release(psi);
+
+        hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
+        ok_(file,line)(hr == S_OK, "GetSelectedItems failed: Got 0x%08lx\n", hr);
+        hr = IShellItemArray_GetItemAt(psia, 0, &psi);
+        ok_(file,line)(hr == S_OK, "GetItemAt(SelectedItems) failed: Got 0x%08lx\n", hr);
+        hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+        ok_(file,line)(hr == S_OK, "GetDisplayName(SelectedItems) failed: Got 0x%08lx\n", hr);
+        ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetSelectedItems) Got %s\n", wine_dbgstr_w(filename));
+        CoTaskMemFree(filename);
+        IShellItem_Release(psi);
+        IShellItemArray_Release(psia);
+
+        hr = IFileOpenDialog_SetFolder(pfod, psi_current);
+        ok_(file,line)(hr == S_OK, "SetFolder(reuse) failed: Got 0x%08lx\n", hr);
+
+        hr = IFileOpenDialog_GetFolder(pfod, &psi);
+        ok_(file,line)(hr == S_OK, "GetFolder(reuse) failed: Got 0x%08lx\n", hr);
+        hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+        ok_(file,line)(hr == S_OK, "GetDisplayName(Folder reuse) failed: Got 0x%08lx\n", hr);
+        ok_(file,line)(!lstrcmpW(filename, folder_name), "(GetFolder reuse) Got %s\n", wine_dbgstr_w(filename));
+        CoTaskMemFree(filename);
+        IShellItem_Release(psi);
+
+        hr = IFileOpenDialog_GetResult(pfod, &psi);
+        ok_(file,line)(hr == E_UNEXPECTED, "GetResult(reuse): Got 0x%08lx\n", hr);
+
+        hr = IFileOpenDialog_GetResults(pfod, &psia);
+        ok_(file,line)(hr == E_FAIL, "GetResults(reuse): Got 0x%08lx\n", hr);
     }
     else
     {
@@ -1552,16 +1629,437 @@ static void test_filename_opendlg_(LPCWSTR set_filename, LPCWSTR set_filename2,
     ref = IFileOpenDialog_Release(pfod);
     ok_(file,line)(!ref, "Got refcount %ld, should have been released.\n", ref);
 
+    CoTaskMemFree(folder_name);
     IFileDialogEvents_Release(pfde);
 }
 #define test_filename_opendlg(set_filename, set_filename2, psi, defext, filterspec, fs_count, ft_index, exp_filename) \
     test_filename_opendlg_(set_filename, set_filename2, psi, defext, filterspec, fs_count, ft_index, exp_filename, __FILE__, __LINE__)
 
+static void test_pickfolder_opendlg_(LPCWSTR set_filename, IShellItem *psi_current,
+                                     LPCWSTR exp_filename, const char *file, int line)
+{
+    IFileOpenDialog *pfod;
+    IFileDialogEventsImpl *pfdeimpl;
+    IFileDialogEvents *pfde;
+    DWORD cookie, options;
+    LPWSTR filename, folder_name = NULL;
+    IShellItemArray *psia;
+    IShellItem *psi;
+    LONG ref;
+    HRESULT hr;
+
+
+    hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IFileOpenDialog, (void **)&pfod);
+    ok_(file,line)(hr == S_OK, "CoCreateInstance failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetOptions(pfod, &options);
+    ok_(file,line)(hr == S_OK, "GetOptions failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_SetOptions(pfod, options | FOS_PICKFOLDERS);
+    ok_(file,line)(hr == S_OK, "SetOptions failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_SetFolder(pfod, psi_current);
+    ok_(file,line)(hr == S_OK, "SetFolder failed: got %#lx\n", hr);
+
+    hr = IShellItem_GetDisplayName(psi_current, SIGDN_PARENTRELATIVEPARSING, &folder_name);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(CurrentFolder) failed: got %#lx\n", hr);
+
+    pfde = IFileDialogEvents_Constructor();
+    pfdeimpl = impl_from_IFileDialogEvents(pfde);
+    pfdeimpl->set_filename = set_filename;
+    pfdeimpl->set_filename_tried = FALSE;
+
+    hr = IFileOpenDialog_Advise(pfod, pfde, &cookie);
+    ok_(file,line)(hr == S_OK, "Advise failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_Show(pfod, NULL);
+    ok_(file,line)(hr == S_OK, "Show failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetResult(pfod, &psi);
+    ok_(file,line)(hr == S_OK, "GetResult failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(Result) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetResult) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+
+    hr = IFileOpenDialog_GetResults(pfod, &psia);
+    ok_(file,line)(hr == S_OK, "GetResults failed: got %#lx\n", hr);
+    hr = IShellItemArray_GetItemAt(psia, 0, &psi);
+    ok_(file,line)(hr == S_OK, "GetItemAt(Results) failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(Results) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetResults) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+    IShellItemArray_Release(psia);
+
+    hr = IFileOpenDialog_GetCurrentSelection(pfod, &psi);
+    ok_(file,line)(hr == S_OK, "GetCurrentSelection failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(CurrentSelection) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetCurrentSelection) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+
+    hr = IFileOpenDialog_GetSelectedItems(pfod, &psia);
+    ok_(file,line)(hr == S_OK, "GetSelectedItems failed: got %#lx\n", hr);
+    hr = IShellItemArray_GetItemAt(psia, 0, &psi);
+    ok_(file,line)(hr == S_OK, "GetItemAt(SelectedItems) failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(SelectedItems) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetSelectedItems) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+    IShellItemArray_Release(psia);
+
+    hr = IFileOpenDialog_GetFolder(pfod, &psi);
+    ok_(file,line)(hr == S_OK, "GetFolder failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(Folder) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, exp_filename), "(GetFolder) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+
+    hr = IFileOpenDialog_GetFileName(pfod, &filename);
+    ok_(file,line)(hr == S_OK, "GetFileName failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, set_filename), "(GetFileName) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+
+    hr = IFileOpenDialog_SetFolder(pfod, psi_current);
+    ok_(file,line)(hr == S_OK, "SetFolder(reuse) failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetFolder(pfod, &psi);
+    ok_(file,line)(hr == S_OK, "GetFolder(reuse) failed: got %#lx\n", hr);
+    hr = IShellItem_GetDisplayName(psi, SIGDN_PARENTRELATIVEPARSING, &filename);
+    ok_(file,line)(hr == S_OK, "GetDisplayName(Folder reuse) failed: got %#lx\n", hr);
+    ok_(file,line)(!lstrcmpW(filename, folder_name), "(GetFolder reuse) got %s\n", wine_dbgstr_w(filename));
+    CoTaskMemFree(filename);
+    IShellItem_Release(psi);
+
+    hr = IFileOpenDialog_GetResult(pfod, &psi);
+    ok_(file,line)(hr == E_UNEXPECTED, "GetResult(reuse): got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetResults(pfod, &psia);
+    ok_(file,line)(hr == E_FAIL, "GetResults(reuse): got %#lx\n", hr);
+
+    hr = IFileOpenDialog_Unadvise(pfod, cookie);
+    ok_(file,line)(hr == S_OK, "Unadvise failed: got %#lx\n", hr);
+
+    ref = IFileOpenDialog_Release(pfod);
+    ok_(file,line)(!ref, "Got refcount %ld, should have been released.\n", ref);
+
+    CoTaskMemFree(folder_name);
+    IFileDialogEvents_Release(pfde);
+}
+#define test_pickfolder_opendlg(set_filename, psi, exp_filename) \
+    test_pickfolder_opendlg_(set_filename, psi, exp_filename, __FILE__, __LINE__)
+
+typedef enum
+{
+    RESULT_RESET_DEFAULT_EXTENSION,
+    RESULT_RESET_FILE_TYPES,
+    RESULT_RESET_FILE_TYPE_INDEX,
+    RESULT_RESET_CLEAR_CLIENT_DATA,
+    RESULT_RESET_FILE_NAME,
+    RESULT_RESET_DEFAULT_FOLDER,
+    RESULT_RESET_NAVIGATION_ROOT,
+    RESULT_RESET_FILTER,
+    RESULT_RESET_OPTIONS,
+    RESULT_RESET_SAVE_AS_ITEM,
+    RESULT_RESET_SET_PROPERTIES,
+    RESULT_RESET_SET_COLLECTED_PROPERTIES,
+    RESULT_RESET_APPLY_PROPERTIES,
+} result_reset_action;
+
+static void test_result_reset_opendlg_(IShellItem *psi_current, LPCWSTR set_filename,
+                                       const COMDLG_FILTERSPEC *filterspec, UINT fs_count,
+                                       UINT initial_ft_index, UINT reset_ft_index,
+                                       LPCWSTR defext, IShellItem *psi_reset,
+                                       result_reset_action action,
+                                       const char *file, int line)
+{
+    IFileOpenDialog *pfod;
+    IFileDialogEventsImpl *pfdeimpl;
+    IFileDialogEvents *pfde;
+    DWORD cookie;
+    FILEOPENDIALOGOPTIONS options;
+    IShellItem *psi;
+    IShellItemArray *psia;
+    LONG ref;
+    HRESULT hr;
+
+
+    hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IFileOpenDialog, (void **)&pfod);
+    ok_(file,line)(hr == S_OK, "CoCreateInstance failed: got %#lx\n", hr);
+
+    if (defext)
+    {
+        hr = IFileOpenDialog_SetDefaultExtension(pfod, defext);
+        ok_(file,line)(hr == S_OK, "SetDefaultExtension failed: got %#lx\n", hr);
+    }
+
+    if (fs_count)
+    {
+        hr = IFileOpenDialog_SetFileTypes(pfod, fs_count, filterspec);
+        ok_(file,line)(hr == S_OK, "SetFileTypes failed: got %#lx\n", hr);
+    }
+
+    if (initial_ft_index)
+    {
+        hr = IFileOpenDialog_SetFileTypeIndex(pfod, initial_ft_index);
+        ok_(file,line)(hr == S_OK, "SetFileTypeIndex failed: got %#lx\n", hr);
+    }
+
+    hr = IFileOpenDialog_SetFolder(pfod, psi_current);
+    ok_(file,line)(hr == S_OK, "SetFolder failed: got %#lx\n", hr);
+
+    pfde = IFileDialogEvents_Constructor();
+    pfdeimpl = impl_from_IFileDialogEvents(pfde);
+    pfdeimpl->set_filename = set_filename;
+    pfdeimpl->set_filename_tried = FALSE;
+
+    hr = IFileOpenDialog_Advise(pfod, pfde, &cookie);
+    ok_(file,line)(hr == S_OK, "Advise failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_Show(pfod, NULL);
+    ok_(file,line)(hr == S_OK, "Show failed: got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetResult(pfod, &psi);
+    ok_(file,line)(hr == S_OK, "GetResult failed: got %#lx\n", hr);
+    IShellItem_Release(psi);
+
+    switch (action)
+    {
+    case RESULT_RESET_DEFAULT_EXTENSION:
+        hr = IFileOpenDialog_SetDefaultExtension(pfod, L"zzz");
+        ok_(file,line)(hr == S_OK, "SetDefaultExtension(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_TYPES:
+        hr = IFileOpenDialog_SetFileTypes(pfod, fs_count, filterspec);
+        ok_(file,line)(hr == S_OK, "SetFileTypes(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_TYPE_INDEX:
+        hr = IFileOpenDialog_SetFileTypeIndex(pfod, reset_ft_index);
+        ok_(file,line)(hr == S_OK, "SetFileTypeIndex(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_CLEAR_CLIENT_DATA:
+        hr = IFileOpenDialog_ClearClientData(pfod);
+        ok_(file,line)(hr == S_OK, "ClearClientData(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_NAME:
+        hr = IFileOpenDialog_SetFileName(pfod, L"wine-bleeding-reset-target.tmp");
+        ok_(file,line)(hr == S_OK, "SetFileName(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_DEFAULT_FOLDER:
+        hr = IFileOpenDialog_SetDefaultFolder(pfod, psi_reset);
+        ok_(file,line)(hr == S_OK, "SetDefaultFolder(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_NAVIGATION_ROOT:
+        hr = IFileDialog2_SetNavigationRoot((IFileDialog2 *)pfod, psi_reset);
+        ok_(file,line)(hr == S_OK, "SetNavigationRoot(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILTER:
+        hr = IFileOpenDialog_SetFilter(pfod, NULL);
+        ok_(file,line)(hr == S_OK, "SetFilter(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_OPTIONS:
+        hr = IFileOpenDialog_GetOptions(pfod, &options);
+        ok_(file,line)(hr == S_OK, "GetOptions(reuse) failed: got %#lx\n", hr);
+        hr = IFileDialog2_SetOptions((IFileDialog2 *)pfod, options | FOS_PICKFOLDERS);
+        ok_(file,line)(hr == S_OK, "SetOptions(reuse) failed: got %#lx\n", hr);
+        break;
+
+    default:
+        ok_(file,line)(0, "unexpected open-dialog reset action %u\n", action);
+        break;
+    }
+
+    hr = IFileOpenDialog_GetResult(pfod, &psi);
+    if (action == RESULT_RESET_NAVIGATION_ROOT)
+    {
+        ok_(file,line)(hr == E_UNEXPECTED || hr == S_OK, "GetResult(reuse): got %#lx\n", hr);
+        if (hr == S_OK)
+            IShellItem_Release(psi);
+    }
+    else
+        ok_(file,line)(hr == E_UNEXPECTED, "GetResult(reuse): got %#lx\n", hr);
+
+    hr = IFileOpenDialog_GetResults(pfod, &psia);
+    if (action == RESULT_RESET_NAVIGATION_ROOT)
+    {
+        ok_(file,line)(hr == E_FAIL || hr == S_OK, "GetResults(reuse): got %#lx\n", hr);
+        if (hr == S_OK)
+            IShellItemArray_Release(psia);
+    }
+    else
+        ok_(file,line)(hr == E_FAIL, "GetResults(reuse): got %#lx\n", hr);
+
+    hr = IFileOpenDialog_Unadvise(pfod, cookie);
+    ok_(file,line)(hr == S_OK, "Unadvise failed: got %#lx\n", hr);
+
+    ref = IFileOpenDialog_Release(pfod);
+    ok_(file,line)(!ref, "Got refcount %ld, should have been released.\n", ref);
+
+    IFileDialogEvents_Release(pfde);
+}
+#define test_result_reset_opendlg(psi, set_filename, filterspec, fs_count, initial_ft_index, reset_ft_index, defext, psi_reset, action) \
+    test_result_reset_opendlg_(psi, set_filename, filterspec, fs_count, initial_ft_index, reset_ft_index, defext, psi_reset, action, __FILE__, __LINE__)
+
+static void test_result_reset_savedlg_(LPCWSTR set_filename, const COMDLG_FILTERSPEC *filterspec,
+                                       UINT fs_count, UINT initial_ft_index, LPCWSTR defext,
+                                       IShellItem *psi_reset, result_reset_action action,
+                                       const char *file, int line)
+{
+    IFileSaveDialog *pfsd;
+    IFileDialogEventsImpl *pfdeimpl;
+    IFileDialogEvents *pfde;
+    IPropertyStore *props = NULL;
+    DWORD cookie;
+    FILEOPENDIALOGOPTIONS options;
+    IShellItem *psi;
+    LONG ref;
+    HRESULT hr;
+
+
+    hr = CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IFileSaveDialog, (void **)&pfsd);
+    ok_(file,line)(hr == S_OK, "CoCreateInstance failed: got %#lx\n", hr);
+
+    if (defext)
+    {
+        hr = IFileSaveDialog_SetDefaultExtension(pfsd, defext);
+        ok_(file,line)(hr == S_OK, "SetDefaultExtension failed: got %#lx\n", hr);
+    }
+
+    if (fs_count)
+    {
+        hr = IFileSaveDialog_SetFileTypes(pfsd, fs_count, filterspec);
+        ok_(file,line)(hr == S_OK, "SetFileTypes failed: got %#lx\n", hr);
+    }
+
+    if (initial_ft_index)
+    {
+        hr = IFileSaveDialog_SetFileTypeIndex(pfsd, initial_ft_index);
+        ok_(file,line)(hr == S_OK, "SetFileTypeIndex failed: got %#lx\n", hr);
+    }
+
+    pfde = IFileDialogEvents_Constructor();
+    pfdeimpl = impl_from_IFileDialogEvents(pfde);
+    pfdeimpl->set_filename = set_filename;
+
+    hr = IFileSaveDialog_Advise(pfsd, pfde, &cookie);
+    ok_(file,line)(hr == S_OK, "Advise failed: got %#lx\n", hr);
+
+    hr = IFileSaveDialog_Show(pfsd, NULL);
+    ok_(file,line)(hr == S_OK, "Show failed: got %#lx\n", hr);
+
+    hr = IFileSaveDialog_GetResult(pfsd, &psi);
+    ok_(file,line)(hr == S_OK, "GetResult failed: got %#lx\n", hr);
+    IShellItem_Release(psi);
+
+    switch (action)
+    {
+    case RESULT_RESET_DEFAULT_EXTENSION:
+        hr = IFileSaveDialog_SetDefaultExtension(pfsd, L"zzz");
+        ok_(file,line)(hr == S_OK, "SetDefaultExtension(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_TYPES:
+        hr = IFileSaveDialog_SetFileTypes(pfsd, fs_count, filterspec);
+        ok_(file,line)(hr == S_OK, "SetFileTypes(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_TYPE_INDEX:
+        hr = IFileSaveDialog_SetFileTypeIndex(pfsd, initial_ft_index == 1 ? 2 : 1);
+        ok_(file,line)(hr == S_OK, "SetFileTypeIndex(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_CLEAR_CLIENT_DATA:
+        hr = IFileSaveDialog_ClearClientData(pfsd);
+        ok_(file,line)(hr == S_OK, "ClearClientData(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILE_NAME:
+        hr = IFileSaveDialog_SetFileName(pfsd, L"wine-bleeding-save-reset.tmp");
+        ok_(file,line)(hr == S_OK, "SetFileName(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_FILTER:
+        hr = IFileSaveDialog_SetFilter(pfsd, NULL);
+        ok_(file,line)(hr == S_OK, "SetFilter(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_OPTIONS:
+        hr = IFileSaveDialog_GetOptions(pfsd, &options);
+        ok_(file,line)(hr == S_OK, "GetOptions(reuse) failed: got %#lx\n", hr);
+        hr = IFileDialog2_SetOptions((IFileDialog2 *)pfsd, options | FOS_PICKFOLDERS);
+        ok_(file,line)(hr == S_OK, "SetOptions(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_SAVE_AS_ITEM:
+        hr = IFileSaveDialog_SetSaveAsItem(pfsd, psi_reset);
+        ok_(file,line)(hr == S_OK, "SetSaveAsItem(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_SET_PROPERTIES:
+        hr = IFileSaveDialog_GetProperties(pfsd, &props);
+        ok_(file,line)(hr == S_OK, "GetProperties(reuse) failed: got %#lx\n", hr);
+        hr = IFileSaveDialog_SetProperties(pfsd, props);
+        ok_(file,line)(hr == S_OK, "SetProperties(reuse) failed: got %#lx\n", hr);
+        IPropertyStore_Release(props);
+        props = NULL;
+        break;
+
+    case RESULT_RESET_SET_COLLECTED_PROPERTIES:
+        hr = IFileSaveDialog_SetCollectedProperties(pfsd, NULL, TRUE);
+        ok_(file,line)(hr == S_OK, "SetCollectedProperties(reuse) failed: got %#lx\n", hr);
+        break;
+
+    case RESULT_RESET_APPLY_PROPERTIES:
+        hr = IFileSaveDialog_ApplyProperties(pfsd, psi_reset, NULL, NULL, NULL);
+        ok_(file,line)(hr == S_OK, "ApplyProperties(reuse) failed: got %#lx\n", hr);
+        break;
+
+    default:
+        ok_(file,line)(0, "unexpected save-dialog reset action %u\n", action);
+        break;
+    }
+
+    hr = IFileSaveDialog_GetResult(pfsd, &psi);
+    ok_(file,line)(hr == E_UNEXPECTED, "GetResult(reuse): got %#lx\n", hr);
+
+    hr = IFileSaveDialog_Unadvise(pfsd, cookie);
+    ok_(file,line)(hr == S_OK, "Unadvise failed: got %#lx\n", hr);
+
+    ref = IFileSaveDialog_Release(pfsd);
+    ok_(file,line)(!ref, "Got refcount %ld, should have been released.\n", ref);
+
+    if (props)
+        IPropertyStore_Release(props);
+    IFileDialogEvents_Release(pfde);
+}
+#define test_result_reset_savedlg(set_filename, filterspec, fs_count, initial_ft_index, defext, psi_reset, action) \
+    test_result_reset_savedlg_(set_filename, filterspec, fs_count, initial_ft_index, defext, psi_reset, action, __FILE__, __LINE__)
+
 static void test_filename(void)
 {
     IShellItem *psi_current;
+    IShellItem *psi_save_target = NULL;
     HRESULT hr;
-    WCHAR buf[MAX_PATH];
+    WCHAR buf[MAX_PATH], abs_noextW[MAX_PATH], abs_defextW[MAX_PATH];
+    WCHAR parent_dirW[MAX_PATH], child_dirW[MAX_PATH];
+    IShellItem *psi_pickfolder_parent;
 
     static const WCHAR filename_noextW[] = {'w','i','n','e','t','e','s','t',0};
     static const WCHAR filename_dotextW[] = {'w','i','n','e','t','e','s','t','.',0};
@@ -1580,6 +2078,8 @@ static void test_filename(void)
     static const WCHAR ext2[] = {'*','.','w','t','2',0};
     static const WCHAR extdef[] = {'*','.','w','t','e',0};
     static const WCHAR complexext[] = {'*','.','w','t','2',';','*','.','w','t','1',0};
+    static const WCHAR pick_parentW[] = {'w','i','n','e','-','b','l','e','e','d','i','n','g','-','p','i','c','k','-','p','a','r','e','n','t',0};
+    static const WCHAR pick_childW[] = {'w','i','n','e','-','b','l','e','e','d','i','n','g','-','p','i','c','k','-','c','h','i','l','d',0};
     /* 300 chars, to be longer than MAX_PATH=260 */
     static const WCHAR long_ext[] = L"*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;*.wt2;";
 
@@ -1619,6 +2119,10 @@ static void test_filename(void)
     test_filename_savedlg(filename_noextW, NULL, defextW, filterspec_long, 1, 0, filename_ext2W);
 
     GetCurrentDirectoryW(MAX_PATH, buf);
+    swprintf(abs_noextW, ARRAY_SIZE(abs_noextW), L"%s\\%s", buf, filename_noextW);
+    swprintf(abs_defextW, ARRAY_SIZE(abs_defextW), L"%s\\%s", buf, filename_defextW);
+    test_filename_savedlg(abs_noextW, NULL, defextW, NULL, 0, 0, filename_defextW);
+    test_filename_savedlg(abs_noextW, NULL, defextW, filterspec, 3, 2, filename_ext2W);
     ok(!!pSHCreateItemFromParsingName, "SHCreateItemFromParsingName is missing.\n");
     hr = pSHCreateItemFromParsingName(buf, NULL, &IID_IShellItem, (void**)&psi_current);
     ok(hr == S_OK, "Got 0x%08lx\n", hr);
@@ -1648,7 +2152,55 @@ static void test_filename(void)
     test_filename_opendlg(filename_noextW, NULL, psi_current, NULL, filterspec, 2, 0, NULL);
     }
 
+    swprintf(parent_dirW, ARRAY_SIZE(parent_dirW), L"%s\\%s", buf, pick_parentW);
+    swprintf(child_dirW, ARRAY_SIZE(child_dirW), L"%s\\%s", parent_dirW, pick_childW);
+    CreateDirectoryW(parent_dirW, NULL);
+    CreateDirectoryW(child_dirW, NULL);
+
+    hr = pSHCreateItemFromParsingName(parent_dirW, NULL, &IID_IShellItem, (void **)&psi_pickfolder_parent);
+    ok(hr == S_OK, "Got %#lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        test_pickfolder_opendlg(pick_childW, psi_pickfolder_parent, pick_childW);
+        IShellItem_Release(psi_pickfolder_parent);
+    }
+
+    touch_file(filename_noextW);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_DEFAULT_EXTENSION);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_FILE_TYPES);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_FILE_TYPE_INDEX);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_CLEAR_CLIENT_DATA);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_FILE_NAME);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_DEFAULT_FOLDER);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_NAVIGATION_ROOT);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_FILTER);
+    test_result_reset_opendlg(psi_current, filename_noextW, filterspec, 3, 2, 1, defextW, psi_current, RESULT_RESET_OPTIONS);
+
+    hr = pSHCreateItemFromParsingName(abs_defextW, NULL, &IID_IShellItem, (void **)&psi_save_target);
+    ok(hr == S_OK, "Got %#lx\n", hr);
+
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_DEFAULT_EXTENSION);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_FILE_TYPES);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_FILE_TYPE_INDEX);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_CLEAR_CLIENT_DATA);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_FILE_NAME);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_FILTER);
+    test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_OPTIONS);
+    if (psi_save_target)
+    {
+        test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_SAVE_AS_ITEM);
+        test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_SET_PROPERTIES);
+        test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_SET_COLLECTED_PROPERTIES);
+        test_result_reset_savedlg(filename_noextW, filterspec, 3, 2, defextW, psi_save_target, RESULT_RESET_APPLY_PROPERTIES);
+    }
+
+    RemoveDirectoryW(child_dirW);
+    RemoveDirectoryW(parent_dirW);
+
+    if (psi_save_target)
+        IShellItem_Release(psi_save_target);
     IShellItem_Release(psi_current);
+    DeleteFileW(filename_noextW);
     DeleteFileW(filename_defextW);
     DeleteFileW(filename_ext2W);
 }

@@ -598,30 +598,26 @@ static void test_SB_misc(void)
     ok(hr == E_FAIL, "got (0x%08lx)\n", hr);
     ok(retHwnd == (HWND)0xDEADBEEF, "HWND overwritten\n");
 
-    todo_wine
-    {
+    /* ::SendControlMsg */
+    lres = 0xDEADBEEF;
+    hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, &lres);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    ok(lres == 0, "lres was %Id\n", lres);
 
-        /* ::SendControlMsg */
-        lres = 0xDEADBEEF;
-        hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, &lres);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-        ok(lres == 0, "lres was %Id\n", lres);
+    lres = 0xDEADBEEF;
+    hr = IShellBrowser_SendControlMsg(psb, FCW_TOOLBAR, TB_CHECKBUTTON,
+                                      FCIDM_TB_SMALLICON, TRUE, &lres);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    ok(lres == 0, "lres was %Id\n", lres);
 
-        lres = 0xDEADBEEF;
-        hr = IShellBrowser_SendControlMsg(psb, FCW_TOOLBAR, TB_CHECKBUTTON,
-                                          FCIDM_TB_SMALLICON, TRUE, &lres);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-        ok(lres == 0, "lres was %Id\n", lres);
+    hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, NULL);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, NULL);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    hr = IShellBrowser_SendControlMsg(psb, FCW_TREE, 0, 0, 0, NULL);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        hr = IShellBrowser_SendControlMsg(psb, FCW_TREE, 0, 0, 0, NULL);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-
-        hr = IShellBrowser_SendControlMsg(psb, FCW_PROGRESS, 0, 0, 0, NULL);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-    }
+    hr = IShellBrowser_SendControlMsg(psb, FCW_PROGRESS, 0, 0, 0, NULL);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
     /* ::QueryActiveShellView */
     hr = IShellBrowser_QueryActiveShellView(psb, (IShellView**)&punk);
@@ -637,40 +633,37 @@ static void test_SB_misc(void)
     ok(hr == S_OK, "got (0x%08lx)\n", hr);
     ok(GetParent(retHwnd) == hwnd, "The HWND returned is not our child.\n");
 
-    todo_wine
-    {
-        /* ::SendControlMsg */
-        hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, NULL);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    /* ::SendControlMsg */
+    hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, NULL);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        lres = 0xDEADBEEF;
-        hr = IShellBrowser_SendControlMsg(psb, FCW_TOOLBAR, 0, 0, 0, &lres);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-        ok(lres == 0, "lres was %Id\n", lres);
+    lres = 0xDEADBEEF;
+    hr = IShellBrowser_SendControlMsg(psb, FCW_TOOLBAR, 0, 0, 0, &lres);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    ok(lres == 0, "lres was %Id\n", lres);
 
-        lres = 0xDEADBEEF;
-        hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, &lres);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-        ok(lres == 0, "lres was %Id\n", lres);
+    lres = 0xDEADBEEF;
+    hr = IShellBrowser_SendControlMsg(psb, FCW_STATUS, 0, 0, 0, &lres);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    ok(lres == 0, "lres was %Id\n", lres);
 
-        lres = 0xDEADBEEF;
-        hr = IShellBrowser_SendControlMsg(psb, 1234, 0, 0, 0, &lres);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-        ok(lres == 0, "lres was %Id\n", lres);
+    lres = 0xDEADBEEF;
+    hr = IShellBrowser_SendControlMsg(psb, 1234, 0, 0, 0, &lres);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    ok(lres == 0, "lres was %Id\n", lres);
 
-        /* Returns S_OK */
-        hr = IShellBrowser_SetStatusTextSB(psb, NULL);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    /* Returns S_OK */
+    hr = IShellBrowser_SetStatusTextSB(psb, NULL);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        hr = IShellBrowser_ContextSensitiveHelp(psb, FALSE);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    hr = IShellBrowser_ContextSensitiveHelp(psb, FALSE);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        hr = IShellBrowser_EnableModelessSB(psb, TRUE);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
+    hr = IShellBrowser_EnableModelessSB(psb, TRUE);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
-        hr = IShellBrowser_SetToolbarItems(psb, NULL, 1, 1);
-        ok(hr == S_OK, "got (0x%08lx)\n", hr);
-    }
+    hr = IShellBrowser_SetToolbarItems(psb, NULL, 1, 1);
+    ok(hr == S_OK, "got (0x%08lx)\n", hr);
 
     hr = IShellBrowser_QueryActiveShellView(psb, (IShellView**)&punk);
     ok(hr == E_FAIL, "got (0x%08lx)\n", hr);

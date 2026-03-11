@@ -366,6 +366,32 @@ static HRESULT get_data_format(IDataObject *data, UINT cf, STGMEDIUM *medium)
     return IDataObject_GetData(data, &format, medium);
 }
 
+static HRESULT select_paste_fileop(const STGMEDIUM *medium, UINT *file_op)
+{
+    const DWORD *drop_effect;
+    HRESULT hr = S_OK;
+
+    if (!medium || !file_op || medium->tymed != TYMED_HGLOBAL || !medium->hGlobal)
+        return E_INVALIDARG;
+
+    drop_effect = GlobalLock(medium->hGlobal);
+    if (!drop_effect)
+        return E_FAIL;
+
+    if (*drop_effect & DROPEFFECT_MOVE)
+        *file_op = FO_MOVE;
+    else if (*drop_effect & DROPEFFECT_COPY)
+        *file_op = FO_COPY;
+    else
+    {
+        FIXME("Unhandled drop effect %#lx.\n", *drop_effect);
+        hr = E_FAIL;
+    }
+
+    GlobalUnlock(medium->hGlobal);
+    return hr;
+}
+
 static WCHAR *build_source_paths(ITEMIDLIST *root_pidl, ITEMIDLIST **pidls, unsigned int count)
 {
     WCHAR root_path[MAX_PATH], pidl_path[MAX_PATH];
@@ -409,7 +435,6 @@ static WCHAR *build_source_paths(ITEMIDLIST *root_pidl, ITEMIDLIST **pidls, unsi
 static HRESULT do_paste(ContextMenu *menu, HWND hwnd)
 {
     IPersistFolder2 *dst_persist;
-    const DWORD *drop_effect;
     IShellFolder *dst_folder;
     WCHAR dst_path[MAX_PATH];
     SHFILEOPSTRUCTW op = {0};
@@ -469,14 +494,13 @@ static HRESULT do_paste(ContextMenu *menu, HWND hwnd)
         IDataObject_Release(data);
         return hr;
     }
-    drop_effect = GlobalLock(medium.hGlobal);
-    if (*drop_effect & DROPEFFECT_COPY)
-        op.wFunc = FO_COPY;
-    else if (*drop_effect & DROPEFFECT_MOVE)
-        op.wFunc = FO_MOVE;
-    else
-        FIXME("Unhandled drop effect %#lx.\n", *drop_effect);
-    GlobalUnlock(medium.hGlobal);
+    hr = select_paste_fileop(&medium, &op.wFunc);
+    ReleaseStgMedium(&medium);
+    if (FAILED(hr))
+    {
+        IDataObject_Release(data);
+        return hr;
+    }
 
     if (SUCCEEDED(get_data_format(data, RegisterClipboardFormatW(CFSTR_SHELLIDLISTW), &medium)))
     {
