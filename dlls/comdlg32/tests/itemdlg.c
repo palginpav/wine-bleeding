@@ -1864,9 +1864,18 @@ static void test_result_reset_opendlg_(IShellItem *psi_current, LPCWSTR set_file
         break;
 
     case RESULT_RESET_NAVIGATION_ROOT:
-        hr = IFileDialog2_SetNavigationRoot((IFileDialog2 *)pfod, psi_reset);
-        ok_(file,line)(hr == S_OK, "SetNavigationRoot(reuse) failed: got %#lx\n", hr);
+    {
+        IFileDialog2 *pfd2;
+        hr = IFileOpenDialog_QueryInterface(pfod, &IID_IFileDialog2, (void **)&pfd2);
+        ok_(file,line)(hr == S_OK, "QI(IID_IFileDialog2) failed: got %#lx\n", hr);
+        if (hr == S_OK)
+        {
+            hr = IFileDialog2_SetNavigationRoot(pfd2, psi_reset);
+            ok_(file,line)(hr == S_OK, "SetNavigationRoot(reuse) failed: got %#lx\n", hr);
+            IFileDialog2_Release(pfd2);
+        }
         break;
+    }
 
     case RESULT_RESET_FILTER:
         hr = IFileOpenDialog_SetFilter(pfod, NULL);
@@ -1876,7 +1885,7 @@ static void test_result_reset_opendlg_(IShellItem *psi_current, LPCWSTR set_file
     case RESULT_RESET_OPTIONS:
         hr = IFileOpenDialog_GetOptions(pfod, &options);
         ok_(file,line)(hr == S_OK, "GetOptions(reuse) failed: got %#lx\n", hr);
-        hr = IFileDialog2_SetOptions((IFileDialog2 *)pfod, options | FOS_PICKFOLDERS);
+        hr = IFileOpenDialog_SetOptions(pfod, options | FOS_PICKFOLDERS);
         ok_(file,line)(hr == S_OK, "SetOptions(reuse) failed: got %#lx\n", hr);
         break;
 
@@ -2003,7 +2012,7 @@ static void test_result_reset_savedlg_(LPCWSTR set_filename, const COMDLG_FILTER
     case RESULT_RESET_OPTIONS:
         hr = IFileSaveDialog_GetOptions(pfsd, &options);
         ok_(file,line)(hr == S_OK, "GetOptions(reuse) failed: got %#lx\n", hr);
-        hr = IFileDialog2_SetOptions((IFileDialog2 *)pfsd, options | FOS_PICKFOLDERS);
+        hr = IFileSaveDialog_SetOptions(pfsd, options | FOS_PICKFOLDERS);
         ok_(file,line)(hr == S_OK, "SetOptions(reuse) failed: got %#lx\n", hr);
         break;
 

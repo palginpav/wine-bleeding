@@ -1062,6 +1062,10 @@ static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWS
         return hr;
     }
 
+    hr = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
+    if (SUCCEEDED(hr))
+        return hr;
+
     path = StrDupW(filename);
     if (!path)
         return E_OUTOFMEMORY;
@@ -1085,7 +1089,6 @@ static HRESULT create_shellitem_from_dialog_filename(FileDialogImpl *This, LPCWS
         }
     }
 
-    hr = SHCreateItemFromParsingName(filename, NULL, riid, ppv);
     if (FAILED(hr))
     {
         pidl = SHSimpleIDListFromPath(filename);
@@ -1477,6 +1480,7 @@ static HRESULT on_default_action(FileDialogImpl *This)
 {
     IShellFolder *psf_parent, *psf_desktop;
     WCHAR **resolved_names = NULL;
+    IShellItem *action_folder;
     LPITEMIDLIST current_folder;
     LPWSTR fn_iter, files = NULL, tmp_files, filter = NULL;
     UINT file_count = 0, len, i;
@@ -1492,7 +1496,8 @@ static HRESULT on_default_action(FileDialogImpl *This)
     }
     if(!file_count) return E_FAIL;
 
-    hr = SHGetIDListFromObject((IUnknown*)This->psi_folder, &current_folder);
+    action_folder = This->psi_setfolder ? This->psi_setfolder : This->psi_folder;
+    hr = SHGetIDListFromObject((IUnknown*)action_folder, &current_folder);
     if(FAILED(hr))
     {
         ERR("Failed to get pidl for current directory.\n");
@@ -4116,10 +4121,11 @@ static HRESULT WINAPI IFileDialog2_fnSetFilter(IFileDialog2 *iface, IShellItemFi
     IShellItem *refresh_folder = NULL;
     TRACE("%p (%p)\n", This, pFilter);
 
+    /* Reusing the same filter still resets previously cached results. */
+    clear_dialog_results_if_closed(This, TRUE);
+
     if (This->psifilter == pFilter)
         return S_OK;
-
-    clear_dialog_results_if_closed(This, TRUE);
 
     if (This->psifilter)
         IShellItemFilter_Release(This->psifilter);
@@ -4923,6 +4929,7 @@ static HRESULT WINAPI IExplorerBrowserEvents_fnOnNavigationComplete(IExplorerBro
                                                                     PCIDLIST_ABSOLUTE pidlFolder)
 {
     FileDialogImpl *This = impl_from_IExplorerBrowserEvents(iface);
+    int order = 1;
     HRESULT hr;
     TRACE("%p (%p)\n", This, pidlFolder);
 
@@ -4934,6 +4941,14 @@ static HRESULT WINAPI IExplorerBrowserEvents_fnOnNavigationComplete(IExplorerBro
     {
         ERR("Failed to get the current folder.\n");
         This->psi_folder = NULL;
+    }
+    else if (This->psi_setfolder &&
+             SUCCEEDED(IShellItem_Compare(This->psi_folder, This->psi_setfolder,
+                        SICHINT_CANONICAL | SICHINT_TEST_FILESYSPATH_IF_NOT_EQUAL, &order)) &&
+             order == 0)
+    {
+        IShellItem_Release(This->psi_setfolder);
+        This->psi_setfolder = NULL;
     }
 
     clear_dialog_results(This, TRUE);
@@ -5655,7 +5670,10 @@ static HRESULT WINAPI IFileDialogCustomize_fnSetControlLabel(IFileDialogCustomiz
             customctrl_sync_menu_size(ctrl);
         }
         else if (ctrl->hwnd)
-            SendMessageW(ctrl->hwnd, WM_SETTEXT, 0, (LPARAM)ctrl->text);
+        {
+            if (ctrl->type != IDLG_CCTRL_VISUALGROUP)
+                SendMessageW(ctrl->hwnd, WM_SETTEXT, 0, (LPARAM)ctrl->text);
+        }
 
         customctrl_sync_live_layout(This, ctrl);
         break;
@@ -6503,7 +6521,7 @@ static HRESULT WINAPI IFileDialogCustomize_fnStartVisualGroup(IFileDialogCustomi
     if(This->cctrl_active_vg)
         return E_UNEXPECTED;
 
-    hr = cctrl_create_new(This, dwIDCtl, pszLabel, WC_STATICW, 0, 0,
+    hr = cctrl_create_new(This, dwIDCtl, NULL, WC_STATICW, 0, 0,
                           This->cctrl_def_height, &vg);
     if(SUCCEEDED(hr))
     {

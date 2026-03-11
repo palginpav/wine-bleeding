@@ -3279,6 +3279,32 @@ static HRESULT WINAPI FolderView2_GetSelectedItem(IFolderView2 *iface, int start
     return (index >= 0) ? S_OK : S_FALSE;
 }
 
+static HRESULT folderview2_create_folder_selection_array(IShellViewImpl *This, IShellItemArray **array)
+{
+    IPersistFolder2 *persist_folder;
+    IShellItem *folder_item = NULL;
+    LPITEMIDLIST folder_pidl = NULL;
+    HRESULT hr;
+
+    hr = IShellFolder_QueryInterface(This->pSFParent, &IID_IPersistFolder2, (void **)&persist_folder);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IPersistFolder2_GetCurFolder(persist_folder, &folder_pidl);
+    IPersistFolder2_Release(persist_folder);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHCreateItemFromIDList(folder_pidl, &IID_IShellItem, (void **)&folder_item);
+    ILFree(folder_pidl);
+    if (FAILED(hr))
+        return hr;
+
+    hr = SHCreateShellItemArrayFromShellItem(folder_item, &IID_IShellItemArray, (void **)array);
+    IShellItem_Release(folder_item);
+    return hr;
+}
+
 static HRESULT WINAPI FolderView2_GetSelection(IFolderView2 *iface, BOOL none_implies_folder,
     IShellItemArray **array)
 {
@@ -3297,7 +3323,11 @@ static HRESULT WINAPI FolderView2_GetSelection(IFolderView2 *iface, BOOL none_im
 
     count = SendMessageW(This->hWndList, LVM_GETITEMCOUNT, 0, 0);
     if (!count)
-        return none_implies_folder ? S_FALSE : E_FAIL;
+    {
+        if (none_implies_folder)
+            return folderview2_create_folder_selection_array(This, array);
+        return E_FAIL;
+    }
 
     pidl_list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, count * sizeof(*pidl_list));
     if (!pidl_list) return E_OUTOFMEMORY;
@@ -3326,7 +3356,9 @@ static HRESULT WINAPI FolderView2_GetSelection(IFolderView2 *iface, BOOL none_im
     if (!sel_count)
     {
         HeapFree(GetProcessHeap(), 0, pidl_list);
-        return none_implies_folder ? S_FALSE : E_FAIL;
+        if (none_implies_folder)
+            return folderview2_create_folder_selection_array(This, array);
+        return E_FAIL;
     }
 
     hr = SHCreateShellItemArray(NULL, This->pSFParent, sel_count, (LPCITEMIDLIST *)pidl_list, array);
