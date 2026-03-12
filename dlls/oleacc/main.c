@@ -68,6 +68,27 @@ const struct win_class_data* find_class_data(HWND hwnd, const struct win_class_d
         }
     }
 
+    if (!wcsnicmp(class_name, L"WindowsForms10.COMBOBOX.", ARRAY_SIZE(L"WindowsForms10.COMBOBOX.") - 1))
+        idx = 0x10005;
+    else if (!wcsicmp(class_name, L"ComboLBox"))
+        idx = 0x10000;
+    else
+        idx = 0;
+
+    if(idx) {
+        TRACE("mapped custom window class %s to %#x\n", debugstr_w(class_name), idx);
+        for(i=0; classes[i].name; i++) {
+            if(idx == classes[i].idx) {
+                if(classes[i].stub)
+                    FIXME("unhandled window class: %s\n", debugstr_w(class_name));
+                return &classes[i];
+            }
+        }
+
+        WARN("unhandled aliased class name idx: %x\n", idx);
+        return NULL;
+    }
+
     idx = SendMessageW(hwnd, WM_GETOBJECT, 0, OBJID_QUERYCLASSNAMEIDX);
     if(idx) {
         for(i=0; classes[i].name; i++) {

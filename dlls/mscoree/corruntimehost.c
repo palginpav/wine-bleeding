@@ -70,6 +70,8 @@ static struct list dll_fixups;
 
 WCHAR **private_path = NULL;
 
+#define MIN_MANAGED_ENTRY_STACK_RESERVE (8 * 1024 * 1024)
+
 struct dll_fixup
 {
     struct list entry;
@@ -115,6 +117,51 @@ struct clrclass_data
     ULONG version_offset;
     DWORD res2[2];
 };
+
+static MonoDomain* domain_attach(MonoDomain *domain);
+static void domain_restore(MonoDomain *prev_domain);
+
+struct exe_run_thread_args
+{
+    MonoDomain *domain;
+    MonoAssembly *assembly;
+    int argc;
+    char **argv;
+    int exit_code;
+};
+
+static SIZE_T get_exe_stack_reserve(HMODULE module)
+{
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)module;
+    const IMAGE_NT_HEADERS32 *nt32;
+
+    if (!module || dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return 0;
+
+    nt32 = (const IMAGE_NT_HEADERS32 *)((const BYTE *)module + dos->e_lfanew);
+    if (nt32->Signature != IMAGE_NT_SIGNATURE)
+        return 0;
+
+    if (nt32->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+        return ((const IMAGE_NT_HEADERS32 *)nt32)->OptionalHeader.SizeOfStackReserve;
+    if (nt32->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return ((const IMAGE_NT_HEADERS64 *)nt32)->OptionalHeader.SizeOfStackReserve;
+
+    return 0;
+}
+
+static DWORD WINAPI cor_exe_thread_main(void *param)
+{
+    struct exe_run_thread_args *args = param;
+    MonoDomain *prev_domain;
+
+    prev_domain = domain_attach(args->domain);
+    args->exit_code = mono_jit_exec(args->domain, args->assembly, args->argc, args->argv);
+    mono_thread_manage();
+    mono_runtime_quit();
+    domain_restore(prev_domain);
+    return 0;
+}
 
 static MonoDomain* domain_attach(MonoDomain *domain)
 {
@@ -1600,6 +1647,7 @@ __int32 WINAPI _CorExeMain(void)
 {
     static const WCHAR dotconfig[] = {'.','c','o','n','f','i','g',0};
     static const WCHAR scW[] = {';',0};
+    SIZE_T stack_reserve;
     int exit_code;
     int argc;
     char **argv;
@@ -1621,6 +1669,7 @@ __int32 WINAPI _CorExeMain(void)
     GetModuleFileNameW(NULL, filename, MAX_PATH);
 
     TRACE("%s argc=%i\n", debugstr_w(filename), argc);
+    stack_reserve = get_exe_stack_reserve(GetModuleHandleW(NULL));
 
     filenameA = WtoA(filename);
     if (!filenameA)
@@ -1681,8 +1730,30 @@ __int32 WINAPI _CorExeMain(void)
             if (assembly)
             {
                 mono_callspec_set_assembly(assembly);
+                if (stack_reserve && stack_reserve < MIN_MANAGED_ENTRY_STACK_RESERVE)
+                {
+                    struct exe_run_thread_args thread_args = { domain, assembly, argc, argv, -1 };
+                    HANDLE thread;
 
-                exit_code = mono_jit_exec(domain, assembly, argc, argv);
+                    thread = CreateThread(NULL, MIN_MANAGED_ENTRY_STACK_RESERVE, cor_exe_thread_main,
+                            &thread_args, 0, NULL);
+                    if (thread)
+                    {
+                        WaitForSingleObject(thread, INFINITE);
+                        CloseHandle(thread);
+                        exit_code = thread_args.exit_code;
+                        domain = NULL;
+                    }
+                    else
+                    {
+                        WARN("Failed to create managed entry thread, falling back to current thread.\n");
+                        exit_code = mono_jit_exec(domain, assembly, argc, argv);
+                    }
+                }
+                else
+                {
+                    exit_code = mono_jit_exec(domain, assembly, argc, argv);
+                }
             }
             else
             {
