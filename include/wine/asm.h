@@ -152,10 +152,13 @@
 # ifdef __WINE_PE_BUILD
 #  define __ASM_STDCALL(name,args)  "_" name "@" #args
 #  define __ASM_FASTCALL(name,args) "@" name "@" #args
+#  define __ASM_STDCALL_EXPAND(name,args) __ASM_STDCALL_EXPAND_(name,args)
+#  define __ASM_STDCALL_EXPAND_(name,args) "_" name "@" #args
 #  define __ASM_STDCALL_IMPORT(name,args) __ASM_DEFINE_IMPORT(__ASM_STDCALL(#name,args))
 # else
 #  define __ASM_STDCALL(name,args)  __ASM_NAME(name)
 #  define __ASM_FASTCALL(name,args) __ASM_NAME("__fastcall_" name)
+#  define __ASM_STDCALL_EXPAND(name,args) __ASM_STDCALL(name,args)
 #  define __ASM_STDCALL_IMPORT(name,args) /* nothing */
 # endif
 # define __ASM_STDCALL_FUNC(name,args,code) __ASM_DEFINE_FUNC(__ASM_STDCALL(#name,args),code)
@@ -164,25 +167,56 @@
 
 /* fastcall support */
 
-#if defined(__i386__) && !defined(__WINE_PE_BUILD)
+#if defined(__i386__)
 
 # define __ASM_USE_FASTCALL_WRAPPER
-# define DEFINE_FASTCALL1_WRAPPER(func) \
+# if defined(__WINE_PE_BUILD)
+#  define DECLARE_FASTCALL_IMPORT(func,args) \
+    extern void __wine_fastcall_ ## func(void) __asm__( __ASM_FASTCALL(#func,args) )
+#  define FASTCALL_IMPORT(func) __wine_fastcall_ ## func
+#  define DECLARE_FASTCALL_DIRECT1(func) \
+    extern void __attribute__((__fastcall__)) __wine_fastcall_direct_ ## func(void *) __asm__( __ASM_FASTCALL(#func,4) )
+#  define DECLARE_FASTCALL_DIRECT2(func) \
+    extern void __attribute__((__fastcall__)) __wine_fastcall_direct_ ## func(void *, void *) __asm__( __ASM_FASTCALL(#func,8) )
+#  define CALL_FASTCALL_DIRECT1(func,a) __wine_fastcall_direct_ ## func((void *)(a))
+#  define CALL_FASTCALL_DIRECT2(func,a,b) __wine_fastcall_direct_ ## func((void *)(a), (void *)(b))
+# else
+#  define DECLARE_FASTCALL_IMPORT(func,args) /* nothing */
+#  define FASTCALL_IMPORT(func) func
+#  define DECLARE_FASTCALL_DIRECT1(func) /* nothing */
+#  define DECLARE_FASTCALL_DIRECT2(func) /* nothing */
+#  define CALL_FASTCALL_DIRECT1(func,a) func(a)
+#  define CALL_FASTCALL_DIRECT2(func,a,b) func(a,b)
+# endif
+# ifdef __WINE_PE_BUILD
+#  define DEFINE_FASTCALL1_WRAPPER(func) \
+    __ASM_FASTCALL_FUNC( func, 4, "jmp " __ASM_STDCALL(#func,4) )
+#  define DEFINE_FASTCALL_WRAPPER(func,args) \
+    __ASM_FASTCALL_FUNC( func, args, "jmp " __ASM_STDCALL(#func,args) )
+# else
+#  define DEFINE_FASTCALL1_WRAPPER(func) \
     __ASM_FASTCALL_FUNC( func, 4, \
                         "popl %eax\n\t"  \
                         "pushl %ecx\n\t" \
                         "pushl %eax\n\t" \
                         "jmp " __ASM_STDCALL(#func,4) )
-# define DEFINE_FASTCALL_WRAPPER(func,args) \
+#  define DEFINE_FASTCALL_WRAPPER(func,args) \
     __ASM_FASTCALL_FUNC( func, args, \
                         "popl %eax\n\t"  \
                         "pushl %edx\n\t" \
                         "pushl %ecx\n\t" \
                         "pushl %eax\n\t" \
                         "jmp " __ASM_STDCALL(#func,args) )
+# endif
 
 #else  /* __i386__ */
 
+# define DECLARE_FASTCALL_IMPORT(func,args) /* nothing */
+# define FASTCALL_IMPORT(func) func
+# define DECLARE_FASTCALL_DIRECT1(func) /* nothing */
+# define DECLARE_FASTCALL_DIRECT2(func) /* nothing */
+# define CALL_FASTCALL_DIRECT1(func,a) func(a)
+# define CALL_FASTCALL_DIRECT2(func,a,b) func(a,b)
 # define DEFINE_FASTCALL1_WRAPPER(func) /* nothing */
 # define DEFINE_FASTCALL_WRAPPER(func,args) /* nothing */
 
@@ -190,7 +224,7 @@
 
 /* thiscall support */
 
-#if defined(__i386__) && !defined(__MINGW32__) && (!defined(_MSC_VER) || !defined(__clang__))
+#if defined(__i386__) && (!defined(_MSC_VER) || !defined(__clang__))
 
 # define __ASM_USE_THISCALL_WRAPPER
 # ifdef _MSC_VER
@@ -203,13 +237,29 @@
         jmp func \
     } }
 # else  /* _MSC_VER */
-#  define DEFINE_THISCALL_WRAPPER(func,args) \
+#  ifdef __WINE_PE_BUILD
+#   define DEFINE_THISCALL_WRAPPER_EX(func,args,implargs) \
     extern void __thiscall_ ## func(void);  \
-    __ASM_STDCALL_FUNC( __thiscall_ ## func, args, \
+    __ASM_DEFINE_FUNC( __ASM_NAME(#func), \
+                       "jmp " __ASM_STDCALL_EXPAND(#func,implargs) ); \
+    __ASM_DEFINE_FUNC( __ASM_NAME("__thiscall_" #func), \
                        "popl %eax\n\t"  \
                        "pushl %ecx\n\t" \
                        "pushl %eax\n\t" \
-                        "jmp " __ASM_STDCALL(#func,args) )
+                       "jmp " __ASM_STDCALL_EXPAND(#func,implargs) )
+#   define DEFINE_THISCALL_WRAPPER(func,args) \
+    DEFINE_THISCALL_WRAPPER_EX(func,args,args)
+#  else
+#   define DEFINE_THISCALL_WRAPPER_EX(func,args,implargs) \
+    DEFINE_THISCALL_WRAPPER(func,args)
+#   define DEFINE_THISCALL_WRAPPER(func,args) \
+    extern void __thiscall_ ## func(void);  \
+    __ASM_DEFINE_FUNC( __ASM_NAME("__thiscall_" #func), \
+                       "popl %eax\n\t"  \
+                       "pushl %ecx\n\t" \
+                       "pushl %eax\n\t" \
+                       "jmp " __ASM_STDCALL(#func,args) )
+#  endif
 # endif  /* _MSC_VER */
 
 # define THISCALL(func) (void *)__thiscall_ ## func
@@ -217,6 +267,7 @@
 
 #else  /* __i386__ */
 
+# define DEFINE_THISCALL_WRAPPER_EX(func,args,implargs) /* nothing */
 # define DEFINE_THISCALL_WRAPPER(func,args) /* nothing */
 # define THISCALL(func) func
 # define THISCALL_NAME(func) __ASM_NAME(#func)

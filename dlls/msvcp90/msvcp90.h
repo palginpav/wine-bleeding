@@ -29,9 +29,11 @@
 #if _MSVCP_VER >= 100
 typedef INT64 streamoff;
 typedef INT64 streamsize;
+#define STREAMOFF_BITS 64
 #else
 typedef SSIZE_T streamoff;
 typedef SSIZE_T streamsize;
+#define STREAMOFF_BITS 32
 #endif
 
 void __cdecl _invalid_parameter_noinfo(void);

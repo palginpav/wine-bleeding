@@ -35,7 +35,15 @@ WINE_DEFAULT_DEBUG_CHANNEL(ntoskrnl);
 #ifdef __i386__
 
 #ifdef __ASM_USE_FASTCALL_WRAPPER
+# ifdef __WINE_PE_BUILD
+DECLARE_FASTCALL_DIRECT1( ExAcquireFastMutexUnsafe );
+DECLARE_FASTCALL_DIRECT1( ExReleaseFastMutexUnsafe );
+DECLARE_FASTCALL_DIRECT2( KeAcquireInStackQueuedSpinLockAtDpcLevel );
+DECLARE_FASTCALL_DIRECT1( KeReleaseInStackQueuedSpinLockFromDpcLevel );
 
+#define call_fastcall_func1(func,a) CALL_FASTCALL_DIRECT1(func,a)
+#define call_fastcall_func2(func,a,b) CALL_FASTCALL_DIRECT2(func,a,b)
+# else
 extern void * WINAPI wrap_fastcall_func1( void *func, const void *a );
 __ASM_STDCALL_FUNC( wrap_fastcall_func1, 8,
                    "popl %ecx\n\t"
@@ -49,9 +57,14 @@ __ASM_STDCALL_FUNC( wrap_fastcall_func2, 12,
                    "popl %ecx\n\t"
                    "xchgl (%esp),%edx\n\t"
                    "jmp *%eax" );
+DECLARE_FASTCALL_IMPORT( ExAcquireFastMutexUnsafe, 4 );
+DECLARE_FASTCALL_IMPORT( ExReleaseFastMutexUnsafe, 4 );
+DECLARE_FASTCALL_IMPORT( KeAcquireInStackQueuedSpinLockAtDpcLevel, 8 );
+DECLARE_FASTCALL_IMPORT( KeReleaseInStackQueuedSpinLockFromDpcLevel, 4 );
 
-#define call_fastcall_func1(func,a) wrap_fastcall_func1(func,a)
-#define call_fastcall_func2(func,a,b) wrap_fastcall_func2(func,a,b)
+#define call_fastcall_func1(func,a) wrap_fastcall_func1(FASTCALL_IMPORT(func),a)
+#define call_fastcall_func2(func,a,b) wrap_fastcall_func2(FASTCALL_IMPORT(func),a,b)
+# endif
 
 #else  /* __ASM_USE_FASTCALL_WRAPPER */
 

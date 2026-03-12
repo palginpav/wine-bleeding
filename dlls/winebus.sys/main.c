@@ -451,13 +451,19 @@ static void bus_unlink_hid_device(DEVICE_OBJECT *device)
 }
 
 #ifdef __ASM_USE_FASTCALL_WRAPPER
+# ifdef __WINE_PE_BUILD
+DECLARE_FASTCALL_DIRECT1( ObfReferenceObject );
+#define call_fastcall_func1(func,a) CALL_FASTCALL_DIRECT1(func,a)
+# else
 extern void * WINAPI wrap_fastcall_func1(void *func, const void *a);
 __ASM_STDCALL_FUNC(wrap_fastcall_func1, 8,
                    "popl %ecx\n\t"
                    "popl %eax\n\t"
                    "xchgl (%esp),%ecx\n\t"
                    "jmp *%eax");
-#define call_fastcall_func1(func,a) wrap_fastcall_func1(func,a)
+DECLARE_FASTCALL_IMPORT( ObfReferenceObject, 4 );
+#define call_fastcall_func1(func,a) wrap_fastcall_func1(FASTCALL_IMPORT(func),a)
+# endif
 #else
 #define call_fastcall_func1(func,a) func(a)
 #endif

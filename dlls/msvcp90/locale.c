@@ -4005,7 +4005,7 @@ void __thiscall codecvt_char16__Init(codecvt_char16 *this, const _Locinfo *locin
 /* ??0?$codecvt@_SDU_Mbstatet@@@std@@QAA@ABV_Locinfo@1@KW4_Codecvt_mode@1@I@Z */
 /* ??0?$codecvt@_SDU_Mbstatet@@@std@@QAE@ABV_Locinfo@1@KW4_Codecvt_mode@1@I@Z */
 /* ??0?$codecvt@_SDU_Mbstatet@@@std@@QEAA@AEBV_Locinfo@1@KW4_Codecvt_mode@1@_K@Z */
-DEFINE_THISCALL_WRAPPER(codecvt_char16_ctor_mode, 16)
+DEFINE_THISCALL_WRAPPER_EX(codecvt_char16_ctor_mode, 16, 20)
 codecvt_char16* __thiscall codecvt_char16_ctor_mode(codecvt_char16 *this, const _Locinfo *locinfo,
         ULONG max_code, codecvt_convert_mode mode, size_t refs)
 {

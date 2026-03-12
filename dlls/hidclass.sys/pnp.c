@@ -39,15 +39,20 @@ WINE_DEFAULT_DEBUG_CHANNEL(hid);
 DEFINE_GUID(GUID_DEVINTERFACE_WINEXINPUT, 0x6c53d5fd, 0x6480, 0x440f, 0xb6, 0x18, 0x47, 0x67, 0x50, 0xc5, 0xe1, 0xa6);
 
 #ifdef __ASM_USE_FASTCALL_WRAPPER
-
+# ifdef __WINE_PE_BUILD
+DECLARE_FASTCALL_DIRECT1( ObfReferenceObject );
+#define call_fastcall_func1(func,a) CALL_FASTCALL_DIRECT1(func,a)
+# else
 extern void * WINAPI wrap_fastcall_func1( void *func, const void *a );
 __ASM_STDCALL_FUNC( wrap_fastcall_func1, 8,
                    "popl %ecx\n\t"
                    "popl %eax\n\t"
                    "xchgl (%esp),%ecx\n\t"
                    "jmp *%eax" );
+DECLARE_FASTCALL_IMPORT( ObfReferenceObject, 4 );
 
-#define call_fastcall_func1(func,a) wrap_fastcall_func1(func,a)
+#define call_fastcall_func1(func,a) wrap_fastcall_func1(FASTCALL_IMPORT(func),a)
+# endif
 
 #else
 
