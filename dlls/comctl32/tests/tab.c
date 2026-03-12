@@ -1471,6 +1471,27 @@ static void test_TCS_OWNERDRAWFIXED(void)
        "got 0x%Ix, expected 0x%Ix\n", g_drawitem.itemData, itemdata);
 
     DestroyWindow(hTab);
+
+    /* Test that drawing the text of a TCS_OWNERDRAWFIXED tab shouldn't be able to overwrite the tab item background */
+    hTab = createFilledTabControl(parent_wnd, TCS_FIXEDWIDTH | TCS_OWNERDRAWFIXED | WS_VISIBLE, TCIF_TEXT | TCIF_IMAGE, 1);
+    ok(hTab != NULL, "Failed to create tab control.\n");
+
+    memset(&g_drawitem, 0, sizeof(g_drawitem));
+    RedrawWindow(hTab, NULL, 0, RDW_UPDATENOW);
+
+    /* Check the draw rect from WM_DRAWITEM */
+    ok(g_drawitem.rcItem.top == 0 && g_drawitem.rcItem.left == 0 && g_drawitem.rcItem.right > 0 &&
+       g_drawitem.rcItem.bottom > 0, "Got unexpected rect %s.\n", wine_dbgstr_rect(&g_drawitem.rcItem));
+    /* Check that tab item background is not overwritten */
+    hdc = GetDC(hTab);
+    color = GetPixel(hdc, 1, 1);
+    ok(color != RGB(255, 0, 0), "Got unexpected color %#lx.\n", color);
+    /* Check that text was drawn */
+    color = GetPixel(hdc, 2, 2);
+    ok(color == RGB(255, 0, 0), "Got unexpected color %#lx.\n", color);
+    ReleaseDC(hTab, hdc);
+
+    DestroyWindow(hTab);
 }
 
 static void test_WM_CONTEXTMENU(void)
