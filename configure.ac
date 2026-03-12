@@ -786,6 +786,7 @@ AC_CHECK_HEADERS(\
 	sys/modem.h \
 	sys/mtio.h \
 	sys/param.h \
+	sys/personality.h \
 	sys/prctl.h \
 	sys/ptrace.h \
 	sys/queue.h \
