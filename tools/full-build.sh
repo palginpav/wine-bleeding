@@ -97,6 +97,9 @@ if [ ! -f "$WINE_ROOT/Makefile" ]; then
 elif grep -q 'i386_CC = clang' "$WINE_ROOT/Makefile" 2>/dev/null; then
     echo "  Makefile настроен на clang; переконфигурируем с MinGW."
     NEED_CONFIGURE=1
+elif command -v i686-w64-mingw32-gcc &>/dev/null && ! grep -Eq '^PE_ARCHS = .*i386' "$WINE_ROOT/Makefile" 2>/dev/null; then
+    echo "  Makefile настроен без WoW64 PE-архитектуры; переконфигурируем с i386 + x86_64."
+    NEED_CONFIGURE=1
 fi
 if [ "$NEED_CONFIGURE" -eq 1 ]; then
     (cd "$WINE_ROOT" && ./tools/configure-wine-full.sh) || { echo "Ошибка конфигурации Wine." >&2; exit 1; }

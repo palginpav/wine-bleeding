@@ -1,0 +1,211 @@
+diff --git a/src/System.Windows.Forms/src/System/Windows/Forms/ComboBox.cs b/src/System.Windows.Forms/src/System/Windows/Forms/ComboBox.cs
+index 7be2b5e13..4fba6a2e3 100644
+--- a/src/System.Windows.Forms/src/System/Windows/Forms/ComboBox.cs
++++ b/src/System.Windows.Forms/src/System/Windows/Forms/ComboBox.cs
+@@ -1,4 +1,4 @@
+-﻿// Licensed to the .NET Foundation under one or more agreements.
++// Licensed to the .NET Foundation under one or more agreements.
+ // The .NET Foundation licenses this file to you under the MIT license.
+ // See the LICENSE file in the project root for more information.
+ 
+@@ -137,6 +137,13 @@ namespace System.Windows.Forms {
+         private StringSource stringSource;
+         private bool fromHandleCreate = false;
+ 
++        // Guard against re-entrant SelectedIndexChanged caused by user code
++        private bool inOnSelectedIndexChanged;
++
++        // Suppress external selection events during internal bulk updates
++        private bool suppressSelectionEvents;
++        private int selectionUpdateCount;
++
+         private ComboBoxChildListUiaProvider childListAccessibleObject;
+         private ComboBoxChildEditUiaProvider childEditAccessibleObject;
+         private ComboBoxChildTextUiaProvider childTextAccessibleObject;
+@@ -991,12 +998,28 @@ namespace System.Windows.Forms {
+                         OnTextChanged(EventArgs.Empty);
+                     }
+ 
+-                    OnSelectedItemChanged(EventArgs.Empty);
+-                    OnSelectedIndexChanged(EventArgs.Empty);
++                    if (!suppressSelectionEvents) {
++                        OnSelectedItemChanged(EventArgs.Empty);
++                        OnSelectedIndexChanged(EventArgs.Empty);
++                    }
+                 }
+             }
+         }
+ 
++        internal void BeginSelectionUpdate()
++        {
++            selectionUpdateCount++;
++            suppressSelectionEvents = true;
++        }
++
++        internal void EndSelectionUpdate()
++        {
++            if (selectionUpdateCount > 0)
++                selectionUpdateCount--;
++            if (selectionUpdateCount == 0)
++                suppressSelectionEvents = false;
++        }
++
+         /// <summary>
+         ///     The handle to the object that is currently selected in the
+         ///     combos list.
+@@ -2458,45 +2481,54 @@ namespace System.Windows.Forms {
+         ///     that selectedIndexChanged events are correctly fired at all other times.
+         /// </summary>
+         protected override void OnSelectedIndexChanged(EventArgs e) {
+-            base.OnSelectedIndexChanged(e);
+-            EventHandler handler = (EventHandler)Events[EVENT_SELECTEDINDEXCHANGED];
+-            if (handler != null) handler(this, e);
++            if (inOnSelectedIndexChanged || suppressSelectionEvents)
++                return;
+ 
+-            if (dropDownWillBeClosed) {
+-                // This is after-closing selection - do not focus on the list item
+-                // and reset the state to announce the selections later.
+-                dropDownWillBeClosed = false;
+-            }
+-            else {
+-                var accessibleObject = AccessibilityObject as ComboBoxAccessibleObject;
+-                if (accessibleObject != null) {
+-
+-                    // Announce DropDown- and DropDownList-styled ComboBox item selection using keyboard
+-                    // in case when Level 3 is enabled and DropDown is not in expanded state. Simple-styled
+-                    // ComboBox selection is announced by TextProvider.
+-                    if (DropDownStyle == ComboBoxStyle.DropDownList || DropDownStyle == ComboBoxStyle.DropDown) {
+-                        if (dropDown) {
+-                            accessibleObject.SetComboBoxItemFocus();
+-                        }
++            inOnSelectedIndexChanged = true;
++            try {
++                base.OnSelectedIndexChanged(e);
++                EventHandler handler = (EventHandler)Events[EVENT_SELECTEDINDEXCHANGED];
++                if (handler != null) handler(this, e);
+ 
+-                        accessibleObject.SetComboBoxItemSelection();
++                if (dropDownWillBeClosed) {
++                    // This is after-closing selection - do not focus on the list item
++                    // and reset the state to announce the selections later.
++                    dropDownWillBeClosed = false;
++                }
++                else {
++                    var accessibleObject = AccessibilityObject as ComboBoxAccessibleObject;
++                    if (accessibleObject != null) {
++
++                        // Announce DropDown- and DropDownList-styled ComboBox item selection using keyboard
++                        // in case when Level 3 is enabled and DropDown is not in expanded state. Simple-styled
++                        // ComboBox selection is announced by TextProvider.
++                        if (DropDownStyle == ComboBoxStyle.DropDownList || DropDownStyle == ComboBoxStyle.DropDown) {
++                            if (dropDown) {
++                                accessibleObject.SetComboBoxItemFocus();
++                            }
++
++                            accessibleObject.SetComboBoxItemSelection();
++                        }
+                     }
+                 }
+-            }
+ 
+-            // set the position in the dataSource, if there is any
+-            // we will only set the position in the currencyManager if it is different
+-            // from the SelectedIndex. Setting CurrencyManager::Position (even w/o changing it)
+-            // calls CurrencyManager::EndCurrentEdit, and that will pull the dataFrom the controls
+-            // into the backEnd. We do not need to do that.
+-            //
+-            // don't change the position if SelectedIndex is -1 because this indicates a selection not from the list.
+-            if (this.DataManager != null && DataManager.Position != SelectedIndex) {
+-                //read this as "if everett or   (whidbey and selindex is valid)"
+-                if (!FormattingEnabled || SelectedIndex != -1) {
+-                    this.DataManager.Position = this.SelectedIndex;
++                // set the position in the dataSource, if there is any
++                // we will only set the position in the currencyManager if it is different
++                // from the SelectedIndex. Setting CurrencyManager::Position (even w/o changing it)
++                // calls CurrencyManager::EndCurrentEdit, and that will pull the dataFrom the controls
++                // into the backEnd. We do not need to do that.
++                //
++                // don't change the position if SelectedIndex is -1 because this indicates a selection not from the list.
++                if (this.DataManager != null && DataManager.Position != SelectedIndex) {
++                    //read this as "if everett or   (whidbey and selindex is valid)"
++                    if (!FormattingEnabled || SelectedIndex != -1) {
++                        this.DataManager.Position = this.SelectedIndex;
++                    }
+                 }
+             }
++            finally {
++                inOnSelectedIndexChanged = false;
++            }
+         }
+ 
+         protected override void OnSelectedValueChanged(EventArgs e) {
+@@ -3294,7 +3326,8 @@ namespace System.Windows.Forms {
+                     break;
+                 case NativeMethods.CBN_SELCHANGE:
+                     UpdateText();
+-                    OnSelectedIndexChanged(EventArgs.Empty);
++                    if (!suppressSelectionEvents)
++                        OnSelectedIndexChanged(EventArgs.Empty);
+                     break;
+                 case NativeMethods.CBN_SELENDOK:
+                     OnSelectionChangeCommittedInternal(EventArgs.Empty);
+@@ -3709,6 +3742,7 @@ namespace System.Windows.Forms {
+             private ComboBox owner;
+             private ArrayList innerList;
+             private IComparer comparer;
++            private bool inClearInternal;
+ 
+             public ObjectCollection(ComboBox owner) {
+                 this.owner = owner;
+@@ -3840,12 +3874,14 @@ namespace System.Windows.Forms {
+             public void AddRange(object[] items) {
+                 owner.CheckNoDataSource();
+                 owner.BeginUpdate();
++                owner.BeginSelectionUpdate();
+                 try
+                 {
+                     AddRangeInternal(items);
+                 }
+                 finally
+                 {
++                    owner.EndSelectionUpdate();
+                     owner.EndUpdate();
+                 }
+             }
+@@ -3895,16 +3931,27 @@ namespace System.Windows.Forms {
+             }
+ 
+             internal void ClearInternal() {
++                if (inClearInternal)
++                    return;
+ 
+-                if (owner.IsHandleCreated) {
+-                    owner.NativeClear();
+-                }
++                inClearInternal = true;
++                owner.BeginSelectionUpdate();
++                try {
+ 
+-                InnerList.Clear();
+-                owner.selectedIndex = -1;
+-                if (owner.AutoCompleteSource == AutoCompleteSource.ListItems)
+-                {
+-                    owner.SetAutoComplete(false, true /*recreateHandle*/);
++                    if (owner.IsHandleCreated) {
++                        owner.NativeClear();
++                    }
++
++                    InnerList.Clear();
++                    owner.selectedIndex = -1;
++                    if (owner.AutoCompleteSource == AutoCompleteSource.ListItems)
++                    {
++                        owner.SetAutoComplete(false, true /*recreateHandle*/);
++                    }
++                }
++                finally {
++                    owner.EndSelectionUpdate();
++                    inClearInternal = false;
+                 }
+             }
+ 

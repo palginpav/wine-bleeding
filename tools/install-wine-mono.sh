@@ -12,6 +12,8 @@ MONO_PATCH_DIR="$WINE_ROOT/tools/patches"
 MONO_PATCHES=(
     "$MONO_PATCH_DIR/wine-mono-iconconverter.patch"
     "$MONO_PATCH_DIR/wine-mono-cabarc-ascii-path.patch"
+    "$MONO_PATCH_DIR/wine-mono-combobox-reentrancy.patch"
+    "$MONO_PATCH_DIR/wine-mono-listbox-reentrancy.patch"
 )
 MSCOREE_HEADER="$WINE_ROOT/dlls/mscoree/mscoree_private.h"
 
@@ -85,10 +87,18 @@ apply_patch_if_needed() {
     local patch_file="$1"
     local patch_name
     patch_name="$(basename "$patch_file")"
-    if git apply --check "$patch_file" >/dev/null 2>&1; then
+    local apply_dir="$MONO_SRC_DIR"
+
+    case "$patch_name" in
+        wine-mono-combobox-reentrancy.patch|wine-mono-listbox-reentrancy.patch)
+            apply_dir="$MONO_SRC_DIR/winforms"
+            ;;
+    esac
+
+    if git -C "$apply_dir" apply --check "$patch_file" >/dev/null 2>&1; then
         echo "Applying $patch_name..."
-        git apply "$patch_file"
-    elif git apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+        git -C "$apply_dir" apply "$patch_file"
+    elif git -C "$apply_dir" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
         echo "$patch_name already applied."
     else
         echo "Error: unable to apply $patch_name cleanly." >&2

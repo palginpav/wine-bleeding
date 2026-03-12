@@ -60,7 +60,9 @@
 @ stdcall BufferedPaintSetAlpha(ptr ptr long)
 @ stdcall BufferedPaintStopAllAnimations(ptr)
 @ stdcall BufferedPaintUnInit()
+@ stdcall CloseThemeDataA(ptr) CloseThemeData
 @ stdcall CloseThemeData(ptr)
+@ stdcall CloseThemeDataW(ptr) CloseThemeData
 @ stdcall DrawThemeBackground(ptr ptr long long ptr ptr)
 @ stdcall DrawThemeEdge(ptr ptr long long ptr long long ptr)
 @ stdcall DrawThemeIcon(ptr ptr long long ptr ptr long)
@@ -68,6 +70,7 @@
 @ stdcall DrawThemeText(ptr ptr long long wstr long long long ptr)
 @ stdcall DrawThemeTextEx(ptr ptr long long wstr long long ptr ptr)
 @ stdcall EnableThemeDialogTexture(ptr long)
+@ stdcall EnableThemeDialogTextureW(ptr long) EnableThemeDialogTexture
 @ stdcall EnableTheming(long)
 @ stdcall EndBufferedAnimation(ptr long)
 @ stdcall EndBufferedPaint(ptr long)
@@ -76,6 +79,7 @@
 @ stdcall GetBufferedPaintTargetDC(ptr)
 @ stdcall GetBufferedPaintTargetRect(ptr ptr)
 @ stdcall GetCurrentThemeName(ptr long ptr long ptr long)
+@ stdcall GetCurrentThemeNameW(ptr long ptr long ptr long) GetCurrentThemeName
 @ stdcall GetThemeAppProperties()
 @ stdcall GetThemeBackgroundContentRect(ptr ptr long long ptr ptr)
 @ stdcall GetThemeBackgroundExtent(ptr ptr long long ptr ptr)
@@ -110,13 +114,18 @@
 @ stdcall GetWindowTheme(ptr)
 @ stdcall HitTestThemeBackground(ptr long long long long ptr long int64 ptr)
 @ stdcall IsAppThemed()
+@ stdcall IsAppThemedW() IsAppThemed
 @ stdcall IsCompositionActive()
 @ stdcall IsThemeActive()
+@ stdcall IsThemeActiveW() IsThemeActive
 @ stdcall IsThemeBackgroundPartiallyTransparent(ptr long long)
 @ stdcall IsThemeDialogTextureEnabled(ptr)
+@ stdcall IsThemeDialogTextureEnabledW(ptr) IsThemeDialogTextureEnabled
 @ stdcall IsThemePartDefined(ptr long long)
 @ stdcall OpenThemeData(ptr wstr)
+@ stdcall OpenThemeDataW(ptr wstr) OpenThemeData
 @ stdcall OpenThemeDataForDpi(ptr wstr long)
 @ stdcall SetThemeAppProperties(long)
 @ stdcall SetWindowTheme(ptr wstr wstr)
+@ stdcall SetWindowThemeW(ptr wstr wstr) SetWindowTheme
 @ stdcall SetWindowThemeAttribute(ptr long ptr long)

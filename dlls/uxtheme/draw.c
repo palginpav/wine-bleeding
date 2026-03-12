@@ -56,6 +56,7 @@ HRESULT WINAPI EnableThemeDialogTexture(HWND hwnd, DWORD new_flag)
 {
     DWORD old_flag = 0;
     BOOL res;
+    HRESULT hr;
 
     TRACE("(%p,%#lx\n", hwnd, new_flag);
 
@@ -78,7 +79,8 @@ HRESULT WINAPI EnableThemeDialogTexture(HWND hwnd, DWORD new_flag)
 
     new_flag = new_flag | old_flag;
     res = SetPropW(hwnd, (LPCWSTR)MAKEINTATOM(atDialogThemeEnabled), UlongToHandle(new_flag));
-    return res ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    hr = res ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    return hr;
  }
 
 /***********************************************************************

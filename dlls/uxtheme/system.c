@@ -568,7 +568,8 @@ BOOL WINAPI IsAppThemed(void)
  */
 BOOL WINAPI IsThemeActive(void)
 {
-    TRACE("\n");
+    void *caller = __builtin_return_address(0);
+    TRACE(" caller=%p\n", caller);
     SetLastError(ERROR_SUCCESS);
     return bThemeActive;
 }

@@ -403,9 +403,9 @@ if [ "$INSTALL_WINE" -eq 1 ]; then
     if [ -f "$WINE_ROOT/Makefile" ] && [ -x "$WINE_ROOT/loader/wine" ] && [ -x "$WINE_ROOT/server/wineserver" ]; then
         echo "Установка Wine из дерева в дистрибутив ($OUT_DIST)..."
         # Если Makefile настроен на clang, а объектники собраны под MinGW — make install пересобирает и падает (lld/SEH).
-        # Переконфигурируем с MinGW и пересобираем, чтобы install не вызывал несовместимую линковку.
-        if [ -n "$MINGW_BIN" ] && grep -q 'i386_CC = clang' "$WINE_ROOT/Makefile" 2>/dev/null; then
-            echo "Makefile использует clang; переконфигурация с MinGW и пересборка..."
+        # Переконфигурируем с MinGW и пересобираем также если доступен i686 toolchain, но текущая конфигурация x86_64-only.
+        if [ -n "$MINGW_BIN" ] && { grep -q 'i386_CC = clang' "$WINE_ROOT/Makefile" 2>/dev/null || { command -v i686-w64-mingw32-gcc &>/dev/null && ! grep -Eq '^PE_ARCHS = .*i386' "$WINE_ROOT/Makefile" 2>/dev/null; }; }; then
+            echo "Makefile требует переконфигурации с MinGW/WoW64; пересобираем перед install..."
             (cd "$WINE_ROOT" && export PATH="$MINGW_BIN:$PATH" && ./tools/configure-wine-full.sh) || true
             if ! make -C "$WINE_ROOT" -j"$(nproc)"; then
                 echo "Ошибка пересборки Wine. Выполните вручную:" >&2

@@ -1,0 +1,295 @@
+diff --git a/src/System.Windows.Forms/src/System/Windows/Forms/ListBox.cs b/src/System.Windows.Forms/src/System/Windows/Forms/ListBox.cs
+index 44c1d5538..e560c19bc 100644
+--- a/src/System.Windows.Forms/src/System/Windows/Forms/ListBox.cs
++++ b/src/System.Windows.Forms/src/System/Windows/Forms/ListBox.cs
+@@ -92,6 +92,10 @@ namespace System.Windows.Forms {
+         bool fontIsChanged = false;
+         bool doubleClickFired = false;
+         bool selectedValueChangedFired = false;
++        bool inOnSelectedIndexChanged = false;
++        bool suppressSelectionEvents = false;
++        bool inRefreshItems = false;
++        int selectionUpdateCount = 0;
+ 
+         DrawMode drawMode = System.Windows.Forms.DrawMode.Normal;
+         BorderStyle borderStyle = System.Windows.Forms.BorderStyle.Fixed3D;
+@@ -1661,29 +1665,38 @@ namespace System.Windows.Forms {
+         ///     still fired to external listeners
+         /// </summary>
+         protected override void OnSelectedIndexChanged(EventArgs e) {
+-            base.OnSelectedIndexChanged(e);
++            if (inOnSelectedIndexChanged || suppressSelectionEvents)
++                return;
+ 
+-            // set the position in the dataSource, if there is any
+-            // we will only set the position in the currencyManager if it is different
+-            // from the SelectedIndex. Setting CurrencyManager::Position (even w/o changing it)
+-            // calls CurrencyManager::EndCurrentEdit, and that will pull the dataFrom the controls
+-            // into the backEnd. We do not need to do that.
+-            //
+-            if (this.DataManager != null && DataManager.Position != SelectedIndex) {
+-                //read this as "if everett or   (whidbey and selindex is valid)"
+-                if (!FormattingEnabled || this.SelectedIndex != -1)
+-                {
+-                    // Don't change dataManager position if we simply unselected everything.
+-                    // (Doing so would cause the first LB item to be selected...)
+-                    this.DataManager.Position = this.SelectedIndex;
++            inOnSelectedIndexChanged = true;
++            try {
++                base.OnSelectedIndexChanged(e);
++
++                // set the position in the dataSource, if there is any
++                // we will only set the position in the currencyManager if it is different
++                // from the SelectedIndex. Setting CurrencyManager::Position (even w/o changing it)
++                // calls CurrencyManager::EndCurrentEdit, and that will pull the dataFrom the controls
++                // into the backEnd. We do not need to do that.
++                //
++                if (this.DataManager != null && DataManager.Position != SelectedIndex) {
++                    //read this as "if everett or   (whidbey and selindex is valid)"
++                    if (!FormattingEnabled || this.SelectedIndex != -1)
++                    {
++                        // Don't change dataManager position if we simply unselected everything.
++                        // (Doing so would cause the first LB item to be selected...)
++                        this.DataManager.Position = this.SelectedIndex;
++                    }
+                 }
+-            }
+ 
+-            // Call the handler after updating the DataManager's position so that
+-            // the DataManager's selected index will be correct in an event handler.
+-            EventHandler handler = (EventHandler)Events[EVENT_SELECTEDINDEXCHANGED];
+-            if (handler != null) {
+-                handler(this, e);
++                // Call the handler after updating the DataManager's position so that
++                // the DataManager's selected index will be correct in an event handler.
++                EventHandler handler = (EventHandler)Events[EVENT_SELECTEDINDEXCHANGED];
++                if (handler != null) {
++                    handler(this, e);
++                }
++            }
++            finally {
++                inOnSelectedIndexChanged = false;
+             }
+         }
+ 
+@@ -1692,13 +1705,33 @@ namespace System.Windows.Forms {
+             selectedValueChangedFired = true;
+         }
+ 
++        internal void BeginSelectionUpdate()
++        {
++            selectionUpdateCount++;
++            suppressSelectionEvents = true;
++        }
++
++        internal void EndSelectionUpdate()
++        {
++            if (selectionUpdateCount > 0)
++                selectionUpdateCount--;
++            if (selectionUpdateCount == 0)
++                suppressSelectionEvents = false;
++        }
++
+         protected override void OnDataSourceChanged(EventArgs e) {
+             if (DataSource == null)
+             {
+                 BeginUpdate();
+-                SelectedIndex = -1;
+-                Items.ClearInternal();
+-                EndUpdate();
++                BeginSelectionUpdate();
++                try {
++                    SelectedIndex = -1;
++                    Items.ClearInternal();
++                }
++                finally {
++                    EndSelectionUpdate();
++                    EndUpdate();
++                }
+             }
+             base.OnDataSourceChanged(e);
+             RefreshItems();
+@@ -1742,61 +1775,70 @@ namespace System.Windows.Forms {
+         /// Reparses the objects, getting new text strings for them.
+         /// </summary>
+         protected override void RefreshItems() {
++            if (inRefreshItems)
++                return;
+ 
+-            // Store the currently selected object collection.
+-            //
+-            ObjectCollection savedItems = itemsCollection;
++            inRefreshItems = true;
++            BeginSelectionUpdate();
++            try {
++                // Store the currently selected object collection.
++                //
++                ObjectCollection savedItems = itemsCollection;
+ 
+-            // Clear the items.
+-            //
+-            itemsCollection = null;
+-            selectedIndices = null;
++                // Clear the items.
++                //
++                itemsCollection = null;
++                selectedIndices = null;
+ 
+-            if (IsHandleCreated) {
+-                NativeClear();
+-            }
++                if (IsHandleCreated) {
++                    NativeClear();
++                }
+ 
+-            object[] newItems = null;
++                object[] newItems = null;
+ 
+-            // if we have a dataSource and a DisplayMember, then use it
+-            // to populate the Items collection
+-            //
+-            if (this.DataManager != null && this.DataManager.Count != -1) {
+-                newItems = new object[this.DataManager.Count];
+-                for(int i = 0; i < newItems.Length; i++) {
+-                    newItems[i] = this.DataManager[i];
++                // if we have a dataSource and a DisplayMember, then use it
++                // to populate the Items collection
++                //
++                if (this.DataManager != null && this.DataManager.Count != -1) {
++                    newItems = new object[this.DataManager.Count];
++                    for(int i = 0; i < newItems.Length; i++) {
++                        newItems[i] = this.DataManager[i];
++                    }
++                }
++                else if (savedItems != null) {
++                    newItems = new object[savedItems.Count];
++                    savedItems.CopyTo(newItems, 0);
+                 }
+-            }
+-            else if (savedItems != null) {
+-                newItems = new object[savedItems.Count];
+-                savedItems.CopyTo(newItems, 0);
+-            }
+-
+-            // Store the current list of items
+-            //
+-            if (newItems != null) {
+-                Items.AddRangeInternal(newItems);
+-            }
+ 
+-            // Restore the selected indices if SelectionMode allows it.
+-            //
+-            if (SelectionMode != SelectionMode.None) {
+-                if (this.DataManager != null) {
+-                    // put the selectedIndex in sync w/ the position in the dataManager
+-                    this.SelectedIndex = this.DataManager.Position;
++                // Store the current list of items
++                //
++                if (newItems != null) {
++                    Items.AddRangeInternal(newItems);
+                 }
+-                else {
+-                    if (savedItems != null) {
+-                        int cnt = savedItems.Count;
+-                        for(int index = 0; index < cnt; index++) {
+-                            if (savedItems.InnerArray.GetState(index, SelectedObjectCollection.SelectedObjectMask)) {
+-                                SelectedItem = savedItems[index];
++
++                // Restore the selected indices if SelectionMode allows it.
++                //
++                if (SelectionMode != SelectionMode.None) {
++                    if (this.DataManager != null) {
++                        // put the selectedIndex in sync w/ the position in the dataManager
++                        this.SelectedIndex = this.DataManager.Position;
++                    }
++                    else {
++                        if (savedItems != null) {
++                            int cnt = savedItems.Count;
++                            for(int index = 0; index < cnt; index++) {
++                                if (savedItems.InnerArray.GetState(index, SelectedObjectCollection.SelectedObjectMask)) {
++                                    SelectedItem = savedItems[index];
++                                }
+                             }
+                         }
+                     }
+                 }
+             }
+-
++            finally {
++                EndSelectionUpdate();
++                inRefreshItems = false;
++            }
+         }
+ 
+         /// <summary>
+@@ -2671,6 +2713,7 @@ namespace System.Windows.Forms {
+ 
+             private ListBox owner;
+             private ItemArray items;
++            private bool inClearInternal;
+ 
+             public ObjectCollection(ListBox owner) {
+                 this.owner = owner;
+@@ -2896,22 +2939,44 @@ namespace System.Windows.Forms {
+             ///     Removes all items from the ListBox.  Bypasses the data source check.
+             /// </summary>
+             internal void ClearInternal() {
++                if (inClearInternal)
++                    return;
+ 
+-                //update the width.. to reset Scrollbars..
+-                // Clear the selection state.
+-                //
+-                int cnt = owner.Items.Count;
+-                for (int i = 0; i < cnt; i++) {
+-                    owner.UpdateMaxItemWidth(InnerArray.GetItem(i, 0), true);
+-                }
+-
++                inClearInternal = true;
++                owner.BeginUpdate();
++                owner.BeginSelectionUpdate();
++                try {
++                    //update the width.. to reset Scrollbars..
++                    // Clear the selection state.
++                    //
++                    int cnt = owner.Items.Count;
++                    if (cnt == 0) {
++                        InnerArray.Clear();
++                        owner.maxWidth = -1;
++                        owner.UpdateHorizontalExtent();
++                        return;
++                    }
++                    if (owner.drawMode != DrawMode.Normal) {
++                        InnerArray.Clear();
++                        owner.maxWidth = -1;
++                        return;
++                    }
++                    for (int i = 0; i < cnt; i++) {
++                        owner.UpdateMaxItemWidth(InnerArray.GetItem(i, 0), true);
++                    }
+ 
+-                if (owner.IsHandleCreated) {
+-                    owner.NativeClear();
++                    if (owner.IsHandleCreated) {
++                        owner.NativeClear();
++                    }
++                    InnerArray.Clear();
++                    owner.maxWidth = -1;
++                    owner.UpdateHorizontalExtent();
++                }
++                finally {
++                    owner.EndSelectionUpdate();
++                    owner.EndUpdate();
++                    inClearInternal = false;
+                 }
+-                InnerArray.Clear();
+-                owner.maxWidth = -1;
+-                owner.UpdateHorizontalExtent();
+             }
+ 
+             public bool Contains(object value) {
+@@ -3892,4 +3957,3 @@ namespace System.Windows.Forms {
+         }
+     }
+ }
+-
