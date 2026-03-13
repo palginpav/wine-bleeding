@@ -127,6 +127,7 @@ typedef struct
     WCHAR      szTipText[INFOTIPSIZE];
     BOOL     bActive;
     BOOL     bTrackActive;
+    INT      nNotifyFormat;
     UINT     uNumTools;
     COLORREF   clrBk;
     COLORREF   clrText;
@@ -176,6 +177,8 @@ typedef struct
 
 static LRESULT CALLBACK
 TOOLTIPS_SubclassProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uId, DWORD_PTR dwRef);
+static LRESULT
+TOOLTIPS_NotifyFormat (TOOLTIPS_INFO *infoPtr, WPARAM wParam, LPARAM lParam);
 
 static inline UINT_PTR
 TOOLTIPS_GetTitleIconIndex(HICON hIcon)
@@ -1819,6 +1822,7 @@ static LRESULT
 TOOLTIPS_Create (HWND hwnd)
 {
     TOOLTIPS_INFO *infoPtr;
+    HWND owner;
 
     /* allocate memory for info structure */
     infoPtr = Alloc (sizeof(TOOLTIPS_INFO));
@@ -1827,6 +1831,7 @@ TOOLTIPS_Create (HWND hwnd)
     /* initialize info structure */
     infoPtr->bActive = TRUE;
     infoPtr->bTrackActive = FALSE;
+    infoPtr->nNotifyFormat = NFR_UNICODE;
 
     infoPtr->nMaxTipWidth = -1;
     infoPtr->nTool = -1;
@@ -1836,6 +1841,10 @@ TOOLTIPS_Create (HWND hwnd)
 
     /* initialize colours and fonts */
     TOOLTIPS_InitSystemSettings(infoPtr);
+
+    owner = GetParent(hwnd);
+    if (owner)
+        TOOLTIPS_NotifyFormat(infoPtr, (WPARAM)owner, NF_REQUERY);
 
     TOOLTIPS_SetDelayTime(infoPtr, TTDT_AUTOMATIC, 0);
 
@@ -1883,6 +1892,21 @@ static inline LRESULT
 TOOLTIPS_GetFont (const TOOLTIPS_INFO *infoPtr)
 {
     return (LRESULT)infoPtr->hFont;
+}
+
+static inline LRESULT
+TOOLTIPS_GetUnicodeFormat (const TOOLTIPS_INFO *infoPtr)
+{
+    return infoPtr->nNotifyFormat == NFR_UNICODE;
+}
+
+static inline LRESULT
+TOOLTIPS_SetUnicodeFormat (TOOLTIPS_INFO *infoPtr, BOOL unicode)
+{
+    BOOL old = infoPtr->nNotifyFormat == NFR_UNICODE;
+
+    infoPtr->nNotifyFormat = unicode ? NFR_UNICODE : NFR_ANSI;
+    return old;
 }
 
 
@@ -1938,7 +1962,21 @@ TOOLTIPS_NCHitTest (const TOOLTIPS_INFO *infoPtr, WPARAM wParam, LPARAM lParam)
 static LRESULT
 TOOLTIPS_NotifyFormat (TOOLTIPS_INFO *infoPtr, WPARAM wParam, LPARAM lParam)
 {
-    FIXME("hwnd %p, wParam %Ix, lParam %Ix\n", infoPtr->hwndSelf, wParam, lParam);
+    switch (lParam)
+    {
+    case NF_QUERY:
+        return infoPtr->nNotifyFormat;
+
+    case NF_REQUERY:
+        if ((HWND)wParam)
+        {
+            LRESULT format = SendMessageW((HWND)wParam, WM_NOTIFYFORMAT,
+                                          (WPARAM)infoPtr->hwndSelf, NF_QUERY);
+            if (format == NFR_ANSI || format == NFR_UNICODE)
+                infoPtr->nNotifyFormat = format;
+        }
+        return infoPtr->nNotifyFormat;
+    }
 
     return 0;
 }
@@ -2270,6 +2308,9 @@ TOOLTIPS_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_NOTIFYFORMAT:
 	    return TOOLTIPS_NotifyFormat (infoPtr, wParam, lParam);
 
+	case CCM_GETUNICODEFORMAT:
+	    return TOOLTIPS_GetUnicodeFormat (infoPtr);
+
 	case WM_PRINTCLIENT:
 	case WM_PAINT:
 	    return TOOLTIPS_Paint (infoPtr, (HDC)wParam);
@@ -2280,6 +2321,9 @@ TOOLTIPS_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_SYSCOLORCHANGE:
 	    COMCTL32_RefreshSysColors();
 	    return 0;
+
+	case CCM_SETUNICODEFORMAT:
+	    return TOOLTIPS_SetUnicodeFormat (infoPtr, (BOOL)wParam);
 
 	case WM_TIMER:
 	    return TOOLTIPS_Timer (infoPtr, (INT)wParam);

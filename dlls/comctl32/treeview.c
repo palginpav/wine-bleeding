@@ -137,6 +137,7 @@ typedef struct _TREEITEM    /* HTREEITEM is a _TREEINFO *. */
   UINT      callbackMask;
   UINT      state;
   UINT      stateMask;
+  UINT      stateEx;
   LPWSTR    pszText;
   int       cchTextMax;
   int       iImage;
@@ -259,6 +260,9 @@ static inline BOOL item_changed (const TREEVIEW_ITEM *tiOld, const TREEVIEW_ITEM
     /* Item state has changed */
     if ((tvChange->mask & TVIF_STATE) && ((tiOld->state ^ tiNew->state) & tvChange->stateMask ))
 	return TRUE;
+
+    if ((tvChange->mask & TVIF_STATEEX) && (tiOld->stateEx != tiNew->stateEx))
+        return TRUE;
 
     return FALSE;
 }
@@ -1219,9 +1223,7 @@ TREEVIEW_DoSetItemT(const TREEVIEW_INFO *infoPtr, TREEVIEW_ITEM *item,
     }
 
     if (tvItem->mask & TVIF_STATEEX)
-    {
-        FIXME("New extended state: 0x%x\n", tvItem->uStateEx);
-    }
+        item->stateEx = tvItem->uStateEx;
 
     item->callbackMask |= callbackSet;
     item->callbackMask &= ~callbackClear;
@@ -2175,10 +2177,7 @@ TREEVIEW_GetItemT(const TREEVIEW_INFO *infoPtr, LPTVITEMEXW tvItem, BOOL isW)
     }
 
     if (tvItem->mask & TVIF_STATEEX)
-    {
-        FIXME("Extended item state not supported, returning 0.\n");
-        tvItem->uStateEx = 0;
-    }
+        tvItem->uStateEx = item->stateEx;
 
     TRACE("item <%p>, txt %p, img %d, mask 0x%x\n",
 	  item, tvItem->pszText, tvItem->iImage, tvItem->mask);

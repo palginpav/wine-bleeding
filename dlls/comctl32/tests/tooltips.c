@@ -36,6 +36,7 @@ enum seq_index
 };
 
 static struct msg_sequence *sequences[NUM_MSG_SEQUENCES];
+static HWND create_parent_window(void);
 
 static void test_create_tooltip(BOOL is_v6)
 {
@@ -74,6 +75,39 @@ static void test_create_tooltip(BOOL is_v6)
 
     DestroyWindow(hwnd);
 
+    DestroyWindow(parent);
+}
+
+static void test_unicode_format(void)
+{
+    HWND parent, hwnd;
+    BOOL old, ret;
+
+    parent = create_parent_window();
+    ok(parent != NULL, "Failed to create parent window.\n");
+
+    hwnd = CreateWindowExA(0, TOOLTIPS_CLASSA, NULL, 0,
+                           10, 10, 300, 100,
+                           parent, NULL, NULL, 0);
+    ok(hwnd != NULL, "Failed to create tooltip window.\n");
+
+    old = SendMessageA(hwnd, CCM_GETUNICODEFORMAT, 0, 0);
+
+    ret = SendMessageA(hwnd, CCM_SETUNICODEFORMAT, !old, 0);
+    ok(ret == old, "Unexpected previous unicode state %d, expected %d.\n", ret, old);
+    ok(SendMessageA(hwnd, CCM_GETUNICODEFORMAT, 0, 0) == !old,
+       "Unexpected unicode state after toggle.\n");
+    ok(SendMessageA(hwnd, WM_NOTIFYFORMAT, (WPARAM)parent, NF_QUERY) == (!old ? NFR_UNICODE : NFR_ANSI),
+       "Unexpected notify format after toggle.\n");
+
+    ret = SendMessageA(hwnd, CCM_SETUNICODEFORMAT, old, 0);
+    ok(ret == !old, "Unexpected previous unicode state %d, expected %d.\n", ret, !old);
+    ok(SendMessageA(hwnd, CCM_GETUNICODEFORMAT, 0, 0) == old,
+       "Unexpected unicode state after restore.\n");
+    ok(SendMessageA(hwnd, WM_NOTIFYFORMAT, (WPARAM)parent, NF_QUERY) == (old ? NFR_UNICODE : NFR_ANSI),
+       "Unexpected notify format after restore.\n");
+
+    DestroyWindow(hwnd);
     DestroyWindow(parent);
 }
 
@@ -1245,6 +1279,7 @@ START_TEST(tooltips)
     register_parent_wnd_class();
 
     test_create_tooltip(FALSE);
+    test_unicode_format();
     test_customdraw();
     test_gettext();
     test_ttm_gettoolinfo();
@@ -1260,6 +1295,7 @@ START_TEST(tooltips)
         return;
 
     test_create_tooltip(TRUE);
+    test_unicode_format();
     test_customdraw();
     test_longtextW();
     test_track();

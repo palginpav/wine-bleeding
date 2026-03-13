@@ -2157,6 +2157,44 @@ static void test_expandedimage(void)
     DestroyWindow(hTree);
 }
 
+static void test_stateex_roundtrip(void)
+{
+    TVITEMEXA item;
+    HWND hTree;
+    BOOL ret;
+
+    hTree = create_treeview_control(0);
+    fill_tree(hTree);
+
+    item.mask = TVIF_STATEEX;
+    item.hItem = hRoot;
+    item.uStateEx = TVIS_EX_DISABLED;
+    ret = SendMessageA(hTree, TVM_SETITEMA, 0, (LPARAM)&item);
+    ok(ret, "got %d\n", ret);
+
+    item.mask = TVIF_STATEEX;
+    item.hItem = hRoot;
+    item.uStateEx = 0;
+    ret = SendMessageA(hTree, TVM_GETITEMA, 0, (LPARAM)&item);
+    ok(ret, "got %d\n", ret);
+    ok(item.uStateEx == TVIS_EX_DISABLED, "got stateEx %#x\n", item.uStateEx);
+
+    item.mask = TVIF_STATEEX;
+    item.hItem = hRoot;
+    item.uStateEx = 0;
+    ret = SendMessageA(hTree, TVM_SETITEMA, 0, (LPARAM)&item);
+    ok(ret, "got %d\n", ret);
+
+    item.mask = TVIF_STATEEX;
+    item.hItem = hRoot;
+    item.uStateEx = TVIS_EX_DISABLED;
+    ret = SendMessageA(hTree, TVM_GETITEMA, 0, (LPARAM)&item);
+    ok(ret, "got %d\n", ret);
+    ok(item.uStateEx == 0, "got stateEx %#x\n", item.uStateEx);
+
+    DestroyWindow(hTree);
+}
+
 static void test_TVS_SINGLEEXPAND(void)
 {
     HWND hTree;
@@ -3249,6 +3287,7 @@ START_TEST(treeview)
     test_get_set_unicodeformat();
     test_callback();
     test_expandinvisible();
+    test_stateex_roundtrip();
     test_itemedit();
     test_treeview_classinfo();
     test_expandnotify();
@@ -3290,6 +3329,7 @@ START_TEST(treeview)
     test_get_set_tooltips();
     test_get_set_unicodeformat();
     test_expandinvisible();
+    test_stateex_roundtrip();
     test_expand();
     test_itemedit();
     test_treeview_classinfo();
