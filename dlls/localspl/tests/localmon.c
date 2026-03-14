@@ -719,6 +719,66 @@ static void test_EnumPorts(void)
 
 /* ########################### */
 
+static void test_EnumPorts_monitor_name(void)
+{
+    PORT_INFO_1W pi;
+    PORT_INFO_2W *ports;
+    BYTE *buffer;
+    DWORD cbBuf, needed, returned, i;
+    BOOL res, found = FALSE;
+
+    if (!pAddPortEx && !pAddPortEx2) return;
+
+    delete_port(tempfileW);
+
+    pi.pName = tempfileW;
+    SetLastError(0xdeadbeef);
+    res = call_AddPortEx(NULL, 1, (BYTE *)&pi, LocalPortW);
+    ok(res, "call_AddPortEx returned %d le=%lu\n", res, GetLastError());
+    if (!res) return;
+
+    cbBuf = 0;
+    returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    res = call_EnumPorts(NULL, 2, NULL, 0, &cbBuf, &returned);
+    ok(!res && GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+       "call_EnumPorts returned %d le=%lu\n", res, GetLastError());
+    if (res || !cbBuf) goto cleanup;
+
+    buffer = HeapAlloc(GetProcessHeap(), 0, cbBuf);
+    ok(!!buffer, "HeapAlloc failed\n");
+    if (!buffer) goto cleanup;
+
+    needed = 0xdeadbeef;
+    returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    res = call_EnumPorts(NULL, 2, buffer, cbBuf, &needed, &returned);
+    ok(res, "call_EnumPorts returned %d le=%lu\n", res, GetLastError());
+    if (!res)
+    {
+        HeapFree(GetProcessHeap(), 0, buffer);
+        goto cleanup;
+    }
+
+    ports = (PORT_INFO_2W *)buffer;
+    for (i = 0; i < returned; ++i)
+    {
+        if (lstrcmpW(ports[i].pPortName, tempfileW)) continue;
+        found = TRUE;
+        ok(!lstrcmpW(ports[i].pMonitorName, LocalPortW),
+           "got monitor %s for port %s\n", wine_dbgstr_w(ports[i].pMonitorName), wine_dbgstr_w(tempfileW));
+        break;
+    }
+    ok(found, "temporary port %s was not enumerated\n", wine_dbgstr_w(tempfileW));
+
+    HeapFree(GetProcessHeap(), 0, buffer);
+
+cleanup:
+    delete_port(tempfileW);
+}
+
+/* ########################### */
+
 
 static void test_InitializePrintMonitor(void)
 {
@@ -1688,6 +1748,7 @@ START_TEST(localmon)
     test_ConfigurePort();
     test_DeletePort();
     test_EnumPorts();
+    test_EnumPorts_monitor_name();
     test_OpenPort();
     test_file_port();
 

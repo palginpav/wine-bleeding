@@ -58,6 +58,12 @@ static inline int paper_size_from_points( float size )
     return size * 254 / 72;
 }
 
+static void copy_fixed_wstr( WCHAR *output, size_t count, const WCHAR *value )
+{
+    memset( output, 0, count * sizeof(*output) );
+    lstrcpynW( output, value, count );
+}
+
 INPUTSLOT *find_slot( PPD *ppd, const DEVMODEW *dm )
 {
     INPUTSLOT *slot;
@@ -78,6 +84,69 @@ PAGESIZE *find_pagesize( PPD *ppd, const DEVMODEW *dm )
             return page;
 
     return NULL;
+}
+
+static PAGESIZE *find_pagesize_by_name( PPD *ppd, const WCHAR *name )
+{
+    PAGESIZE *page;
+
+    if (!name || !name[0]) return NULL;
+
+    LIST_FOR_EACH_ENTRY( page, &ppd->PageSizes, PAGESIZE, entry )
+        if (!lstrcmpW( page->FullName, name ))
+            return page;
+
+    return NULL;
+}
+
+static RESOLUTION *find_resolution( PPD *ppd, const DEVMODEW *dm )
+{
+    RESOLUTION *res;
+    int resx = dm->dmPrintQuality;
+    int resy = (dm->dmFields & DM_YRESOLUTION) ? dm->dmYResolution : dm->dmPrintQuality;
+
+    LIST_FOR_EACH_ENTRY( res, &ppd->Resolutions, RESOLUTION, entry )
+        if (res->resx == resx && res->resy == resy)
+            return res;
+
+    return NULL;
+}
+
+static const WCHAR *get_pagesize_display_name( const PAGESIZE *page )
+{
+    static const WCHAR letterW[] = L"Letter";
+    static const WCHAR a4W[] = L"A4";
+
+    if (!page) return letterW;
+    if (page->FullName) return page->FullName;
+    if (page->WinPage == DMPAPER_A4) return a4W;
+    if (page->WinPage == DMPAPER_LETTER) return letterW;
+    return letterW;
+}
+
+static const WCHAR *get_default_media_type_name(void)
+{
+    static const WCHAR standardW[] = L"Standard";
+    return standardW;
+}
+
+static LONG get_truetype_capabilities( const PRINTERINFO *pi )
+{
+    RASTERIZER_STATUS status;
+    LONG caps = DCTT_SUBDEV;
+
+    if (GetRasterizerCaps( &status, sizeof(status) ) &&
+            (status.wFlags & TT_AVAILABLE) && (status.wFlags & TT_ENABLED))
+        caps |= DCTT_BITMAP;
+
+    if (pi->ppd->TTRasterizer != RO_None)
+    {
+        caps |= DCTT_DOWNLOAD;
+        if (pi->ppd->TTRasterizer == RO_Type42)
+            caps |= DCTT_DOWNLOAD_OUTLINE;
+    }
+
+    return caps;
 }
 
 DUPLEX *find_duplex( PPD *ppd, const DEVMODEW *dm )
@@ -181,20 +250,48 @@ void PSDRV_MergeDevmodes( PSDRV_DEVMODE *dm1, const DEVMODEW *dm2, PRINTERINFO *
             TRACE("Trying to change to unsupported bin %d\n", dm2->dmDefaultSource);
     }
 
-   if (dm2->dmFields & DM_PRINTQUALITY )
-       dm1->dmPublic.dmPrintQuality = dm2->dmPrintQuality;
+   if (dm2->dmFields & (DM_PRINTQUALITY | DM_YRESOLUTION))
+   {
+       RESOLUTION *res = find_resolution( pi->ppd, dm2 );
+
+       if (res)
+       {
+           dm1->dmPublic.dmPrintQuality = res->resx;
+           dm1->dmPublic.dmYResolution = res->resy;
+           dm1->dmPublic.dmFields |= DM_PRINTQUALITY | DM_YRESOLUTION;
+       }
+       else
+       {
+           TRACE("Trying to change to unsupported resolution %d x %d\n",
+                 dm2->dmPrintQuality,
+                 (dm2->dmFields & DM_YRESOLUTION) ? dm2->dmYResolution : dm2->dmPrintQuality);
+       }
+   }
    if (dm2->dmFields & DM_COLOR )
        dm1->dmPublic.dmColor = dm2->dmColor;
    if (dm2->dmFields & DM_DUPLEX && pi->ppd->DefaultDuplex && pi->ppd->DefaultDuplex->WinDuplex != 0)
        dm1->dmPublic.dmDuplex = dm2->dmDuplex;
-   if (dm2->dmFields & DM_YRESOLUTION )
-       dm1->dmPublic.dmYResolution = dm2->dmYResolution;
    if (dm2->dmFields & DM_TTOPTION )
        dm1->dmPublic.dmTTOption = dm2->dmTTOption;
    if (dm2->dmFields & DM_COLLATE )
        dm1->dmPublic.dmCollate = dm2->dmCollate;
-   if (dm2->dmFields & DM_FORMNAME )
-       lstrcpynW(dm1->dmPublic.dmFormName, dm2->dmFormName, CCHFORMNAME);
+   if ((dm2->dmFields & DM_FORMNAME) && !(dm2->dmFields & DM_PAPERSIZE))
+   {
+       PAGESIZE *page = find_pagesize_by_name( pi->ppd, dm2->dmFormName );
+
+       if (page)
+       {
+           dm1->dmPublic.dmPaperSize = page->WinPage;
+           dm1->dmPublic.dmPaperWidth  = paper_size_from_points( page->PaperDimension->x );
+           dm1->dmPublic.dmPaperLength = paper_size_from_points( page->PaperDimension->y );
+           lstrcpynW( dm1->dmPublic.dmFormName, page->FullName, CCHFORMNAME );
+           dm1->dmPublic.dmFields |= DM_FORMNAME | DM_PAPERSIZE | DM_PAPERWIDTH | DM_PAPERLENGTH;
+       }
+       else
+       {
+           TRACE("Trying to change to unsupported form %s\n", debugstr_w(dm2->dmFormName));
+       }
+   }
    if (dm2->dmFields & DM_BITSPERPEL )
        dm1->dmPublic.dmBitsPerPel = dm2->dmBitsPerPel;
    if (dm2->dmFields & DM_PELSWIDTH )
@@ -681,7 +778,6 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
     }
 
   case DC_BINADJUST:
-    FIXME("DC_BINADJUST: stub.\n");
     ret = DCBA_FACEUPNONE;
     break;
 
@@ -787,8 +883,7 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
     break;
 
   case DC_TRUETYPE:
-    FIXME("DC_TRUETYPE: stub\n");
-    ret = DCTT_SUBDEV;
+    ret = get_truetype_capabilities( pi );
     break;
 
   case DC_VERSION:
@@ -808,20 +903,17 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
 
   /* Identification number of the printer manufacturer for use with ICM (Win9x only) */
   case DC_MANUFACTURER:
-    FIXME("DC_MANUFACTURER: stub\n");
-    ret = -1;
+    ret = 0;
     break;
 
   /* Identification number of the printer model for use with ICM (Win9x only) */
   case DC_MODEL:
-    FIXME("DC_MODEL: stub\n");
-    ret = -1;
+    ret = 0;
     break;
 
   /* Nonzero if the printer supports stapling, zero otherwise (Win2k/XP only) */
   case DC_STAPLE: /* WINVER >= 0x0500 */
-    FIXME("DC_STAPLE: stub\n");
-    ret = -1;
+    ret = FALSE;
     break;
 
   /* Returns an array of 64-character string buffers containing the names of the paper forms
@@ -829,8 +921,13 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
    * (Win2k/XP only)
    */
   case DC_MEDIAREADY: /* WINVER >= 0x0500 */
-    FIXME("DC_MEDIAREADY: stub\n");
-    ret = -1;
+    if (output != NULL)
+    {
+        PAGESIZE *page = find_pagesize( pi->ppd, lpdm );
+        if (!page) page = pi->ppd->DefaultPageSize;
+        copy_fixed_wstr( output, 64, get_pagesize_display_name( page ) );
+    }
+    ret = 1;
     break;
 
   /* Returns an array of 64-character string buffers containing the names of the supported
@@ -838,16 +935,16 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
    * media types (XP only)
    */
   case DC_MEDIATYPENAMES: /* WINVER >= 0x0501 */
-    FIXME("DC_MEDIATYPENAMES: stub\n");
-    ret = -1;
+    if (output != NULL) copy_fixed_wstr( output, 64, get_default_media_type_name() );
+    ret = 1;
     break;
 
   /* Returns an array of DWORD values which represent the supported media types, unless
    * pOutput is NULL.  The return value is the number of supported media types. (XP only)
    */
   case DC_MEDIATYPES: /* WINVER >= 0x0501 */
-    FIXME("DC_MEDIATYPES: stub\n");
-    ret = -1;
+    if (output != NULL) *(DWORD *)output = DMMEDIA_STANDARD;
+    ret = 1;
     break;
 
   /* Returns an array of DWORD values, each representing a supported number of document
@@ -855,8 +952,8 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
    * array entries. (Win2k/XP only)
    */
   case DC_NUP:
-    FIXME("DC_NUP: stub\n");
-    ret = -1;
+    if (output != NULL) *(DWORD *)output = 1;
+    ret = 1;
     break;
 
   /* Returns an array of 32-character string buffers containing a list of printer description
@@ -864,8 +961,8 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
    * number of array entries. (Win2k/XP only)
    */
   case DC_PERSONALITY: /* WINVER >= 0x0500 */
-    FIXME("DC_PERSONALITY: stub\n");
-    ret = -1;
+    if (output != NULL) copy_fixed_wstr( output, 32, L"PostScript" );
+    ret = 1;
     break;
 
   /* Returns the amount of printer memory in kilobytes. (Win2k/XP only) */
@@ -876,22 +973,19 @@ DWORD WINAPI DrvDeviceCapabilities(HANDLE printer, WCHAR *device_name, WORD capa
 
   /* Returns the printer's print rate in PRINTRATEUNIT units. (Win2k/XP only) */
   case DC_PRINTRATE: /* WINVER >= 0x0500 */
-    FIXME("DC_PRINTRATE: stub\n");
-    ret = -1;
+    ret = 1;
     break;
 
   /* Returns the printer's print rate in pages per minute. (Win2k/XP only) */
   case DC_PRINTRATEPPM: /* WINVER >= 0x0500 */
-    FIXME("DC_PRINTRATEPPM: stub\n");
-    ret = -1;
+    ret = 1;
     break;
 
   /* Returns the printer rate unit used for DC_PRINTRATE, which is one of
    * PRINTRATEUNIT_{CPS,IPM,LPM,PPM} (Win2k/XP only)
    */
   case DC_PRINTRATEUNIT: /* WINVER >= 0x0500 */
-    FIXME("DC_PRINTRATEUNIT: stub\n");
-    ret = -1;
+    ret = PRINTRATEUNIT_PPM;
     break;
 
   default:

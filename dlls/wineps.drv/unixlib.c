@@ -41,6 +41,12 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(psdrv);
 
+#define VENDOR_ESCAPE_QUERY        11000
+#define VENDOR_ESCAPE_CAPS         11002
+#define VENDOR_ESCAPE_PATTERN_RECT 11010
+#define VENDOR_ESCAPE_PRIVATE_11042 11042
+#define VENDOR_ESCAPE_STATUS       550101
+
 static const WCHAR timesW[] = {'T','i','m','e','s',0};
 static const WCHAR helveticaW[] = {'H','e','l','v','e','t','i','c','a',0};
 static const WCHAR courierW[] = {'C','o','u','r','i','e','r',0};
@@ -338,6 +344,42 @@ static const struct page_size *find_pagesize(const struct printer_info *pi,
     return NULL;
 }
 
+static const struct page_size *find_pagesize_by_name(const struct printer_info *pi,
+        const WCHAR *name)
+{
+    const struct page_size *page;
+    int i;
+
+    if (!name || !name[0]) return NULL;
+
+    page = (const struct page_size *)(pi->devmode->data +
+            pi->devmode->input_slots * sizeof(struct input_slot) +
+            pi->devmode->resolutions * sizeof(struct resolution));
+    for (i = 0; i < pi->devmode->page_sizes; i++)
+    {
+        if (!wcscmp( page[i].name, name ))
+            return page + i;
+    }
+    return NULL;
+}
+
+static const struct resolution *find_resolution(const struct printer_info *pi,
+        const DEVMODEW *dm)
+{
+    const struct resolution *res;
+    int i, resx = dm->dmPrintQuality;
+    int resy = (dm->dmFields & DM_YRESOLUTION) ? dm->dmYResolution : dm->dmPrintQuality;
+
+    res = (const struct resolution *)(pi->devmode->data +
+            pi->devmode->input_slots * sizeof(struct input_slot));
+    for (i = 0; i < pi->devmode->resolutions; i++)
+    {
+        if (res[i].x == resx && res[i].y == resy)
+            return res + i;
+    }
+    return NULL;
+}
+
 static void merge_devmodes(PSDRV_DEVMODE *dm1, const DEVMODEW *dm2,
         const struct printer_info *pi)
 {
@@ -422,20 +464,48 @@ static void merge_devmodes(PSDRV_DEVMODE *dm1, const DEVMODEW *dm2,
             TRACE("Trying to change to unsupported bin %d\n", dm2->dmDefaultSource);
     }
 
-    if (dm2->dmFields & DM_PRINTQUALITY)
-        dm1->dmPublic.dmPrintQuality = dm2->dmPrintQuality;
+    if (dm2->dmFields & (DM_PRINTQUALITY | DM_YRESOLUTION))
+    {
+        const struct resolution *res = find_resolution(pi, dm2);
+
+        if (res)
+        {
+            dm1->dmPublic.dmPrintQuality = res->x;
+            dm1->dmPublic.dmYResolution = res->y;
+            dm1->dmPublic.dmFields |= DM_PRINTQUALITY | DM_YRESOLUTION;
+        }
+        else
+        {
+            TRACE("Trying to change to unsupported resolution %d x %d\n",
+                    dm2->dmPrintQuality,
+                    (dm2->dmFields & DM_YRESOLUTION) ? dm2->dmYResolution : dm2->dmPrintQuality);
+        }
+    }
     if (dm2->dmFields & DM_COLOR)
         dm1->dmPublic.dmColor = dm2->dmColor;
     if (dm2->dmFields & DM_DUPLEX && pi->devmode->duplex)
         dm1->dmPublic.dmDuplex = dm2->dmDuplex;
-    if (dm2->dmFields & DM_YRESOLUTION)
-        dm1->dmPublic.dmYResolution = dm2->dmYResolution;
     if (dm2->dmFields & DM_TTOPTION)
         dm1->dmPublic.dmTTOption = dm2->dmTTOption;
     if (dm2->dmFields & DM_COLLATE)
         dm1->dmPublic.dmCollate = dm2->dmCollate;
-    if (dm2->dmFields & DM_FORMNAME)
-        lstrcpynW(dm1->dmPublic.dmFormName, dm2->dmFormName, CCHFORMNAME);
+    if ((dm2->dmFields & DM_FORMNAME) && !(dm2->dmFields & DM_PAPERSIZE))
+    {
+        const struct page_size *page = find_pagesize_by_name(pi, dm2->dmFormName);
+
+        if (page)
+        {
+            dm1->dmPublic.dmPaperSize = page->win_page;
+            dm1->dmPublic.dmPaperWidth  = paper_size_from_points(page->paper_dimension.x);
+            dm1->dmPublic.dmPaperLength = paper_size_from_points(page->paper_dimension.y);
+            lstrcpynW(dm1->dmPublic.dmFormName, page->name, CCHFORMNAME);
+            dm1->dmPublic.dmFields |= DM_FORMNAME | DM_PAPERSIZE | DM_PAPERWIDTH | DM_PAPERLENGTH;
+        }
+        else
+        {
+            TRACE("Trying to change to unsupported form %s\n", debugstr_w(dm2->dmFormName));
+        }
+    }
     if (dm2->dmFields & DM_BITSPERPEL)
         dm1->dmPublic.dmBitsPerPel = dm2->dmBitsPerPel;
     if (dm2->dmFields & DM_PELSWIDTH)
@@ -651,8 +721,7 @@ static int ext_escape(PHYSDEV dev, int escape, int input_size, const void *input
             case BEGIN_PATH:
             case CLIP_TO_PATH:
             case END_PATH:
-            /*case DRAWPATTERNRECT:*/
-
+            case DRAWPATTERNRECT:
             /* PageMaker checks for it */
             case DOWNLOADHEADER:
 
@@ -666,6 +735,11 @@ static int ext_escape(PHYSDEV dev, int escape, int input_size, const void *input
              */
             case OPENCHANNEL:
             case CLOSECHANNEL:
+            case VENDOR_ESCAPE_QUERY:
+            case VENDOR_ESCAPE_CAPS:
+            case VENDOR_ESCAPE_PATTERN_RECT:
+            case VENDOR_ESCAPE_PRIVATE_11042:
+            case VENDOR_ESCAPE_STATUS:
                 return TRUE;
 
             /* Windows PS driver reports 0, but still supports this escape */
@@ -716,6 +790,34 @@ static int ext_escape(PHYSDEV dev, int escape, int input_size, const void *input
                 dpr->wStyle, dpr->wPattern);
         return 1;
     }
+    case VENDOR_ESCAPE_QUERY:
+        TRACE("private vendor escape %d\n", escape);
+        return 1;
+
+    case VENDOR_ESCAPE_CAPS:
+    {
+        static const DWORD caps_size = 12;
+
+        TRACE("private vendor caps escape, output_size %d\n", output_size);
+        if (!output || !output_size) return caps_size;
+        if (output_size < caps_size) return 0;
+
+        memset(output, 0, caps_size);
+        return caps_size;
+    }
+
+    case VENDOR_ESCAPE_PATTERN_RECT:
+        TRACE("private vendor pattern rect escape, ignoring request\n");
+        return 1;
+
+    case VENDOR_ESCAPE_PRIVATE_11042:
+        TRACE("private vendor escape %d, ignoring request\n", escape);
+        return 1;
+
+    case VENDOR_ESCAPE_STATUS:
+        TRACE("private vendor status escape, ignoring request\n");
+        return 1;
+
     case BANDINFO:
     {
         struct band_info *ibi = (struct band_info *)input;

@@ -1984,8 +1984,10 @@ static void test_Win32_Printer( IWbemServices *services )
     BSTR wql = SysAllocString( L"wql" ), query = SysAllocString( L"SELECT * FROM Win32_Printer" );
     IEnumWbemClassObject *result;
     IWbemClassObject *obj;
+    VARIANT value;
+    BSTR second_name = NULL;
     HRESULT hr;
-    DWORD count;
+    DWORD count, printer_count = 0;
 
     hr = IWbemServices_ExecQuery( services, wql, query, 0, NULL, &result );
     if (hr != S_OK)
@@ -2004,10 +2006,56 @@ static void test_Win32_Printer( IWbemServices *services )
         check_property( obj, L"HorizontalResolution", VT_I4, CIM_UINT32 );
         check_property_nullable( obj, L"Location", VT_BSTR, CIM_STRING );
         check_property( obj, L"PortName", VT_BSTR, CIM_STRING );
+
+        if (printer_count == 1)
+        {
+            VariantInit( &value );
+            hr = IWbemClassObject_Get( obj, L"Name", 0, &value, NULL, NULL );
+            ok( hr == S_OK, "got %#lx\n", hr );
+            if (hr == S_OK) second_name = SysAllocString( V_BSTR( &value ) );
+            VariantClear( &value );
+        }
+        printer_count++;
         IWbemClassObject_Release( obj );
     }
 
     IEnumWbemClassObject_Release( result );
+    SysFreeString( query );
+    if (printer_count < 2)
+    {
+        win_skip( "Win32_Printer returned fewer than two printers\n" );
+        SysFreeString( second_name );
+        SysFreeString( wql );
+        return;
+    }
+
+    query = SysAllocString( L"SELECT Name FROM Win32_Printer WHERE DeviceID='Printer1'" );
+    hr = IWbemServices_ExecQuery( services, wql, query, 0, NULL, &result );
+    ok( hr == S_OK, "got %#lx\n", hr );
+    if (hr == S_OK)
+    {
+        hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
+        ok( hr == S_OK, "got %#lx\n", hr );
+        ok( count == 1, "got %lu\n", count );
+        if (hr == S_OK && count == 1)
+        {
+            VariantInit( &value );
+            hr = IWbemClassObject_Get( obj, L"Name", 0, &value, NULL, NULL );
+            ok( hr == S_OK, "got %#lx\n", hr );
+            if (hr == S_OK) ok( !lstrcmpW( V_BSTR( &value ), second_name ),
+                                "got %s, expected %s\n",
+                                wine_dbgstr_w( V_BSTR( &value ) ), wine_dbgstr_w( second_name ) );
+            VariantClear( &value );
+            IWbemClassObject_Release( obj );
+        }
+
+        hr = IEnumWbemClassObject_Next( result, 10000, 1, &obj, &count );
+        ok( hr == WBEM_S_FALSE, "got %#lx\n", hr );
+        ok( !count, "got %lu\n", count );
+        IEnumWbemClassObject_Release( result );
+    }
+
+    SysFreeString( second_name );
     SysFreeString( query );
     SysFreeString( wql );
 }

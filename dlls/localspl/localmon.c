@@ -161,9 +161,7 @@ static DWORD get_ports_from_reg(DWORD level, LPBYTE pPorts, DWORD cbBuf, LPDWORD
     LPPORT_INFO_2W out;
     WCHAR   portname[MAX_PATH];
     WCHAR   res_PortW[IDS_LOCALPORT_MAXLEN];
-    WCHAR   res_MonitorW[IDS_LOCALMONITOR_MAXLEN];
     INT     reslen_PortW;
-    INT     reslen_MonitorW;
     DWORD   len;
     DWORD   res;
     DWORD   needed = 0;
@@ -189,8 +187,6 @@ static DWORD get_ports_from_reg(DWORD level, LPBYTE pPorts, DWORD cbBuf, LPDWORD
         goto getports_cleanup;
     }
 
-    /* "+1" for '\0' */
-    reslen_MonitorW = LoadStringW(localspl_instance, IDS_LOCALMONITOR, res_MonitorW, IDS_LOCALMONITOR_MAXLEN) + 1;
     reslen_PortW = LoadStringW(localspl_instance, IDS_LOCALPORT, res_PortW, IDS_LOCALPORT_MAXLEN) + 1;
 
     res = RegOpenKeyW(HKEY_LOCAL_MACHINE, WinNT_CV_PortsW, &hroot);
@@ -208,11 +204,17 @@ static DWORD get_ports_from_reg(DWORD level, LPBYTE pPorts, DWORD cbBuf, LPDWORD
                 needed += entrysize;
                 needed += (len + 1) * sizeof(WCHAR);
                 if (level > 1) {
-                    needed += (reslen_MonitorW + reslen_PortW) * sizeof(WCHAR);
+                    needed += 2 * reslen_PortW * sizeof(WCHAR);
                 }
 
                 /* Now fill the user-buffer, if available */
                 if (pPorts && (cbBuf >= needed)){
+                    DWORD port_type = PORT_TYPE_WRITE;
+
+                    if (!wcsncmp(portname, L"CUPS:", ARRAY_SIZE(L"CUPS:") - 1) ||
+                        !wcsncmp(portname, L"LPR:", ARRAY_SIZE(L"LPR:") - 1))
+                        port_type |= PORT_TYPE_READ | PORT_TYPE_NET_ATTACHED;
+
                     out = (LPPORT_INFO_2W) pPorts;
                     pPorts += entrysize;
                     TRACE("%p: writing PORT_INFO_%ldW #%ld (%s)\n", out, level, numentries, debugstr_w(portname));
@@ -221,14 +223,14 @@ static DWORD get_ports_from_reg(DWORD level, LPBYTE pPorts, DWORD cbBuf, LPDWORD
                     ptr += (len + 1);
                     if (level > 1) {
                         out->pMonitorName = ptr;
-                        lstrcpyW(ptr, res_MonitorW);    /* Name of the Monitor */
-                        ptr += reslen_MonitorW;
+                        lstrcpyW(ptr, res_PortW);       /* Name of the Monitor */
+                        ptr += reslen_PortW;
 
                         out->pDescription = ptr;
                         lstrcpyW(ptr, res_PortW);       /* Port Description */
                         ptr += reslen_PortW;
 
-                        out->fPortType = PORT_TYPE_WRITE;
+                        out->fPortType = port_type;
                         out->Reserved = 0;
                     }
                 }

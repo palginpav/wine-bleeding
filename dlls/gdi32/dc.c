@@ -21,6 +21,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <string.h>
+
 #include "gdi_private.h"
 #include "ntuser.h"
 #include "ddrawgdi.h"
@@ -2709,15 +2711,76 @@ INT WINAPI NamedEscape( HDC hdc, const WCHAR *driver, INT escape, INT input_size
     return 0;
 }
 
+static ULONG hash_display_value( ULONG hash, ULONG value )
+{
+    hash ^= value;
+    hash *= 16777619u;
+    return hash;
+}
+
+static ULONG hash_display_string( ULONG hash, const WCHAR *str )
+{
+    while (*str) hash = hash_display_value( hash, *str++ );
+    return hash;
+}
+
+static ULONG hash_display_mode( ULONG hash, const DEVMODEW *mode )
+{
+    hash = hash_display_value( hash, mode->dmFields );
+    hash = hash_display_value( hash, mode->dmPosition.x );
+    hash = hash_display_value( hash, mode->dmPosition.y );
+    hash = hash_display_value( hash, mode->dmDisplayOrientation );
+    hash = hash_display_value( hash, mode->dmDisplayFixedOutput );
+    hash = hash_display_value( hash, mode->dmBitsPerPel );
+    hash = hash_display_value( hash, mode->dmPelsWidth );
+    hash = hash_display_value( hash, mode->dmPelsHeight );
+    hash = hash_display_value( hash, mode->dmDisplayFlags );
+    hash = hash_display_value( hash, mode->dmDisplayFrequency );
+    return hash;
+}
+
 /*******************************************************************
  *           DdQueryDisplaySettingsUniqueness    (GDI32.@)
  *           GdiEntry13
  */
 ULONG WINAPI DdQueryDisplaySettingsUniqueness(void)
 {
-    static int warn_once;
-    if (!warn_once++) FIXME( "stub\n" );
-    return 0;
+    DISPLAY_DEVICEW adapter = {.cb = sizeof(adapter)};
+    DEVMODEW mode = {.dmSize = sizeof(mode)};
+    UNICODE_STRING device;
+    ULONG hash = 2166136261u;
+    DWORD i;
+    BOOL found = FALSE;
+
+    for (i = 0; NT_SUCCESS( NtUserEnumDisplayDevices( NULL, i, &adapter, 0 ) ); ++i)
+    {
+        if (!(adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+
+        memset( &mode, 0, sizeof(mode) );
+        mode.dmSize = sizeof(mode);
+        RtlInitUnicodeString( &device, adapter.DeviceName );
+        if (!NtUserEnumDisplaySettings( &device, ENUM_CURRENT_SETTINGS, &mode, 0 )) continue;
+
+        found = TRUE;
+        hash = hash_display_value( hash, i );
+        hash = hash_display_value( hash, adapter.StateFlags );
+        hash = hash_display_string( hash, adapter.DeviceName );
+        hash = hash_display_mode( hash, &mode );
+    }
+
+    if (!found)
+    {
+        memset( &mode, 0, sizeof(mode) );
+        mode.dmSize = sizeof(mode);
+        device.Length = 0;
+        device.MaximumLength = 0;
+        device.Buffer = NULL;
+
+        if (NtUserEnumDisplaySettings( &device, ENUM_CURRENT_SETTINGS, &mode, 0 ))
+            hash = hash_display_mode( hash, &mode );
+    }
+
+    return hash ? hash : 1;
 }
 
 /*******************************************************************

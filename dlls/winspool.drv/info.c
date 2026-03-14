@@ -39,6 +39,7 @@
 #include "winreg.h"
 #include "wingdi.h"
 #include "winspool.h"
+#include "aclapi.h"
 #include "winternl.h"
 #include "winnls.h"
 #include "wine/windef16.h"
@@ -52,8 +53,6 @@
 #include "wspool.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winspool);
-
-/* ############################### */
 
 static CRITICAL_SECTION printer_handles_cs;
 static CRITICAL_SECTION_DEBUG printer_handles_cs_debug =
@@ -308,6 +307,9 @@ static inline const DWORD *form_string_info( DWORD level )
     SetLastError( ERROR_INVALID_LEVEL );
     return NULL;
 }
+
+static inline const DWORD *job_string_info(DWORD level);
+static void sync_system_port_entry( const WCHAR *port_name );
 
 /*****************************************************************************
  *          WINSPOOL_OpenDriverReg [internal]
@@ -708,9 +710,22 @@ static WCHAR *get_ppd_dir( void )
     return dir;
 }
 
+static BOOL printer_reg_exists( HKEY printers_key, const WCHAR *printer_name )
+{
+    HKEY printer_key;
+
+    if (!printer_name || !printer_name[0]) return FALSE;
+    if (RegOpenKeyW( printers_key, printer_name, &printer_key )) return FALSE;
+
+    RegCloseKey( printer_key );
+    return TRUE;
+}
+
 static BOOL init_unix_printers( void )
 {
     WCHAR *port, *ppd_dir = NULL, *default_printer = NULL;
+    WCHAR current_default[MAX_PATH];
+    DWORD current_default_size = ARRAY_SIZE(current_default);
     unsigned int size, num;
     struct enum_printers_params enum_params = { NULL, &size, &num };
     HKEY printer_key, printers_key;
@@ -744,9 +759,17 @@ static BOOL init_unix_printers( void )
         if (RegOpenKeyW( printers_key, printer->name, &printer_key ) == ERROR_SUCCESS)
         {
             DWORD status = get_dword_from_reg( printer_key, L"Status" );
+            port = malloc( sizeof(L"CUPS:") + wcslen( printer->name ) * sizeof(WCHAR) );
             /* Printer already in registry, delete the tag added in WINSPOOL_LoadSystemPrinters
                and continue */
             TRACE("Printer already exists\n");
+            if (port)
+            {
+                wcscpy( port, L"CUPS:" );
+                wcscat( port, printer->name );
+                sync_system_port_entry( port );
+                free( port );
+            }
             RegDeleteValueW( printer_key, May_Delete_Value );
             /* flag that the PPD file should be checked for an update */
             set_reg_DWORD( printer_key, L"Status", status | PRINTER_STATUS_DRIVER_UPDATE_NEEDED );
@@ -785,8 +808,16 @@ static BOOL init_unix_printers( void )
         if (printer->is_default) default_printer = printer->name;
     }
 
-    if (!default_printer && num) default_printer = enum_params.printers[0].name;
-    if (default_printer) SetDefaultPrinterW( default_printer );
+    if (GetDefaultPrinterW( current_default, &current_default_size ) &&
+        printer_reg_exists( printers_key, current_default ))
+    {
+        TRACE( "Preserving existing default printer %s\n", debugstr_w( current_default ) );
+    }
+    else
+    {
+        if (!default_printer && num) default_printer = enum_params.printers[0].name;
+        if (default_printer) SetDefaultPrinterW( default_printer );
+    }
 
     if (ppd_dir)
     {
@@ -867,6 +898,23 @@ static inline DWORD set_reg_devmode( HKEY key, const WCHAR *name, const DEVMODEW
     }
 
     return ret;
+}
+
+static void sync_system_port_entry( const WCHAR *port_name )
+{
+    HKEY key;
+    static const WCHAR emptyW[] = L"";
+
+    if (!port_name) return;
+    if (wcsncmp( port_name, L"CUPS:", ARRAY_SIZE(L"CUPS:") - 1 ) &&
+        wcsncmp( port_name, L"LPR:", ARRAY_SIZE(L"LPR:") - 1 ))
+        return;
+
+    if (!RegCreateKeyW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Ports", &key ))
+    {
+        RegSetValueExW( key, port_name, 0, REG_SZ, (const BYTE *)emptyW, sizeof(emptyW) );
+        RegCloseKey( key );
+    }
 }
 
 /******************************************************************
@@ -1283,8 +1331,27 @@ static void convert_printerinfo_W_to_A(LPBYTE out, LPBYTE pPrintersW,
                         outlen -= len;
                     }
                     if (piW->pSecurityDescriptor) {
-                        piA->pSecurityDescriptor = NULL;
-                        FIXME("pSecurityDescriptor ignored: %s\n", debugstr_w(piW->pPrinterName));
+                        len = GetSecurityDescriptorLength( piW->pSecurityDescriptor );
+                        piA->pSecurityDescriptor = (PSECURITY_DESCRIPTOR)ptr;
+                        memcpy( ptr, piW->pSecurityDescriptor, len );
+                        ptr += len;
+                        outlen -= len;
+                    }
+                    break;
+                }
+
+            case 3:
+                {
+                    PRINTER_INFO_3 *piW = (PRINTER_INFO_3 *)pPrintersW;
+                    PRINTER_INFO_3 *piA = (PRINTER_INFO_3 *)out;
+
+                    if (piW->pSecurityDescriptor)
+                    {
+                        len = GetSecurityDescriptorLength( piW->pSecurityDescriptor );
+                        piA->pSecurityDescriptor = (PSECURITY_DESCRIPTOR)ptr;
+                        memcpy( ptr, piW->pSecurityDescriptor, len );
+                        ptr += len;
+                        outlen -= len;
                     }
                     break;
                 }
@@ -1700,7 +1767,8 @@ INT WINAPI DeviceCapabilitiesA(const char *device, const char *portA, WORD cap,
 
     if (devmodeA) devmode = GdiConvertToDevmodeW( devmodeA );
 
-    if (output && (cap == DC_BINNAMES || cap == DC_FILEDEPENDENCIES || cap == DC_PAPERNAMES)) {
+    if (output && (cap == DC_BINNAMES || cap == DC_FILEDEPENDENCIES || cap == DC_PAPERNAMES
+            || cap == DC_PERSONALITY || cap == DC_MEDIAREADY || cap == DC_MEDIATYPENAMES)) {
         /* These need A -> W translation */
         unsigned int size = 0, i;
         WCHAR *outputW;
@@ -1712,8 +1780,13 @@ INT WINAPI DeviceCapabilitiesA(const char *device, const char *portA, WORD cap,
         case DC_BINNAMES:
             size = 24;
             break;
+        case DC_PERSONALITY:
+            size = 32;
+            break;
         case DC_PAPERNAMES:
         case DC_FILEDEPENDENCIES:
+        case DC_MEDIAREADY:
+        case DC_MEDIATYPENAMES:
             size = 64;
             break;
         }
@@ -2557,6 +2630,8 @@ static void set_devices_and_printerports(PRINTER_INFO_2W *pi)
         }
         free(devline);
     }
+
+    sync_system_port_entry( pi->pPortName );
 }
 
 static BOOL validate_print_proc(WCHAR *server, const WCHAR *name)
@@ -3666,6 +3741,57 @@ static BOOL WINSPOOL_GetPrinter_2(HKEY hkeyPrinter, PRINTER_INFO_2W *pi2,
 }
 
 /*********************************************************************
+ *    WINSPOOL_GetPrinter_3
+ *
+ * Fills out a PRINTER_INFO_3 struct storing the security descriptor in buf.
+ */
+static BOOL WINSPOOL_GetPrinter_3(HKEY hkeyPrinter, PRINTER_INFO_3 *pi3,
+                                  LPBYTE buf, DWORD cbBuf, LPDWORD pcbNeeded)
+{
+    SECURITY_DESCRIPTOR descriptor;
+    PSECURITY_DESCRIPTOR sd = NULL;
+    DWORD err, size = 0;
+    BOOL ret = FALSE;
+
+    *pcbNeeded = 0;
+
+    err = GetSecurityInfo( hkeyPrinter, SE_REGISTRY_KEY,
+                           OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                           DACL_SECURITY_INFORMATION,
+                           NULL, NULL, NULL, NULL, &sd );
+    if (err == ERROR_SUCCESS)
+    {
+        size = GetSecurityDescriptorLength( sd );
+        if (pi3 && size <= cbBuf)
+        {
+            pi3->pSecurityDescriptor = (PSECURITY_DESCRIPTOR)buf;
+            memcpy( pi3->pSecurityDescriptor, sd, size );
+            ret = TRUE;
+        }
+        *pcbNeeded = size;
+        LocalFree( sd );
+        return ret;
+    }
+
+    WARN( "GetSecurityInfo failed for printer key, err %lu, using fallback descriptor\n", err );
+
+    if (!InitializeSecurityDescriptor( &descriptor, SECURITY_DESCRIPTOR_REVISION ) ||
+        !SetSecurityDescriptorDacl( &descriptor, TRUE, NULL, FALSE ))
+        return FALSE;
+
+    MakeSelfRelativeSD( &descriptor, NULL, &size );
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return FALSE;
+
+    if (pi3 && size <= cbBuf)
+    {
+        pi3->pSecurityDescriptor = (PSECURITY_DESCRIPTOR)buf;
+        ret = MakeSelfRelativeSD( &descriptor, pi3->pSecurityDescriptor, &size );
+    }
+    *pcbNeeded = size;
+    return ret;
+}
+
+/*********************************************************************
  *    WINSPOOL_GetPrinter_4
  *
  * Fills out a PRINTER_INFO_4 struct storing the strings in buf.
@@ -3819,6 +3945,47 @@ static BOOL WINSPOOL_GetPrinter_9(HKEY hkeyPrinter, PRINTER_INFO_9W *pi9, LPBYTE
     return space;
 }
 
+static BOOL is_default_printer_name( const WCHAR *printer_name )
+{
+    WCHAR default_printer[MAX_PATH];
+    DWORD size = ARRAY_SIZE(default_printer);
+
+    if (!printer_name || !printer_name[0]) return FALSE;
+    return GetDefaultPrinterW( default_printer, &size ) && !wcscmp( default_printer, printer_name );
+}
+
+static void merge_backend_printer_info_2(HANDLE hPrinter, PRINTER_INFO_2W *pi2)
+{
+    HANDLE handle;
+    PRINTER_INFO_2W *backend_pi2;
+    BYTE *buffer;
+    DWORD needed = 0;
+
+    if (!backend || !backend->fpGetPrinter || !pi2)
+        return;
+
+    handle = get_backend_handle(hPrinter);
+    if (!handle)
+        return;
+
+    if (backend->fpGetPrinter(handle, 2, NULL, 0, &needed) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || needed < sizeof(*backend_pi2))
+        return;
+
+    if (!(buffer = malloc(needed)))
+        return;
+
+    if (backend->fpGetPrinter(handle, 2, buffer, needed, &needed))
+    {
+        backend_pi2 = (PRINTER_INFO_2W *)buffer;
+        pi2->cJobs = backend_pi2->cJobs;
+        if (backend_pi2->Status) pi2->Status = backend_pi2->Status;
+        if (backend_pi2->Attributes) pi2->Attributes = backend_pi2->Attributes;
+    }
+
+    free(buffer);
+}
+
 /*****************************************************************************
  *          GetPrinterW  [WINSPOOL.@]
  */
@@ -3872,8 +4039,29 @@ BOOL WINAPI GetPrinterW(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter,
 	    cbBuf = 0;
 	}
 	ret = WINSPOOL_GetPrinter_2(hkeyPrinter, pi2, ptr, cbBuf, &needed);
+        if (ret && pi2 && is_default_printer_name( pi2->pPrinterName ))
+            pi2->Attributes |= PRINTER_ATTRIBUTE_DEFAULT;
+        if (ret && pi2) merge_backend_printer_info_2(hPrinter, pi2);
 	needed += size;
 	break;
+      }
+
+    case 3:
+      {
+        PRINTER_INFO_3 *pi3 = (PRINTER_INFO_3 *)pPrinter;
+
+        size = sizeof(PRINTER_INFO_3);
+        if (size <= cbBuf) {
+            ptr = pPrinter + size;
+            cbBuf -= size;
+            memset(pPrinter, 0, size);
+        } else {
+            pi3 = NULL;
+            cbBuf = 0;
+        }
+        ret = WINSPOOL_GetPrinter_3(hkeyPrinter, pi3, ptr, cbBuf, &needed);
+        needed += size;
+        break;
       }
 
     case 4:
@@ -4124,6 +4312,8 @@ static BOOL WINSPOOL_EnumPrintersW(DWORD dwType, LPWSTR lpszName,
 	case 2:
 	    WINSPOOL_GetPrinter_2(hkeyPrinter, (PRINTER_INFO_2W *)pi, buf,
 				  left, &needed);
+            if (pi && is_default_printer_name( ((PRINTER_INFO_2W *)pi)->pPrinterName ))
+                ((PRINTER_INFO_2W *)pi)->Attributes |= PRINTER_ATTRIBUTE_DEFAULT;
 	    used += needed;
 	    if(pi) pi += sizeof(PRINTER_INFO_2W);
 	    break;
@@ -4881,11 +5071,49 @@ BOOL WINAPI EnumJobsA(HANDLE hPrinter, DWORD FirstJob, DWORD NoJobs,
 		      DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded,
 		      LPDWORD pcReturned)
 {
-    FIXME("(%p,first=%ld,no=%ld,level=%ld,job=%p,cb=%ld,%p,%p), stub!\n",
-	hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned
-    );
-    if(pcbNeeded) *pcbNeeded = 0;
-    if(pcReturned) *pcReturned = 0;
+    const DWORD *string_info = job_string_info(Level);
+    BOOL ret;
+    DWORD i;
+
+    TRACE("(%p,first=%ld,no=%ld,level=%ld,job=%p,cb=%ld,%p,%p)\n",
+          hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned);
+
+    if (!string_info)
+        return FALSE;
+
+    ret = EnumJobsW(hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned);
+    if (ret)
+    {
+        DWORD count = pcReturned ? *pcReturned : 0;
+
+        for (i = 0; i < count; i++)
+        {
+            BYTE *entry = pJob + i * string_info[0];
+            DEVMODEW *devmodeW = NULL;
+
+            if (Level == 2)
+                devmodeW = ((JOB_INFO_2W *)entry)->pDevMode;
+            packed_struct_WtoA(entry, string_info);
+            if (Level == 2 && devmodeW)
+                DEVMODEWtoA(devmodeW, ((JOB_INFO_2A *)entry)->pDevMode);
+        }
+    }
+
+    return ret;
+}
+
+static inline BOOL enum_jobs_stub( HANDLE handle, DWORD FirstJob, DWORD NoJobs, DWORD Level, LPBYTE pJob,
+                                   DWORD cbBuf, LPDWORD pcbNeeded, LPDWORD pcReturned )
+{
+    if (backend->fpEnumJobs)
+        return backend->fpEnumJobs( handle, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned );
+
+    if (pcbNeeded) *pcbNeeded = 0;
+    if (pcReturned) *pcReturned = 0;
+    if (!NoJobs)
+        return TRUE;
+
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
 
@@ -4898,12 +5126,23 @@ BOOL WINAPI EnumJobsW(HANDLE hPrinter, DWORD FirstJob, DWORD NoJobs,
 		      DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded,
 		      LPDWORD pcReturned)
 {
-    FIXME("(%p,first=%ld,no=%ld,level=%ld,job=%p,cb=%ld,%p,%p), stub!\n",
-	hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned
-    );
-    if(pcbNeeded) *pcbNeeded = 0;
-    if(pcReturned) *pcReturned = 0;
-    return FALSE;
+    HANDLE handle = get_backend_handle(hPrinter);
+
+    TRACE("(%p,first=%ld,no=%ld,level=%ld,job=%p,cb=%ld,%p,%p)\n",
+          hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned);
+
+    if (!handle)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    if (Level != 1 && Level != 2)
+    {
+        SetLastError(ERROR_INVALID_LEVEL);
+        return FALSE;
+    }
+    return enum_jobs_stub( handle, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned );
 }
 
 /*****************************************************************************
@@ -5587,6 +5826,178 @@ DWORD WINAPI SetPrinterDataW(HANDLE hPrinter, LPWSTR pValueName, DWORD Type,
                               pData, cbData );
 }
 
+static DWORD copy_printer_data_string( LPCWSTR value, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    DWORD bytes = (lstrlenW( value ) + 1) * sizeof(WCHAR);
+
+    if (needed) *needed = bytes;
+    if (type) *type = REG_SZ;
+    if (!data) return ERROR_MORE_DATA;
+    if (size < bytes) return ERROR_MORE_DATA;
+
+    memcpy( data, value, bytes );
+    return ERROR_SUCCESS;
+}
+
+static DWORD copy_printer_data_dword( DWORD value, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    if (needed) *needed = sizeof(value);
+    if (type) *type = REG_DWORD;
+    if (!data) return ERROR_MORE_DATA;
+    if (size < sizeof(value)) return ERROR_MORE_DATA;
+
+    *(DWORD *)data = value;
+    return ERROR_SUCCESS;
+}
+
+static DWORD copy_printer_data_qword( ULONGLONG value, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    if (needed) *needed = sizeof(value);
+    if (type) *type = REG_QWORD;
+    if (!data) return ERROR_MORE_DATA;
+    if (size < sizeof(value)) return ERROR_MORE_DATA;
+
+    *(ULONGLONG *)data = value;
+    return ERROR_SUCCESS;
+}
+
+static DWORD copy_printer_data_string_a( LPCSTR value, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    DWORD bytes = lstrlenA( value ) + 1;
+
+    if (needed) *needed = bytes;
+    if (type) *type = REG_SZ;
+    if (!data) return ERROR_MORE_DATA;
+    if (size < bytes) return ERROR_MORE_DATA;
+
+    memcpy( data, value, bytes );
+    return ERROR_SUCCESS;
+}
+
+static DWORD get_printer_driver_data_fallback_a( HKEY printer_key, const WCHAR *printer_name, LPCSTR value_name,
+                                                 LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    char driver_name[MAX_PATH];
+    DWORD driver_name_size = sizeof(driver_name), ret;
+
+    if (!value_name) return ERROR_INVALID_PARAMETER;
+
+    if (!strcmp( value_name, "TSSessionID" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!strcmp( value_name, "DAL Interface" ) || !strcmp( value_name, "DAL Interface V3" ))
+        return copy_printer_data_string_a( "", type, data, size, needed );
+
+    if (!strcmp( value_name, "ClientName" ))
+        return copy_printer_data_string_a( "", type, data, size, needed );
+
+    if (!strcmp( value_name, "PrinterName" ))
+    {
+        if (printer_name)
+        {
+            char printer_name_a[MAX_PATH];
+
+            WideCharToMultiByte( CP_ACP, 0, printer_name, -1, printer_name_a, ARRAY_SIZE(printer_name_a), NULL, NULL );
+            return copy_printer_data_string_a( printer_name_a, type, data, size, needed );
+        }
+        return copy_printer_data_string_a( "", type, data, size, needed );
+    }
+
+    if (!strcmp( value_name, "XPML Server Port" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!strcmp( value_name, "Model" ) || !strcmp( value_name, "DriverPackage" ))
+    {
+        ret = RegQueryValueExA( printer_key, "Printer Driver", NULL, NULL, (BYTE *)driver_name, &driver_name_size );
+        if (!ret) return copy_printer_data_string_a( driver_name, type, data, size, needed );
+        return copy_printer_data_string_a( "", type, data, size, needed );
+    }
+
+    return ERROR_FILE_NOT_FOUND;
+}
+
+static DWORD get_printer_driver_data_fallback( HKEY printer_key, const WCHAR *printer_name, LPCWSTR value_name,
+                                               LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    WCHAR driver_name[MAX_PATH];
+    DWORD driver_name_size = sizeof(driver_name), ret;
+
+    if (!value_name) return ERROR_INVALID_PARAMETER;
+
+    if (!wcscmp( value_name, L"TSSessionID" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!wcscmp( value_name, L"DAL Interface" ) || !wcscmp( value_name, L"DAL Interface V3" ))
+        return copy_printer_data_string( L"", type, data, size, needed );
+
+    if (!wcscmp( value_name, L"ClientName" ))
+        return copy_printer_data_string( L"", type, data, size, needed );
+
+    if (!wcscmp( value_name, L"PrinterName" ))
+    {
+        if (printer_name) return copy_printer_data_string( printer_name, type, data, size, needed );
+        return copy_printer_data_string( L"", type, data, size, needed );
+    }
+
+    if (!wcscmp( value_name, L"XPML Server Port" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!wcscmp( value_name, L"Model" ) || !wcscmp( value_name, L"DriverPackage" ))
+    {
+        ret = RegQueryValueExW( printer_key, L"Printer Driver", NULL, NULL, (BYTE *)driver_name, &driver_name_size );
+        if (!ret) return copy_printer_data_string( driver_name, type, data, size, needed );
+        return copy_printer_data_string( L"", type, data, size, needed );
+    }
+
+    return ERROR_FILE_NOT_FOUND;
+}
+
+static DWORD get_print_link_fallback_a( LPCSTR value_name, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    if (!value_name) return ERROR_INVALID_PARAMETER;
+
+    if (!strcmp( value_name, "Odometer Pages" ) ||
+        !strcmp( value_name, "Odometer Last Cleaning Page Count" ) ||
+        !strcmp( value_name, "Odometer Has Been Cleaned" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!strcmp( value_name, "Odometer Distance" ) ||
+        !strcmp( value_name, "Odometer Last Cleaning Distance" ))
+        return copy_printer_data_qword( 0, type, data, size, needed );
+
+    return ERROR_FILE_NOT_FOUND;
+}
+
+static DWORD get_print_link_fallback( LPCWSTR value_name, LPDWORD type, LPBYTE data, DWORD size, LPDWORD needed )
+{
+    if (!value_name) return ERROR_INVALID_PARAMETER;
+
+    if (!wcscmp( value_name, L"Odometer Pages" ) ||
+        !wcscmp( value_name, L"Odometer Last Cleaning Page Count" ) ||
+        !wcscmp( value_name, L"Odometer Has Been Cleaned" ))
+        return copy_printer_data_dword( 0, type, data, size, needed );
+
+    if (!wcscmp( value_name, L"Odometer Distance" ) ||
+        !wcscmp( value_name, L"Odometer Last Cleaning Distance" ))
+        return copy_printer_data_qword( 0, type, data, size, needed );
+
+    return ERROR_FILE_NOT_FOUND;
+}
+
+static DWORD ensure_printer_subkeyW( HANDLE printer, LPCWSTR key_name )
+{
+    HKEY printer_key, subkey;
+    DWORD ret;
+
+    if ((ret = WINSPOOL_GetOpenedPrinterRegKey( printer, &printer_key )) != ERROR_SUCCESS)
+        return ret;
+
+    ret = RegCreateKeyW( printer_key, key_name, &subkey );
+    if (ret == ERROR_SUCCESS) RegCloseKey( subkey );
+    RegCloseKey( printer_key );
+    return ret;
+}
+
 /******************************************************************************
  *		GetPrinterDataExA   (WINSPOOL.@)
  */
@@ -5618,15 +6029,37 @@ DWORD WINAPI GetPrinterDataExA(HANDLE hPrinter, LPCSTR pKeyName,
             return ret;
         }
         if((ret = RegOpenKeyA(hkeyPrinter, pKeyName, &hkeySubkey)) != ERROR_SUCCESS) {
+            if (pKeyName && !strcmp( pKeyName, "PPD Overrides" ))
+            {
+                set_ppd_overrides( hPrinter );
+                if ((ret = RegOpenKeyA( hkeyPrinter, pKeyName, &hkeySubkey )) != ERROR_SUCCESS)
+                    ret = ensure_printer_subkeyW( hPrinter, L"PPD Overrides" );
+                if (ret == ERROR_SUCCESS) ret = RegOpenKeyA( hkeyPrinter, pKeyName, &hkeySubkey );
+            }
+            if (pKeyName && !strcmp( pKeyName, "PrinterDriverData" ))
+            {
+                ret = get_printer_driver_data_fallback_a( hkeyPrinter, printer->name, pValueName, pType, pData, nSize, pcbNeeded );
+                RegCloseKey(hkeyPrinter);
+                RegCloseKey( printers_key );
+                TRACE("using PrinterDriverData fallback for %s -> %ld\n", debugstr_a(pValueName), ret);
+                return ret;
+            }
+        }
+        if (ret != ERROR_SUCCESS)
+        {
             WARN("Can't open subkey %s: %ld\n", debugstr_a(pKeyName), ret);
-            RegCloseKey(hkeyPrinter);
-            RegCloseKey( printers_key );
-            return ret;
+	    RegCloseKey(hkeyPrinter);
+	    RegCloseKey( printers_key );
+	    return ret;
         }
     }
     *pcbNeeded = nSize;
     ret = RegQueryValueExA( printer->name ? hkeySubkey : printers_key, pValueName,
                             0, pType, pData, pcbNeeded );
+    if (ret == ERROR_FILE_NOT_FOUND && printer->name && pKeyName && !strcmp( pKeyName, "PrinterDriverData" ))
+        ret = get_printer_driver_data_fallback_a( hkeyPrinter, printer->name, pValueName, pType, pData, nSize, pcbNeeded );
+    if (ret == ERROR_FILE_NOT_FOUND && printer->name && pKeyName && !strcmp( pKeyName, "PrintLink" ))
+        ret = get_print_link_fallback_a( pValueName, pType, pData, nSize, pcbNeeded );
 
     if (!ret && !pData) ret = ERROR_MORE_DATA;
 
@@ -5670,6 +6103,29 @@ DWORD WINAPI GetPrinterDataExW(HANDLE hPrinter, LPCWSTR pKeyName,
         }
         if ((ret = RegOpenKeyW(hkeyPrinter, pKeyName, &hkeySubkey)) != ERROR_SUCCESS)
         {
+            if (pKeyName && !wcscmp( pKeyName, L"PPD Overrides" ))
+            {
+                set_ppd_overrides( hPrinter );
+                if ((ret = RegOpenKeyW( hkeyPrinter, pKeyName, &hkeySubkey )) != ERROR_SUCCESS)
+                    ret = ensure_printer_subkeyW( hPrinter, L"PPD Overrides" );
+                if (ret == ERROR_SUCCESS) ret = RegOpenKeyW( hkeyPrinter, pKeyName, &hkeySubkey );
+            }
+            if (pKeyName && !wcscmp( pKeyName, L"PrinterDriverData" ))
+            {
+                ret = get_printer_driver_data_fallback( hkeyPrinter, printer->name, pValueName, pType, pData, nSize, pcbNeeded );
+                RegCloseKey(hkeyPrinter);
+                RegCloseKey( printers_key );
+                TRACE("using PrinterDriverData fallback for %s -> %ld\n", debugstr_w(pValueName), ret);
+                return ret;
+            }
+            if (pKeyName && !wcscmp( pKeyName, L"PrintLink" ))
+            {
+                ret = get_print_link_fallback( pValueName, pType, pData, nSize, pcbNeeded );
+                RegCloseKey(hkeyPrinter);
+                RegCloseKey( printers_key );
+                TRACE("using PrintLink fallback for %s -> %ld\n", debugstr_w(pValueName), ret);
+                return ret;
+            }
             WARN("Can't open subkey %s: %ld\n", debugstr_w(pKeyName), ret);
             RegCloseKey(hkeyPrinter);
             RegCloseKey( printers_key );
@@ -5679,6 +6135,10 @@ DWORD WINAPI GetPrinterDataExW(HANDLE hPrinter, LPCWSTR pKeyName,
     *pcbNeeded = nSize;
     ret = RegQueryValueExW( printer->name ? hkeySubkey : printers_key, pValueName,
                             0, pType, pData, pcbNeeded );
+    if (ret == ERROR_FILE_NOT_FOUND && printer->name && pKeyName && !wcscmp( pKeyName, L"PrinterDriverData" ))
+        ret = get_printer_driver_data_fallback( hkeyPrinter, printer->name, pValueName, pType, pData, nSize, pcbNeeded );
+    if (ret == ERROR_FILE_NOT_FOUND && printer->name && pKeyName && !wcscmp( pKeyName, L"PrintLink" ))
+        ret = get_print_link_fallback( pValueName, pType, pData, nSize, pcbNeeded );
 
     if (!ret && !pData) ret = ERROR_MORE_DATA;
 
@@ -5739,6 +6199,15 @@ DWORD WINAPI EnumPrinterDataExW(HANDLE hPrinter, LPCWSTR pKeyName,
     }
 
     ret = RegOpenKeyExW (hkPrinter, pKeyName, 0, KEY_READ, &hkSubKey);
+    if (ret != ERROR_SUCCESS)
+    {
+        if (!wcscmp( pKeyName, L"PrinterDriverData\\FontSubTable" ))
+        {
+            ret = ensure_printer_subkeyW( hPrinter, pKeyName );
+            if (ret == ERROR_SUCCESS)
+                ret = RegOpenKeyExW( hkPrinter, pKeyName, 0, KEY_READ, &hkSubKey );
+        }
+    }
     if (ret != ERROR_SUCCESS)
     {
 	r = RegCloseKey (hkPrinter);

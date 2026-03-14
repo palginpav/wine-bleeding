@@ -1162,6 +1162,71 @@ static void test_EnumPorts(void)
 
 /* ########################### */
 
+static void test_EnumPorts_monitor_name(void)
+{
+    PORT_INFO_1A pi;
+    PORT_INFO_2A *ports;
+    BYTE *buffer;
+    DWORD cbBuf, needed, returned, i;
+    BOOL res, found = FALSE;
+
+    if (!pAddPortExA)
+    {
+        win_skip("AddPortEx not supported\n");
+        return;
+    }
+
+    DeletePortA(NULL, 0, tempfileA);
+
+    pi.pName = tempfileA;
+    SetLastError(0xdeadbeef);
+    res = pAddPortExA(NULL, 1, (BYTE *)&pi, LocalPortA);
+    if (is_spooler_deactivated(res, GetLastError()) || is_access_denied(res, GetLastError())) return;
+    ok(res, "AddPortExA failed le=%ld\n", GetLastError());
+    if (!res) return;
+
+    cbBuf = 0;
+    returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    res = EnumPortsA(NULL, 2, NULL, 0, &cbBuf, &returned);
+    ok(!res && GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+       "EnumPortsA level 2 returned %d le=%ld\n", res, GetLastError());
+    if (res || !cbBuf) goto cleanup;
+
+    buffer = HeapAlloc(GetProcessHeap(), 0, cbBuf);
+    ok(!!buffer, "HeapAlloc failed\n");
+    if (!buffer) goto cleanup;
+
+    needed = 0xdeadbeef;
+    returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    res = EnumPortsA(NULL, 2, buffer, cbBuf, &needed, &returned);
+    ok(res, "EnumPortsA level 2 failed le=%ld\n", GetLastError());
+    if (!res)
+    {
+        HeapFree(GetProcessHeap(), 0, buffer);
+        goto cleanup;
+    }
+
+    ports = (PORT_INFO_2A *)buffer;
+    for (i = 0; i < returned; ++i)
+    {
+        if (lstrcmpA(ports[i].pPortName, tempfileA)) continue;
+        found = TRUE;
+        ok(!lstrcmpA(ports[i].pMonitorName, LocalPortA),
+           "got monitor %s for port %s\n", debugstr_a(ports[i].pMonitorName), debugstr_a(tempfileA));
+        break;
+    }
+    ok(found, "temporary port %s was not enumerated\n", debugstr_a(tempfileA));
+
+    HeapFree(GetProcessHeap(), 0, buffer);
+
+cleanup:
+    DeletePortA(NULL, 0, tempfileA);
+}
+
+/* ########################### */
+
 static void test_EnumPrinterDrivers(void)
 {
     static char env_all[] = "all";
@@ -2374,9 +2439,24 @@ static void test_GetPrinter(void)
 
             ok(pi_2->pPrinterName!= NULL, "not expected NULL ptr\n");
             ok(pi_2->pDriverName!= NULL, "not expected NULL ptr\n");
+            ok(pi_2->Attributes & PRINTER_ATTRIBUTE_DEFAULT,
+               "expected PRINTER_ATTRIBUTE_DEFAULT in attributes %08lx\n", pi_2->Attributes);
 
             trace("pPrinterName %s\n", pi_2->pPrinterName);
             trace("pDriverName %s\n", pi_2->pDriverName);
+        }
+        else if (level == 3)
+        {
+            PRINTER_INFO_3 *pi_3 = (PRINTER_INFO_3 *)buf;
+
+            ok(pi_3->pSecurityDescriptor != NULL, "expected a security descriptor\n");
+            if (pi_3->pSecurityDescriptor)
+            {
+                ok(IsValidSecurityDescriptor(pi_3->pSecurityDescriptor),
+                   "security descriptor is invalid\n");
+                ok(GetSecurityDescriptorLength(pi_3->pSecurityDescriptor) > 0,
+                   "expected non-empty security descriptor\n");
+            }
         }
 
         HeapFree(GetProcessHeap(), 0, buf);
@@ -2385,6 +2465,191 @@ static void test_GetPrinter(void)
     SetLastError(0xdeadbeef);
     ret = ClosePrinter(hprn);
     ok(ret, "ClosePrinter error %ld\n", GetLastError());
+}
+
+/* ########################### */
+
+static void test_EnumJobs(void)
+{
+    HANDLE hprn = NULL;
+    ADDJOB_INFO_1A *add_job = NULL;
+    JOB_INFO_1A *job_info_1 = NULL;
+    JOB_INFO_2A *job_info_2 = NULL;
+    JOB_INFO_2W *job_info_2w = NULL;
+    PRINTER_INFO_2A *pi2 = NULL;
+    DWORD enum_count = 1;
+    DWORD needed, returned;
+    BOOL ret;
+
+    if (!default_printer)
+    {
+        skip("There is no default printer installed\n");
+        return;
+    }
+
+    ret = OpenPrinterA(default_printer, &hprn, NULL);
+    if (!ret)
+    {
+        skip("Unable to open the default printer (%s)\n", default_printer);
+        return;
+    }
+
+    needed = returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    ret = EnumJobsA(hprn, 0, 0, 1, NULL, 0, &needed, &returned);
+    ok(ret, "EnumJobsA failed le=%lu\n", GetLastError());
+    ok(!needed, "got needed %lu\n", needed);
+    ok(!returned, "got returned %lu\n", returned);
+
+    needed = returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    ret = EnumJobsW(hprn, 0, 0, 2, NULL, 0, &needed, &returned);
+    ok(ret, "EnumJobsW failed le=%lu\n", GetLastError());
+    ok(!needed, "got needed %lu\n", needed);
+    ok(!returned, "got returned %lu\n", returned);
+
+    needed = 0;
+    SetLastError(0xdeadbeef);
+    ret = AddJobA(hprn, 1, NULL, 0, &needed);
+    ok(!ret, "got %d\n", ret);
+    if (GetLastError() == ERROR_NOT_SUPPORTED)
+        win_skip("AddJob is not supported on this platform\n");
+    else
+    {
+        ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER, "expected ERROR_INSUFFICIENT_BUFFER, got %lu\n", GetLastError());
+        ok(needed > sizeof(*add_job), "AddJob needs %lu bytes\n", needed);
+
+        add_job = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, needed);
+        ret = add_job && AddJobA(hprn, 1, (BYTE *)add_job, needed, &needed);
+        ok(ret, "AddJobA failed le=%lu\n", GetLastError());
+        if (ret)
+        {
+            ret = GetPrinterA(hprn, 2, NULL, 0, &needed);
+            ok(!ret, "got %d\n", ret);
+            pi2 = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, needed);
+            ret = pi2 && GetPrinterA(hprn, 2, (BYTE *)pi2, needed, &needed);
+            ok(ret, "GetPrinterA failed le=%lu\n", GetLastError());
+            if (ret)
+            {
+                ok(pi2->cJobs >= 1, "expected at least one queued job, got %lu\n", pi2->cJobs);
+                enum_count = pi2->cJobs;
+            }
+
+            needed = returned = 0xdeadbeef;
+            SetLastError(0xdeadbeef);
+            ret = EnumJobsA(hprn, 0, enum_count, 1, NULL, 0, &needed, &returned);
+            ok(!ret, "got %d\n", ret);
+            ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER, "got le=%lu\n", GetLastError());
+            ok(needed >= sizeof(*job_info_1), "got needed %lu\n", needed);
+
+            job_info_1 = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, needed);
+            ret = job_info_1 && EnumJobsA(hprn, 0, enum_count, 1, (BYTE *)job_info_1, needed, &needed, &returned);
+            ok(ret, "EnumJobsA level 1 failed le=%lu\n", GetLastError());
+            if (ret)
+            {
+                DWORD i;
+                BOOL found = FALSE;
+
+                ok(returned >= 1, "expected at least one job, got %lu\n", returned);
+                for (i = 0; i < returned; ++i)
+                {
+                    if (job_info_1[i].JobId == add_job->JobId)
+                    {
+                        found = TRUE;
+                        ok(job_info_1[i].pPrinterName != NULL, "missing printer name\n");
+                        ok(job_info_1[i].pDatatype != NULL, "missing datatype\n");
+                        break;
+                    }
+                }
+                ok(found, "job id %lu was not enumerated\n", add_job->JobId);
+            }
+
+            needed = returned = 0xdeadbeef;
+            SetLastError(0xdeadbeef);
+            ret = EnumJobsA(hprn, 0, enum_count, 2, NULL, 0, &needed, &returned);
+            ok(!ret, "got %d\n", ret);
+            ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER, "got le=%lu\n", GetLastError());
+            ok(needed >= sizeof(*job_info_2), "got needed %lu\n", needed);
+
+            job_info_2 = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, needed);
+            ret = job_info_2 && EnumJobsA(hprn, 0, enum_count, 2, (BYTE *)job_info_2, needed, &needed, &returned);
+            ok(ret, "EnumJobsA level 2 failed le=%lu\n", GetLastError());
+            if (ret)
+            {
+                DWORD i;
+                BOOL found = FALSE;
+
+                ok(returned >= 1, "expected at least one job, got %lu\n", returned);
+                for (i = 0; i < returned; ++i)
+                {
+                    if (job_info_2[i].JobId == add_job->JobId)
+                    {
+                        found = TRUE;
+                        ok(job_info_2[i].pPrinterName != NULL, "missing printer name\n");
+                        ok(job_info_2[i].pDatatype != NULL, "missing datatype\n");
+                        ok(job_info_2[i].pPrintProcessor != NULL, "missing print processor\n");
+                        ok(job_info_2[i].pDriverName != NULL, "missing driver name\n");
+                        break;
+                    }
+                }
+                ok(found, "job id %lu was not enumerated\n", add_job->JobId);
+            }
+
+            needed = returned = 0xdeadbeef;
+            SetLastError(0xdeadbeef);
+            ret = EnumJobsW(hprn, 0, ~0u, 2, NULL, 0, &needed, &returned);
+            ok(!ret, "got %d\n", ret);
+            ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER, "got le=%lu\n", GetLastError());
+            ok(needed >= sizeof(*job_info_2w), "got needed %lu\n", needed);
+
+            job_info_2w = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, needed);
+            ret = job_info_2w && EnumJobsW(hprn, 0, ~0u, 2, (BYTE *)job_info_2w, needed, &needed, &returned);
+            ok(ret, "EnumJobsW level 2 all-jobs failed le=%lu\n", GetLastError());
+            if (ret)
+            {
+                DWORD i;
+                BOOL found = FALSE;
+
+                ok(returned >= 1, "expected at least one job, got %lu\n", returned);
+                for (i = 0; i < returned; ++i)
+                {
+                    if (job_info_2w[i].JobId == add_job->JobId)
+                    {
+                        found = TRUE;
+                        ok(job_info_2w[i].pPrinterName != NULL, "missing printer name\n");
+                        ok(job_info_2w[i].pDatatype != NULL, "missing datatype\n");
+                        ok(job_info_2w[i].pPrintProcessor != NULL, "missing print processor\n");
+                        ok(job_info_2w[i].pDriverName != NULL, "missing driver name\n");
+                        break;
+                    }
+                }
+                ok(found, "job id %lu was not enumerated by EnumJobsW(~0u)\n", add_job->JobId);
+            }
+
+            ScheduleJob(hprn, add_job->JobId);
+        }
+    }
+
+    needed = returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    ret = EnumJobsA(hprn, 0, 0, 3, NULL, 0, &needed, &returned);
+    ok(!ret, "got %d\n", ret);
+    ok(GetLastError() == ERROR_INVALID_LEVEL, "got le=%lu\n", GetLastError());
+
+    ret = ClosePrinter(hprn);
+    ok(ret, "ClosePrinter failed le=%lu\n", GetLastError());
+
+    HeapFree(GetProcessHeap(), 0, job_info_2w);
+    HeapFree(GetProcessHeap(), 0, job_info_2);
+    HeapFree(GetProcessHeap(), 0, job_info_1);
+    HeapFree(GetProcessHeap(), 0, pi2);
+    HeapFree(GetProcessHeap(), 0, add_job);
+
+    needed = returned = 0xdeadbeef;
+    SetLastError(0xdeadbeef);
+    ret = EnumJobsA(hprn, 0, 0, 1, NULL, 0, &needed, &returned);
+    ok(!ret, "got %d\n", ret);
+    ok(GetLastError() == ERROR_INVALID_HANDLE, "got le=%lu\n", GetLastError());
 }
 
 /* ########################### */
@@ -2731,6 +2996,8 @@ static void test_EnumPrinters(void)
 {
     DWORD neededA, neededW, num;
     DWORD ret;
+    PRINTER_INFO_2A *printers;
+    DWORD i;
 
     SetLastError(0xdeadbeef);
     neededA = -1;
@@ -2777,6 +3044,32 @@ static void test_EnumPrinters(void)
     /* Outlook2003 relies on the buffer size returned by EnumPrintersA being big enough
        to hold the buffer returned by EnumPrintersW */
     ok(neededA == neededW, "neededA %ld neededW %ld\n", neededA, neededW);
+
+    if (!default_printer || !neededA)
+        return;
+
+    printers = HeapAlloc( GetProcessHeap(), 0, neededA );
+    ret = EnumPrintersA( PRINTER_ENUM_LOCAL, NULL, 2, (BYTE *)printers, neededA, &neededA, &num );
+    ok( ret, "EnumPrintersA failed %ld\n", GetLastError() );
+    if (!ret)
+    {
+        HeapFree( GetProcessHeap(), 0, printers );
+        return;
+    }
+
+    for (i = 0; i < num; i++)
+    {
+        if (lstrcmpA( printers[i].pPrinterName, default_printer ))
+            continue;
+
+        ok( printers[i].Attributes & PRINTER_ATTRIBUTE_DEFAULT,
+            "default printer %s missing PRINTER_ATTRIBUTE_DEFAULT, got %08lx\n",
+            printers[i].pPrinterName, printers[i].Attributes );
+        break;
+    }
+
+    ok( i < num, "default printer %s not found in EnumPrintersA output\n", default_printer );
+    HeapFree( GetProcessHeap(), 0, printers );
 }
 
 static void test_DeviceCapabilities(void)
@@ -2793,8 +3086,14 @@ static void test_DeviceCapabilities(void)
     struct
     {
         char name[64];
-    } *paper_name;
-    INT n_papers, n_paper_size, n_paper_names, n_copies, ret;
+    } *paper_name, *mediaready_name;
+    struct
+    {
+        char name[32];
+    } *personality_name;
+    INT n_papers, n_paper_size, n_paper_names, n_copies, n_mediaready, n_personalities, ret;
+    INT truetype_caps;
+    DWORD nup, mediatype;
     DWORD fields;
 
     hComdlg32 = LoadLibraryA("comdlg32.dll");
@@ -2870,6 +3169,54 @@ static void test_DeviceCapabilities(void)
     n_copies = DeviceCapabilitiesA(device, port, DC_COPIES, NULL, dm);
     ok(n_copies > 0, "DeviceCapabilitiesA DC_COPIES failed\n");
     trace("n_copies = %d\n", n_copies);
+
+    if (!lstrcmpiA(driver, "wineps.drv"))
+    {
+        truetype_caps = DeviceCapabilitiesA(device, port, DC_TRUETYPE, NULL, dm);
+        ok(truetype_caps > 0 && truetype_caps != -1, "DeviceCapabilitiesA DC_TRUETYPE failed: %d\n", truetype_caps);
+        ok(truetype_caps & DCTT_SUBDEV, "expected DCTT_SUBDEV in %#x\n", truetype_caps);
+
+        n_personalities = DeviceCapabilitiesA(device, port, DC_PERSONALITY, NULL, dm);
+        ok(n_personalities >= 1, "DeviceCapabilitiesA DC_PERSONALITY failed: %d\n", n_personalities);
+        personality_name = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*personality_name) * n_personalities);
+        ret = DeviceCapabilitiesA(device, port, DC_PERSONALITY, (LPSTR)personality_name, dm);
+        ok(ret == n_personalities, "expected %d, got %d\n", n_personalities, ret);
+        ok(!lstrcmpA(personality_name[0].name, "PostScript"), "unexpected personality %s\n", personality_name[0].name);
+        HeapFree(GetProcessHeap(), 0, personality_name);
+
+        n_mediaready = DeviceCapabilitiesA(device, port, DC_MEDIAREADY, NULL, dm);
+        ok(n_mediaready >= 1, "DeviceCapabilitiesA DC_MEDIAREADY failed: %d\n", n_mediaready);
+        mediaready_name = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*mediaready_name) * n_mediaready);
+        ret = DeviceCapabilitiesA(device, port, DC_MEDIAREADY, (LPSTR)mediaready_name, dm);
+        ok(ret == n_mediaready, "expected %d, got %d\n", n_mediaready, ret);
+        ok(mediaready_name[0].name[0], "expected a non-empty media ready name\n");
+        HeapFree(GetProcessHeap(), 0, mediaready_name);
+
+        ret = DeviceCapabilitiesA(device, port, DC_STAPLE, NULL, dm);
+        ok(ret == 0, "expected no stapling support, got %d\n", ret);
+
+        ret = DeviceCapabilitiesA(device, port, DC_NUP, (LPSTR)&nup, dm);
+        ok(ret == 1, "expected one N-up entry, got %d\n", ret);
+        ok(nup == 1, "expected 1-up support, got %lu\n", nup);
+
+        mediaready_name = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*mediaready_name));
+        ret = DeviceCapabilitiesA(device, port, DC_MEDIATYPENAMES, (LPSTR)mediaready_name, dm);
+        ok(ret == 1, "expected one media type name, got %d\n", ret);
+        ok(mediaready_name[0].name[0], "expected a non-empty media type name\n");
+        HeapFree(GetProcessHeap(), 0, mediaready_name);
+
+        mediatype = 0;
+        ret = DeviceCapabilitiesA(device, port, DC_MEDIATYPES, (LPSTR)&mediatype, dm);
+        ok(ret == 1, "expected one media type, got %d\n", ret);
+        ok(mediatype == DMMEDIA_STANDARD, "expected DMMEDIA_STANDARD, got %lu\n", mediatype);
+
+        ret = DeviceCapabilitiesA(device, port, DC_PRINTRATEUNIT, NULL, dm);
+        ok(ret == PRINTRATEUNIT_PPM, "expected PRINTRATEUNIT_PPM, got %d\n", ret);
+        ret = DeviceCapabilitiesA(device, port, DC_PRINTRATE, NULL, dm);
+        ok(ret == 1, "expected print rate 1, got %d\n", ret);
+        ret = DeviceCapabilitiesA(device, port, DC_PRINTRATEPPM, NULL, dm);
+        ok(ret == 1, "expected print rate ppm 1, got %d\n", ret);
+    }
 
     /* these capabilities are not available on all printer drivers */
     if (0)
@@ -3124,6 +3471,7 @@ START_TEST(info)
     if (default_printer) test_EnumForms(default_printer);
     test_EnumMonitors();
     test_EnumPorts();
+    test_EnumPorts_monitor_name();
     test_EnumPrinterDrivers();
     test_EnumPrinters();
     test_EnumPrintProcessors();
@@ -3134,6 +3482,7 @@ START_TEST(info)
     test_OpenPrinter();
     test_OpenPrinter_defaults();
     test_GetPrinter();
+    test_EnumJobs();
     test_GetPrinterData();
     test_GetPrinterDataEx();
     test_GetPrinterDriver();

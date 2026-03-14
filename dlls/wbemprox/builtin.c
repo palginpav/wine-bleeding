@@ -3686,7 +3686,7 @@ static enum fill_status fill_printer( struct table *table, const struct expr *co
     WCHAR id[20];
 
     EnumPrintersW( PRINTER_ENUM_LOCAL, NULL, 2, NULL, 0, &size, &count );
-    if (!count) return FILL_STATUS_UNFILTERED;
+    if (!size) return FILL_STATUS_UNFILTERED;
 
     if (!(info = malloc( size ))) return FILL_STATUS_FAILED;
     if (!EnumPrintersW( PRINTER_ENUM_LOCAL, NULL, 2, (BYTE *)info, size, &size, &count ))
@@ -3712,9 +3712,9 @@ static enum fill_status fill_printer( struct table *table, const struct expr *co
         rec->location             = wcsdup( info[i].pLocation );
         rec->name                 = wcsdup( info[i].pPrinterName );
         rec->portname             = wcsdup( info[i].pPortName );
-        if (!match_row( table, i, cond, &status ))
+        if (!match_row( table, num_rows, cond, &status ))
         {
-            free_row_values( table, i );
+            free_row_values( table, num_rows );
             continue;
         }
         offset += sizeof(*rec);
