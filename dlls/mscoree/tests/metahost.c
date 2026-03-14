@@ -45,6 +45,9 @@ static const WCHAR v4_0[] = {'v','4','.','0','.','3','0','3','1','9',0};
 
 static DWORD expect_runtime_tid;
 
+DEFINE_GUID(CLSID_CLRStrongName, 0xb79b0acd,0xf5cd,0x409b,0xb5,0xa5,0xa1,0x62,0x44,0x61,0x0b,0x92);
+DEFINE_GUID(IID_IClrStrongName, 0x9fd93ccf,0x3280,0x4391,0xb3,0xa9,0x96,0xe1,0xcd,0xe7,0x7c,0x8d);
+
 static BOOL init_pointers(void)
 {
     HRESULT hr = E_FAIL;
@@ -219,6 +222,27 @@ static void test_notification_cb(void)
     ICLRRuntimeInfo_Release(info);
 }
 
+static void test_strongname_interface(void)
+{
+    ICLRRuntimeInfo *info;
+    IUnknown *unk = NULL;
+    HRESULT hr;
+
+    hr = ICLRMetaHost_GetRuntime(metahost, v4_0, &IID_ICLRRuntimeInfo, (void **)&info);
+    ok(hr == S_OK, "GetRuntime returned %lx\n", hr);
+    if (FAILED(hr)) return;
+
+    hr = ICLRRuntimeInfo_GetInterface(info, &CLSID_CLRStrongName, &IID_IUnknown, (void **)&unk);
+    todo_wine_if(!has_mono) ok(hr == S_OK, "GetInterface returned %lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        ok(!!unk, "unk == NULL\n");
+        IUnknown_Release(unk);
+    }
+
+    ICLRRuntimeInfo_Release(info);
+}
+
 START_TEST(metahost)
 {
     if (!init_pointers())
@@ -227,6 +251,7 @@ START_TEST(metahost)
     test_notification();
     test_enumruntimes();
     test_notification_cb();
+    test_strongname_interface();
 
     cleanup();
 }

@@ -754,6 +754,16 @@ static void edit_init(Client *client)
     client->role = ROLE_SYSTEM_TEXT;
 }
 
+static void listbox_init(Client *client)
+{
+    client->role = ROLE_SYSTEM_LIST;
+}
+
+static void combobox_init(Client *client)
+{
+    client->role = ROLE_SYSTEM_COMBOBOX;
+}
+
 static HRESULT edit_get_state(Client *client, VARIANT id, VARIANT *state)
 {
     HRESULT hres;
@@ -779,7 +789,7 @@ static HRESULT edit_get_state(Client *client, VARIANT id, VARIANT *state)
  * found, the edit has no name property. In the case of the keyboard shortcut
  * property, the first preceding visible static text control is used.
  */
-static HWND edit_find_label(HWND hwnd, BOOL visible)
+static HWND control_find_label(HWND hwnd, BOOL visible)
 {
     HWND cur;
 
@@ -807,7 +817,7 @@ static HRESULT edit_get_name(Client *client, VARIANT id, BSTR *name)
     if(convert_child_id(&id) != CHILDID_SELF || !IsWindow(client->hwnd))
         return E_INVALIDARG;
 
-    label = edit_find_label(client->hwnd, FALSE);
+    label = control_find_label(client->hwnd, FALSE);
     if(!label)
         return S_FALSE;
 
@@ -821,7 +831,7 @@ static HRESULT edit_get_kbd_shortcut(Client *client, VARIANT id, BSTR *shortcut)
     if(convert_child_id(&id) != CHILDID_SELF)
         return E_INVALIDARG;
 
-    label = edit_find_label(client->hwnd, TRUE);
+    label = control_find_label(client->hwnd, TRUE);
     if(!label)
         return S_FALSE;
 
@@ -859,6 +869,143 @@ static HRESULT edit_put_value(Client *client, VARIANT id, BSTR value)
     return S_OK;
 }
 
+static HRESULT labeled_control_get_name(Client *client, VARIANT id, BSTR *name)
+{
+    HWND label;
+
+    if(convert_child_id(&id) != CHILDID_SELF || !IsWindow(client->hwnd))
+        return E_INVALIDARG;
+
+    label = control_find_label(client->hwnd, FALSE);
+    if(!label)
+        return S_FALSE;
+
+    return win_get_name(label, name);
+}
+
+static HRESULT labeled_control_get_kbd_shortcut(Client *client, VARIANT id, BSTR *shortcut)
+{
+    HWND label;
+
+    if(convert_child_id(&id) != CHILDID_SELF)
+        return E_INVALIDARG;
+
+    label = control_find_label(client->hwnd, TRUE);
+    if(!label)
+        return S_FALSE;
+
+    return win_get_kbd_shortcut(label, shortcut);
+}
+
+static HRESULT window_get_text_value(HWND hwnd, BSTR *value_out)
+{
+    WCHAR *buf;
+    UINT len;
+
+    len = SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0);
+    buf = calloc(len + 1, sizeof(*buf));
+    if(!buf)
+        return E_OUTOFMEMORY;
+
+    SendMessageW(hwnd, WM_GETTEXT, len + 1, (LPARAM)buf);
+    *value_out = SysAllocString(buf);
+    free(buf);
+    return *value_out ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT listbox_get_name(Client *client, VARIANT id, BSTR *name)
+{
+    return labeled_control_get_name(client, id, name);
+}
+
+static HRESULT listbox_get_kbd_shortcut(Client *client, VARIANT id, BSTR *shortcut)
+{
+    return labeled_control_get_kbd_shortcut(client, id, shortcut);
+}
+
+static HRESULT listbox_get_value(Client *client, VARIANT id, BSTR *value_out)
+{
+    WCHAR *buf;
+    LRESULT len, idx, ret;
+
+    if(convert_child_id(&id) != CHILDID_SELF || !IsWindow(client->hwnd))
+        return E_INVALIDARG;
+
+    idx = SendMessageW(client->hwnd, LB_GETCURSEL, 0, 0);
+    if(idx == LB_ERR)
+        return S_FALSE;
+
+    len = SendMessageW(client->hwnd, LB_GETTEXTLEN, idx, 0);
+    if(len == LB_ERR)
+        return S_FALSE;
+
+    buf = calloc(len + 1, sizeof(*buf));
+    if(!buf)
+        return E_OUTOFMEMORY;
+
+    ret = SendMessageW(client->hwnd, LB_GETTEXT, idx, (LPARAM)buf);
+    if(ret == LB_ERR)
+    {
+        free(buf);
+        return S_FALSE;
+    }
+
+    *value_out = SysAllocStringLen(buf, ret);
+    free(buf);
+    return *value_out ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT combobox_get_state(Client *client, VARIANT id, VARIANT *state)
+{
+    HRESULT hres;
+    LONG style;
+
+    hres = client_get_state(client, id, state);
+    if(FAILED(hres))
+        return hres;
+
+    assert(V_VT(state) == VT_I4);
+
+    style = GetWindowLongW(client->hwnd, GWL_STYLE);
+    if((style & 0x0003) != CBS_SIMPLE)
+    {
+        V_I4(state) |= STATE_SYSTEM_HASPOPUP;
+        if(SendMessageW(client->hwnd, CB_GETDROPPEDSTATE, 0, 0))
+            V_I4(state) |= STATE_SYSTEM_EXPANDED;
+        else
+            V_I4(state) |= STATE_SYSTEM_COLLAPSED;
+    }
+
+    return S_OK;
+}
+
+static HRESULT combobox_get_name(Client *client, VARIANT id, BSTR *name)
+{
+    return labeled_control_get_name(client, id, name);
+}
+
+static HRESULT combobox_get_kbd_shortcut(Client *client, VARIANT id, BSTR *shortcut)
+{
+    return labeled_control_get_kbd_shortcut(client, id, shortcut);
+}
+
+static HRESULT combobox_get_value(Client *client, VARIANT id, BSTR *value_out)
+{
+    if(convert_child_id(&id) != CHILDID_SELF || !IsWindow(client->hwnd))
+        return E_INVALIDARG;
+
+    return window_get_text_value(client->hwnd, value_out);
+}
+
+static HRESULT combobox_put_value(Client *client, VARIANT id, BSTR value)
+{
+    if(convert_child_id(&id) != CHILDID_SELF || !IsWindow(client->hwnd))
+        return E_INVALIDARG;
+
+    SendMessageW(client->hwnd, WM_SETTEXT, 0, (LPARAM)value);
+    return S_OK;
+}
+
 static const win_class_vtbl edit_vtbl = {
     edit_init,
     edit_get_state,
@@ -868,13 +1015,31 @@ static const win_class_vtbl edit_vtbl = {
     edit_put_value,
 };
 
+static const win_class_vtbl listbox_vtbl = {
+    listbox_init,
+    NULL,
+    listbox_get_name,
+    listbox_get_kbd_shortcut,
+    listbox_get_value,
+    NULL,
+};
+
+static const win_class_vtbl combobox_vtbl = {
+    combobox_init,
+    combobox_get_state,
+    combobox_get_name,
+    combobox_get_kbd_shortcut,
+    combobox_get_value,
+    combobox_put_value,
+};
+
 static const struct win_class_data classes[] = {
-    {WC_LISTBOXW,           0x10000, TRUE},
+    {WC_LISTBOXW,           0x10000, FALSE, &listbox_vtbl},
     {L"#32768",             0x10001, TRUE}, /* menu */
     {WC_BUTTONW,            0x10002, TRUE},
     {WC_STATICW,            0x10003, TRUE},
     {WC_EDITW,              0x10004, FALSE, &edit_vtbl},
-    {WC_COMBOBOXW,          0x10005, TRUE},
+    {WC_COMBOBOXW,          0x10005, FALSE, &combobox_vtbl},
     {L"#32770",             0x10006, TRUE}, /* dialog */
     {L"#32771",             0x10007, TRUE}, /* winswitcher */
     {L"MDIClient",          0x10008, TRUE},

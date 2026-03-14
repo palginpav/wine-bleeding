@@ -1872,6 +1872,40 @@ static const acc_expected_vals edit_acc_vals[] = {
       .focus_cid      = 0, },
 };
 
+static const acc_expected_vals listbox_acc_vals = {
+    .name           = L"label0:",
+    .value          = L"item1",
+    .value_hr       = S_OK,
+    .description    = NULL,
+    .help           = NULL,
+    .kbd_shortcut   = L"Alt+l",
+    .default_action = NULL,
+    .role           = ROLE_SYSTEM_LIST,
+    .state          = STATE_SYSTEM_FOCUSABLE,
+    .child_count    = 0,
+    .valid_child    = FALSE,
+    .valid_parent   = TRUE,
+    .focus_vt       = VT_EMPTY,
+    .focus_cid      = 0,
+};
+
+static const acc_expected_vals combobox_acc_vals = {
+    .name           = L"label1:",
+    .value          = L"item1",
+    .value_hr       = S_OK,
+    .description    = NULL,
+    .help           = NULL,
+    .kbd_shortcut   = L"Alt+e",
+    .default_action = NULL,
+    .role           = ROLE_SYSTEM_COMBOBOX,
+    .state          = STATE_SYSTEM_FOCUSABLE | STATE_SYSTEM_COLLAPSED | STATE_SYSTEM_HASPOPUP,
+    .child_count    = 0,
+    .valid_child    = FALSE,
+    .valid_parent   = TRUE,
+    .focus_vt       = VT_EMPTY,
+    .focus_cid      = 0,
+};
+
 static void test_default_edit_accessible_object(void)
 {
     HWND hwnd, label0, label1, btn0, btn1;
@@ -1963,6 +1997,51 @@ static void test_default_edit_accessible_object(void)
     hr = CreateStdAccessibleObject(edit[3], OBJID_CLIENT, &IID_IAccessible, (void**)&acc);
     ok(hr == S_OK, "got %lx\n", hr);
     check_acc_vals(acc, &edit_acc_vals[3]);
+    IAccessible_Release(acc);
+
+    DestroyWindow(hwnd);
+}
+
+static void test_default_listbox_combobox_accessible_object(void)
+{
+    HWND hwnd, label0, label1, listbox, combobox;
+    IAccessible *acc;
+    HRESULT hr;
+
+    hwnd = CreateWindowW(L"oleacc_test", L"combo_acc_test_win", WS_OVERLAPPEDWINDOW,
+            0, 0, 220, 160, NULL, NULL, NULL, NULL);
+    ok(!!hwnd, "CreateWindow failed\n");
+
+    label0 = CreateWindowW(L"STATIC", L"&label0:", WS_VISIBLE | WS_CHILD, 5, 5, 55, 20,
+            hwnd, NULL, NULL, NULL);
+    ok(!!label0, "Failed to create label0 hwnd\n");
+
+    listbox = CreateWindowW(WC_LISTBOXW, NULL, WS_VISIBLE | WS_CHILD | LBS_NOTIFY,
+            65, 5, 130, 50, hwnd, NULL, NULL, NULL);
+    ok(!!listbox, "Failed to create listbox hwnd\n");
+    SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)L"item0");
+    SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)L"item1");
+    SendMessageW(listbox, LB_SETCURSEL, 1, 0);
+
+    label1 = CreateWindowW(L"STATIC", L"lab&el1:", WS_VISIBLE | WS_CHILD, 5, 70, 45, 20,
+            hwnd, NULL, NULL, NULL);
+    ok(!!label1, "Failed to create label1 hwnd\n");
+
+    combobox = CreateWindowW(WC_COMBOBOXW, NULL, WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST,
+            65, 70, 130, 100, hwnd, NULL, NULL, NULL);
+    ok(!!combobox, "Failed to create combobox hwnd\n");
+    SendMessageW(combobox, CB_ADDSTRING, 0, (LPARAM)L"item0");
+    SendMessageW(combobox, CB_ADDSTRING, 0, (LPARAM)L"item1");
+    SendMessageW(combobox, CB_SETCURSEL, 1, 0);
+
+    hr = CreateStdAccessibleObject(listbox, OBJID_CLIENT, &IID_IAccessible, (void**)&acc);
+    ok(hr == S_OK, "got %#lx\n", hr);
+    check_acc_vals(acc, &listbox_acc_vals);
+    IAccessible_Release(acc);
+
+    hr = CreateStdAccessibleObject(combobox, OBJID_CLIENT, &IID_IAccessible, (void**)&acc);
+    ok(hr == S_OK, "got %#lx\n", hr);
+    check_acc_vals(acc, &combobox_acc_vals);
     IAccessible_Release(acc);
 
     DestroyWindow(hwnd);
@@ -2060,6 +2139,7 @@ START_TEST(main)
     test_AccessibleObjectFromPoint();
     test_CreateStdAccessibleObject_classes();
     test_default_edit_accessible_object();
+    test_default_listbox_combobox_accessible_object();
     test_WindowFromAccessibleObject();
 
     unregister_window_class();

@@ -647,8 +647,17 @@ STDAPI ClrCreateManagedInstance(LPCWSTR pTypeName, REFIID riid, void **ppObject)
 
 BOOLEAN WINAPI StrongNameSignatureVerification(LPCWSTR filename, DWORD inFlags, DWORD *pOutFlags)
 {
-    FIXME("(%s, 0x%lX, %p): stub\n", debugstr_w(filename), inFlags, pOutFlags);
-    return FALSE;
+    BOOLEAN verified = FALSE;
+
+    TRACE("(%s, 0x%lX, %p)\n", debugstr_w(filename), inFlags, pOutFlags);
+
+    if (!StrongNameSignatureVerificationEx(filename, !!(inFlags & SN_INFLAG_FORCE_VER), &verified))
+        return FALSE;
+
+    if (pOutFlags)
+        *pOutFlags = verified ? SN_OUTFLAG_WAS_VERIFIED : 0;
+
+    return TRUE;
 }
 
 BOOLEAN WINAPI StrongNameSignatureVerificationEx(LPCWSTR filename, BOOLEAN forceVerification, BOOLEAN *pVerified)

@@ -37,6 +37,7 @@
 #include "metahost.h"
 #include "corhdr.h"
 #include "cordebug.h"
+#include "strongname.h"
 #include "wine/list.h"
 #include "mscoree_private.h"
 
@@ -47,6 +48,288 @@ WINE_DEFAULT_DEBUG_CHANNEL( mscoree );
 #include "initguid.h"
 
 DEFINE_GUID(IID__AppDomain, 0x05f696dc,0x2b29,0x3663,0xad,0x8b,0xc4,0x38,0x9c,0xf2,0xa7,0x13);
+DEFINE_GUID(CLSID_CLRStrongName, 0xb79b0acd,0xf5cd,0x409b,0xb5,0xa5,0xa1,0x62,0x44,0x61,0x0b,0x92);
+DEFINE_GUID(IID_IClrStrongName, 0x9fd93ccf,0x3280,0x4391,0xb3,0xa9,0x96,0xe1,0xcd,0xe7,0x7c,0x8d);
+
+typedef struct IClrStrongName IClrStrongName;
+typedef struct IClrStrongNameVtbl
+{
+    BEGIN_INTERFACE
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IClrStrongName *This, REFIID riid, void **ppvObject);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IClrStrongName *This);
+    ULONG (STDMETHODCALLTYPE *Release)(IClrStrongName *This);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromAssemblyFile)(IClrStrongName *This, LPCSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromAssemblyFileW)(IClrStrongName *This, LPCWSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromBlob)(IClrStrongName *This, BYTE *blob, int blob_size, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromFile)(IClrStrongName *This, LPCSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromFileW)(IClrStrongName *This, LPCWSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *GetHashFromHandle)(IClrStrongName *This, HANDLE file, int *alg, BYTE *hash, int cch_hash, int *pch_hash);
+    HRESULT (STDMETHODCALLTYPE *StrongNameCompareAssemblies)(IClrStrongName *This, LPCWSTR assembly1, LPCWSTR assembly2, DWORD *result);
+    HRESULT (STDMETHODCALLTYPE *StrongNameFreeBuffer)(IClrStrongName *This, BYTE *buffer);
+    HRESULT (STDMETHODCALLTYPE *StrongNameGetBlob)(IClrStrongName *This, LPCWSTR path, BYTE *blob, ULONG *blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameGetBlobFromImage)(IClrStrongName *This, BYTE *image, ULONG image_size, BYTE *blob, ULONG *blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameGetPublicKey)(IClrStrongName *This, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **public_key_blob, ULONG *public_key_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameHashSize)(IClrStrongName *This, ULONG hash_alg, ULONG *size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameKeyDelete)(IClrStrongName *This, LPCWSTR key_container);
+    HRESULT (STDMETHODCALLTYPE *StrongNameKeyGen)(IClrStrongName *This, LPCWSTR key_container, DWORD flags, BYTE **key_blob, ULONG *key_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameKeyGenEx)(IClrStrongName *This, LPCWSTR key_container, DWORD flags, DWORD key_size, BYTE **key_blob, ULONG *key_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameKeyInstall)(IClrStrongName *This, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureGeneration)(IClrStrongName *This, LPCWSTR path, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **sig_blob, ULONG *sig_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureGenerationEx)(IClrStrongName *This, LPCWSTR path, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **sig_blob, ULONG *sig_blob_size, DWORD flags);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureSize)(IClrStrongName *This, BYTE *public_key_blob, ULONG public_key_blob_size, ULONG *size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureVerification)(IClrStrongName *This, LPCWSTR path, DWORD flags, DWORD *out_flags);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureVerificationEx)(IClrStrongName *This, LPCWSTR path, BOOLEAN force, BOOLEAN *verified);
+    HRESULT (STDMETHODCALLTYPE *StrongNameSignatureVerificationFromImage)(IClrStrongName *This, BYTE *image, ULONG image_size, DWORD flags, DWORD *out_flags);
+    HRESULT (STDMETHODCALLTYPE *StrongNameTokenFromAssembly)(IClrStrongName *This, LPCWSTR path, BYTE **token, ULONG *token_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameTokenFromAssemblyEx)(IClrStrongName *This, LPCWSTR path, BYTE **token, ULONG *token_size, BYTE **public_key_blob, ULONG *public_key_blob_size);
+    HRESULT (STDMETHODCALLTYPE *StrongNameTokenFromPublicKey)(IClrStrongName *This, BYTE *public_key_blob, ULONG public_key_blob_size, BYTE **token, ULONG *token_size);
+    END_INTERFACE
+} IClrStrongNameVtbl;
+
+struct IClrStrongName
+{
+    const IClrStrongNameVtbl *lpVtbl;
+};
+
+typedef struct clrstrongname
+{
+    IClrStrongName IClrStrongName_iface;
+    LONG ref;
+} CLRStrongName;
+
+static inline CLRStrongName *impl_from_IClrStrongName(IClrStrongName *iface)
+{
+    return CONTAINING_RECORD(iface, CLRStrongName, IClrStrongName_iface);
+}
+
+static HRESULT strong_name_notimpl(const char *name)
+{
+    FIXME("%s: stub\n", name);
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI clrstrongname_QueryInterface(IClrStrongName *iface, REFIID riid, void **ppv)
+{
+    CLRStrongName *This = impl_from_IClrStrongName(iface);
+
+    if (!ppv) return E_POINTER;
+    *ppv = NULL;
+
+    if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IClrStrongName))
+        *ppv = &This->IClrStrongName_iface;
+    else
+        return E_NOINTERFACE;
+
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI clrstrongname_AddRef(IClrStrongName *iface)
+{
+    CLRStrongName *This = impl_from_IClrStrongName(iface);
+    return InterlockedIncrement(&This->ref);
+}
+
+static ULONG WINAPI clrstrongname_Release(IClrStrongName *iface)
+{
+    CLRStrongName *This = impl_from_IClrStrongName(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+
+    if (!ref)
+        free(This);
+
+    return ref;
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromAssemblyFile(IClrStrongName *iface, LPCSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromAssemblyFileW(IClrStrongName *iface, LPCWSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromBlob(IClrStrongName *iface, BYTE *blob, int blob_size, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromFile(IClrStrongName *iface, LPCSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromFileW(IClrStrongName *iface, LPCWSTR path, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_GetHashFromHandle(IClrStrongName *iface, HANDLE file, int *alg, BYTE *hash, int cch_hash, int *pch_hash)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameCompareAssemblies(IClrStrongName *iface, LPCWSTR assembly1, LPCWSTR assembly2, DWORD *result)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameFreeBuffer(IClrStrongName *iface, BYTE *buffer)
+{
+    free(buffer);
+    return S_OK;
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameGetBlob(IClrStrongName *iface, LPCWSTR path, BYTE *blob, ULONG *blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameGetBlobFromImage(IClrStrongName *iface, BYTE *image, ULONG image_size, BYTE *blob, ULONG *blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameGetPublicKey(IClrStrongName *iface, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **public_key_blob, ULONG *public_key_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameHashSize(IClrStrongName *iface, ULONG hash_alg, ULONG *size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameKeyDelete(IClrStrongName *iface, LPCWSTR key_container)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameKeyGen(IClrStrongName *iface, LPCWSTR key_container, DWORD flags, BYTE **key_blob, ULONG *key_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameKeyGenEx(IClrStrongName *iface, LPCWSTR key_container, DWORD flags, DWORD key_size, BYTE **key_blob, ULONG *key_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameKeyInstall(IClrStrongName *iface, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureGeneration(IClrStrongName *iface, LPCWSTR path, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **sig_blob, ULONG *sig_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureGenerationEx(IClrStrongName *iface, LPCWSTR path, LPCWSTR key_container, BYTE *key_blob, ULONG key_blob_size, BYTE **sig_blob, ULONG *sig_blob_size, DWORD flags)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureSize(IClrStrongName *iface, BYTE *public_key_blob, ULONG public_key_blob_size, ULONG *size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureVerification(IClrStrongName *iface, LPCWSTR path, DWORD flags, DWORD *out_flags)
+{
+    DWORD dummy_flags = 0;
+
+    if (StrongNameSignatureVerification(path, flags, out_flags ? out_flags : &dummy_flags))
+        return S_OK;
+
+    return HRESULT_FROM_WIN32(GetLastError() ? GetLastError() : ERROR_INVALID_DATA);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureVerificationEx(IClrStrongName *iface, LPCWSTR path, BOOLEAN force, BOOLEAN *verified)
+{
+    BOOLEAN dummy_verified = FALSE;
+
+    if (!verified) verified = &dummy_verified;
+
+    if (StrongNameSignatureVerificationEx(path, force, verified))
+        return S_OK;
+
+    return HRESULT_FROM_WIN32(GetLastError() ? GetLastError() : ERROR_INVALID_DATA);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameSignatureVerificationFromImage(IClrStrongName *iface, BYTE *image, ULONG image_size, DWORD flags, DWORD *out_flags)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameTokenFromAssembly(IClrStrongName *iface, LPCWSTR path, BYTE **token, ULONG *token_size)
+{
+    if (StrongNameTokenFromAssembly(path, token, token_size))
+        return S_OK;
+
+    return HRESULT_FROM_WIN32(GetLastError() ? GetLastError() : ERROR_INVALID_DATA);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameTokenFromAssemblyEx(IClrStrongName *iface, LPCWSTR path, BYTE **token, ULONG *token_size, BYTE **public_key_blob, ULONG *public_key_blob_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static HRESULT WINAPI clrstrongname_StrongNameTokenFromPublicKey(IClrStrongName *iface, BYTE *public_key_blob, ULONG public_key_blob_size, BYTE **token, ULONG *token_size)
+{
+    return strong_name_notimpl(__FUNCTION__);
+}
+
+static const IClrStrongNameVtbl clrstrongname_vtbl =
+{
+    clrstrongname_QueryInterface,
+    clrstrongname_AddRef,
+    clrstrongname_Release,
+    clrstrongname_GetHashFromAssemblyFile,
+    clrstrongname_GetHashFromAssemblyFileW,
+    clrstrongname_GetHashFromBlob,
+    clrstrongname_GetHashFromFile,
+    clrstrongname_GetHashFromFileW,
+    clrstrongname_GetHashFromHandle,
+    clrstrongname_StrongNameCompareAssemblies,
+    clrstrongname_StrongNameFreeBuffer,
+    clrstrongname_StrongNameGetBlob,
+    clrstrongname_StrongNameGetBlobFromImage,
+    clrstrongname_StrongNameGetPublicKey,
+    clrstrongname_StrongNameHashSize,
+    clrstrongname_StrongNameKeyDelete,
+    clrstrongname_StrongNameKeyGen,
+    clrstrongname_StrongNameKeyGenEx,
+    clrstrongname_StrongNameKeyInstall,
+    clrstrongname_StrongNameSignatureGeneration,
+    clrstrongname_StrongNameSignatureGenerationEx,
+    clrstrongname_StrongNameSignatureSize,
+    clrstrongname_StrongNameSignatureVerification,
+    clrstrongname_StrongNameSignatureVerificationEx,
+    clrstrongname_StrongNameSignatureVerificationFromImage,
+    clrstrongname_StrongNameTokenFromAssembly,
+    clrstrongname_StrongNameTokenFromAssemblyEx,
+    clrstrongname_StrongNameTokenFromPublicKey,
+};
+
+static HRESULT CLRStrongName_CreateInstance(REFIID riid, void **ppv)
+{
+    CLRStrongName *strongname;
+    HRESULT hr;
+
+    strongname = calloc(1, sizeof(*strongname));
+    if (!strongname)
+        return E_OUTOFMEMORY;
+
+    strongname->IClrStrongName_iface.lpVtbl = &clrstrongname_vtbl;
+    strongname->ref = 1;
+
+    hr = clrstrongname_QueryInterface(&strongname->IClrStrongName_iface, riid, ppv);
+    clrstrongname_Release(&strongname->IClrStrongName_iface);
+    return hr;
+}
 
 struct DomainEntry
 {
@@ -1880,6 +2163,13 @@ HRESULT RuntimeHost_GetInterface(RuntimeHost *This, REFCLSID clsid, REFIID riid,
         hr = CorDebug_Create(&This->ICLRRuntimeHost_iface, &unk);
         if (FAILED(hr))
             return hr;
+    }
+    else if (IsEqualGUID(clsid, &CLSID_CLRStrongName))
+    {
+        hr = CLRStrongName_CreateInstance(riid, ppv);
+        if (FAILED(hr))
+            return hr;
+        return S_OK;
     }
     else
         unk = NULL;
