@@ -33,6 +33,7 @@
 #include "winioctl.h"
 #include "accctrl.h"
 #include "sddl.h"
+#include "winspool.h"
 #include "winsvc.h"
 #include "aclapi.h"
 #include "objbase.h"
@@ -220,6 +221,92 @@ static DWORD get_security_regkey( const WCHAR *full_key_name, DWORD access, HAND
     else
         return ERROR_INVALID_PARAMETER;
     return RegOpenKeyExW( hParent, p+1, 0, access, (HKEY *)key );
+}
+
+/* helper function for SE_PRINTER objects in [Get|Set]NamedSecurityInfo */
+static DWORD get_security_printer( const WCHAR *printer_name, DWORD access, HANDLE *printer )
+{
+    static BOOL (WINAPI *pOpenPrinterW)(LPWSTR,HANDLE *,PRINTER_DEFAULTSW *);
+    static BOOL (WINAPI *pClosePrinter)(HANDLE);
+    static BOOL (WINAPI *pGetPrinterW)(HANDLE,DWORD,LPBYTE,DWORD,LPDWORD);
+    static LONG init;
+    PRINTER_DEFAULTSW defaults = { NULL, NULL, access };
+    HMODULE winspool;
+
+    if (!init)
+    {
+        if ((winspool = LoadLibraryW( L"winspool.drv" )))
+        {
+            pOpenPrinterW = (void *)GetProcAddress( winspool, "OpenPrinterW" );
+            pClosePrinter = (void *)GetProcAddress( winspool, "ClosePrinter" );
+            pGetPrinterW = (void *)GetProcAddress( winspool, "GetPrinterW" );
+        }
+        init = 1;
+    }
+
+    if (!pOpenPrinterW || !pClosePrinter || !pGetPrinterW)
+        return ERROR_CALL_NOT_IMPLEMENTED;
+
+    if (pOpenPrinterW( (LPWSTR)printer_name, printer, &defaults ))
+        return ERROR_SUCCESS;
+
+    return GetLastError();
+}
+
+static DWORD get_printer_security_descriptor( HANDLE printer, PSECURITY_DESCRIPTOR *descriptor )
+{
+    static BOOL (WINAPI *pOpenPrinterW)(LPWSTR,HANDLE *,PRINTER_DEFAULTSW *);
+    static BOOL (WINAPI *pClosePrinter)(HANDLE);
+    static BOOL (WINAPI *pGetPrinterW)(HANDLE,DWORD,LPBYTE,DWORD,LPDWORD);
+    static LONG init;
+    PRINTER_INFO_3 *info3;
+    BYTE *buffer;
+    DWORD needed, sd_len;
+    HMODULE winspool;
+
+    if (!init)
+    {
+        if ((winspool = LoadLibraryW( L"winspool.drv" )))
+        {
+            pOpenPrinterW = (void *)GetProcAddress( winspool, "OpenPrinterW" );
+            pClosePrinter = (void *)GetProcAddress( winspool, "ClosePrinter" );
+            pGetPrinterW = (void *)GetProcAddress( winspool, "GetPrinterW" );
+        }
+        init = 1;
+    }
+
+    if (!pOpenPrinterW || !pClosePrinter || !pGetPrinterW)
+        return ERROR_CALL_NOT_IMPLEMENTED;
+
+    if (!pGetPrinterW( printer, 3, NULL, 0, &needed ) && GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return GetLastError();
+
+    if (!(buffer = malloc( needed ))) return ERROR_NOT_ENOUGH_MEMORY;
+
+    if (!pGetPrinterW( printer, 3, buffer, needed, &needed ))
+    {
+        DWORD err = GetLastError();
+        free( buffer );
+        return err;
+    }
+
+    info3 = (PRINTER_INFO_3 *)buffer;
+    if (!info3->pSecurityDescriptor)
+    {
+        free( buffer );
+        return ERROR_INVALID_SECURITY_DESCR;
+    }
+
+    sd_len = GetSecurityDescriptorLength( info3->pSecurityDescriptor );
+    if (!(*descriptor = LocalAlloc( 0, sd_len )))
+    {
+        free( buffer );
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    memcpy( *descriptor, info3->pSecurityDescriptor, sd_len );
+    free( buffer );
+    return ERROR_SUCCESS;
 }
 
 
@@ -1497,7 +1584,7 @@ DWORD WINAPI GetSecurityInfo( HANDLE handle, SE_OBJECT_TYPE type, SECURITY_INFOR
                               PSID *ppsidOwner, PSID *ppsidGroup, PACL *ppDacl, PACL *ppSacl,
                               PSECURITY_DESCRIPTOR *ppSecurityDescriptor )
 {
-    PSECURITY_DESCRIPTOR sd;
+    PSECURITY_DESCRIPTOR sd = NULL;
     NTSTATUS status;
     ULONG size;
     BOOL present, defaulted;
@@ -1519,6 +1606,11 @@ DWORD WINAPI GetSecurityInfo( HANDLE handle, SE_OBJECT_TYPE type, SECURITY_INFOR
 
     switch (type)
     {
+    case SE_PRINTER:
+        if ((status = get_printer_security_descriptor( handle, &sd )))
+            return status;
+        break;
+
     case SE_SERVICE:
         if (!QueryServiceObjectSecurity( handle, SecurityInfo, NULL, 0, &size )
             && GetLastError() != ERROR_INSUFFICIENT_BUFFER)
@@ -2785,6 +2877,25 @@ DWORD WINAPI GetNamedSecurityInfoW( const WCHAR *name, SE_OBJECT_TYPE type,
 
     switch (type)
     {
+    case SE_PRINTER:
+        if (!(err = get_security_printer( name, access, &handle )))
+        {
+            static BOOL (WINAPI *pClosePrinter)(HANDLE);
+            static LONG init;
+            HMODULE winspool;
+
+            if (!init)
+            {
+                if ((winspool = LoadLibraryW( L"winspool.drv" )))
+                    pClosePrinter = (void *)GetProcAddress( winspool, "ClosePrinter" );
+                init = 1;
+            }
+
+            err = GetSecurityInfo( handle, type, info, owner, group, dacl, sacl, descriptor );
+            if (pClosePrinter) pClosePrinter( handle );
+        }
+        break;
+
     case SE_SERVICE:
         if (!(err = get_security_service( name, access, &handle )))
         {

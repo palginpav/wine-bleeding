@@ -29,6 +29,7 @@
 #include "winuser.h"
 #include "winreg.h"
 #include "winspool.h"
+#include "aclapi.h"
 #include "commdlg.h"
 #include "wine/test.h"
 
@@ -2448,6 +2449,8 @@ static void test_GetPrinter(void)
         else if (level == 3)
         {
             PRINTER_INFO_3 *pi_3 = (PRINTER_INFO_3 *)buf;
+            PSECURITY_DESCRIPTOR sd = NULL;
+            DWORD err;
 
             ok(pi_3->pSecurityDescriptor != NULL, "expected a security descriptor\n");
             if (pi_3->pSecurityDescriptor)
@@ -2456,6 +2459,22 @@ static void test_GetPrinter(void)
                    "security descriptor is invalid\n");
                 ok(GetSecurityDescriptorLength(pi_3->pSecurityDescriptor) > 0,
                    "expected non-empty security descriptor\n");
+            }
+
+            err = GetSecurityInfo(hprn, SE_PRINTER,
+                                  OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                  DACL_SECURITY_INFORMATION,
+                                  NULL, NULL, NULL, NULL, &sd);
+            ok(err == ERROR_SUCCESS, "GetSecurityInfo failed %lu\n", err);
+            if (!err)
+            {
+                ok(sd != NULL, "expected a security descriptor\n");
+                if (sd)
+                {
+                    ok(IsValidSecurityDescriptor(sd), "security descriptor is invalid\n");
+                    ok(GetSecurityDescriptorLength(sd) > 0, "expected non-empty security descriptor\n");
+                    LocalFree(sd);
+                }
             }
         }
 
