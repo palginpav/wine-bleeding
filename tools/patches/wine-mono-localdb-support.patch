@@ -1,0 +1,48 @@
+--- a/mono/external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/SNI/LocalDB.Unix.cs
++++ b/mono/external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/SNI/LocalDB.Unix.cs
+@@ -1,15 +1,115 @@
+-// Licensed to the .NET Foundation under one or more agreements.
+-// The .NET Foundation licenses this file to you under the MIT license.
+-// See the LICENSE file in the project root for more information.
+-
+-
+-namespace System.Data.SqlClient.SNI
+-{
+-    internal class LocalDB
+-    {
+-        internal static string GetLocalDBConnectionString(string localDbInstance)
+-        {
+-            throw new PlatformNotSupportedException(SR.LocalDBNotSupported); // LocalDB is not available for Unix and hence it cannot be supported.
+-        }
+-    }
+-}
++// Wine-specific: Enable LocalDB support under Wine by loading
++// SqlUserInstance.dll and calling LocalDBStartInstance directly.
++// Replaces the original PlatformNotSupportedException stub.
++// See tools/patches/wine-mono-localdb-support.patch
+
+--- a/mono/external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/LocalDBAPI.Unix.cs
++++ b/mono/external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/LocalDBAPI.Unix.cs
+@@ -1,13 +1,14 @@
+-// Licensed to the .NET Foundation under one or more agreements.
+-// The .NET Foundation licenses this file to you under the MIT license.
+-// See the LICENSE file in the project root for more information.
+-
+-
+-namespace System.Data
+-{
+-    internal static partial class LocalDBAPI
+-    {
+-        internal static string GetLocalDBMessage(int hrCode) => 
+-            throw new PlatformNotSupportedException(SR.LocalDBNotSupported); // LocalDB is not available for Unix and hence it cannot be supported.
+-    }
+-}
++// Wine-specific: Provide a working LocalDB message formatter.
++namespace System.Data
++{
++    internal static partial class LocalDBAPI
++    {
++        internal static string GetLocalDBMessage(int hrCode) =>
++            string.Format("LocalDB error 0x{0:X8}", hrCode);
++    }
++}
