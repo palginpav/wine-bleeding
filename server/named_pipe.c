@@ -1367,12 +1367,11 @@ static void pipe_server_ioctl( struct fd *fd, ioctl_code_t code, struct async *a
         case FILE_PIPE_CLOSING_STATE:
             break;
         case FILE_PIPE_LISTENING_STATE:
-            /* On Windows, DisconnectNamedPipe on a listening pipe cancels
-             * pending listen operations and transitions to disconnected
-             * state.  Applications like SQL Server LocalDB rely on this
-             * to reset a pipe before starting a new server instance. */
-            async_wake_up( &server->listen_q, STATUS_PIPE_DISCONNECTED );
-            break;
+            /* On Windows, DisconnectNamedPipe on a listening pipe succeeds
+             * and the pipe can be closed normally afterward.  Return success
+             * without changing state — the pipe will be properly cleaned up
+             * when the handle is closed via pipe_end_destroy(). */
+            return;
         case FILE_PIPE_DISCONNECTED_STATE:
             set_error( STATUS_PIPE_DISCONNECTED );
             return;

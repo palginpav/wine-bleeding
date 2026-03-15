@@ -1269,12 +1269,63 @@ static void setup_sql_server_localdb(void)
 
     RegCloseKey( inst_key );
 
-    /* Note: Do NOT fix empty InstanceName values here.  SqlUserInstance.dll
-     * intentionally writes InstanceName="" and uses DataDirectory for
-     * instance lookup.  If InstanceName is non-empty at startup,
-     * LocalDBStartInstance takes a different code path that tries to
-     * connect to an already-running instance instead of spawning a new
-     * sqlservr.exe process. */
+    /* Fix empty InstanceName values in UserInstances.
+     *
+     * SqlUserInstance.dll writes InstanceName="" when creating instances.
+     * While LocalDBStartInstance uses DataDirectory for instance lookup,
+     * the spawned sqlservr.exe needs a non-empty InstanceName to map
+     * its instance ID back to the registry.  Fix empty names at boot
+     * time by deriving the name from the DataDirectory path. */
+    {
+        HKEY ui_key;
+        if (!RegOpenKeyExW( HKEY_CURRENT_USER,
+                            L"SOFTWARE\\Microsoft\\Microsoft SQL Server\\UserInstances",
+                            0, KEY_READ, &ui_key ))
+        {
+            WCHAR guid_name[64];
+            DWORD j;
+
+            for (j = 0; ; j++)
+            {
+                HKEY entry_key;
+                WCHAR inst_name[256], data_dir[MAX_PATH];
+                DWORD name_size, dir_size, type;
+
+                size = ARRAY_SIZE(guid_name);
+                if (RegEnumKeyExW( ui_key, j, guid_name, &size, NULL, NULL, NULL, NULL ))
+                    break;
+
+                if (RegOpenKeyExW( ui_key, guid_name, 0, KEY_ALL_ACCESS, &entry_key ))
+                    continue;
+
+                name_size = sizeof(inst_name);
+                if (!RegQueryValueExW( entry_key, L"InstanceName", NULL, &type,
+                                       (BYTE *)inst_name, &name_size ) &&
+                    type == REG_SZ && name_size <= sizeof(WCHAR))
+                {
+                    dir_size = sizeof(data_dir);
+                    if (!RegQueryValueExW( entry_key, L"DataDirectory", NULL, &type,
+                                           (BYTE *)data_dir, &dir_size ) &&
+                        type == REG_SZ && dir_size > sizeof(WCHAR))
+                    {
+                        WCHAR *last_sep = wcsrchr( data_dir, '\\' );
+                        if (last_sep && last_sep[1])
+                        {
+                            WINE_TRACE( "Fixing empty InstanceName to %s\n",
+                                         wine_dbgstr_w(last_sep + 1) );
+                            RegSetValueExW( entry_key, L"InstanceName", 0, REG_SZ,
+                                            (const BYTE *)(last_sep + 1),
+                                            (wcslen(last_sep + 1) + 1) * sizeof(WCHAR) );
+                        }
+                    }
+                }
+
+                RegCloseKey( entry_key );
+            }
+
+            RegCloseKey( ui_key );
+        }
+    }
 }
 
 /* Some broken applications expect the ProxyEnable registry value to exist.
