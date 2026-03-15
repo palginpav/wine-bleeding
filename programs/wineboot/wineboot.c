@@ -1084,6 +1084,192 @@ static void create_known_dlls(void)
     RegCloseKey( key );
 }
 
+/* Set up SQL Server LocalDB network configuration if installed.
+ *
+ * SQL Server LocalDB (used by many .NET applications) requires specific
+ * registry keys under SuperSocketNetLib to configure its TCP/IP and Named
+ * Pipe listeners.  On Windows, the SQL Server installer creates these keys
+ * during installation, but since Wine runs native sqlservr.exe without the
+ * full installer, these keys are often missing.
+ *
+ * This function detects installed LocalDB versions and creates the minimum
+ * required network configuration to allow sqlservr.exe to start and accept
+ * client connections. */
+static void setup_sql_server_localdb(void)
+{
+    static const WCHAR installed_versions_keyW[] =
+        L"SOFTWARE\\Microsoft\\Microsoft SQL Server Local DB\\Installed Versions";
+    HKEY versions_key, ver_key, inst_key, ssn_key, proto_key;
+    WCHAR version_name[64];
+    WCHAR instance_name[256];
+    DWORD i, size;
+
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, installed_versions_keyW, 0, KEY_READ, &versions_key ))
+        return;  /* LocalDB not installed */
+
+    WINE_TRACE( "SQL Server LocalDB detected, checking network configuration\n" );
+
+    /* Enumerate installed versions (e.g. "12.0", "13.0") */
+    for (i = 0; ; i++)
+    {
+        size = ARRAY_SIZE(version_name);
+        if (RegEnumKeyExW( versions_key, i, version_name, &size, NULL, NULL, NULL, NULL ))
+            break;
+
+        WINE_TRACE( "Found LocalDB version %s\n", wine_dbgstr_w(version_name) );
+    }
+    RegCloseKey( versions_key );
+
+    /* Find SQL Server instance keys (e.g. MSSQL12E.LOCALDB) */
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE,
+                       L"SOFTWARE\\Microsoft\\Microsoft SQL Server", 0, KEY_READ, &inst_key ))
+        return;
+
+    for (i = 0; ; i++)
+    {
+        WCHAR setup_path[MAX_PATH];
+        HKEY setup_key;
+        DWORD type;
+
+        size = ARRAY_SIZE(instance_name);
+        if (RegEnumKeyExW( inst_key, i, instance_name, &size, NULL, NULL, NULL, NULL ))
+            break;
+
+        /* Check if this is a LocalDB instance by looking for Setup\SQLBinRoot */
+        wcscpy( setup_path, instance_name );
+        wcscat( setup_path, L"\\Setup" );
+        if (RegOpenKeyExW( inst_key, setup_path, 0, KEY_READ, &setup_key ))
+            continue;
+
+        size = sizeof(setup_path);
+        if (RegQueryValueExW( setup_key, L"SQLBinRoot", NULL, &type, (BYTE *)setup_path, &size ) ||
+            !wcsstr( setup_path, L"LocalDB" ))
+        {
+            RegCloseKey( setup_key );
+            continue;
+        }
+        RegCloseKey( setup_key );
+
+        WINE_TRACE( "Configuring network for SQL Server instance %s\n",
+                     wine_dbgstr_w(instance_name) );
+
+        /* Check if SuperSocketNetLib already has Tcp configuration */
+        {
+            WCHAR ssn_path[512];
+            DWORD disp;
+
+            swprintf( ssn_path, ARRAY_SIZE(ssn_path),
+                      L"%s\\MSSQLServer\\SuperSocketNetLib", instance_name );
+
+            if (RegCreateKeyExW( inst_key, ssn_path, 0, NULL, 0,
+                                 KEY_ALL_ACCESS, NULL, &ssn_key, &disp ))
+                continue;
+
+            /* Only set defaults if the key was just created or has no Tcp subkey */
+            {
+                HKEY tcp_test;
+                WCHAR tcp_path[512];
+                BOOL need_setup;
+
+                swprintf( tcp_path, ARRAY_SIZE(tcp_path), L"%s\\Tcp", ssn_path );
+                need_setup = RegOpenKeyExW( inst_key, tcp_path, 0, KEY_READ, &tcp_test ) != 0;
+                if (!need_setup)
+                {
+                    /* Tcp key exists, check if KeepAlive is set */
+                    DWORD val, vsize = sizeof(val);
+                    need_setup = RegQueryValueExW( tcp_test, L"KeepAlive", NULL, NULL,
+                                                   (BYTE *)&val, &vsize ) != 0;
+                    RegCloseKey( tcp_test );
+                }
+
+                if (!need_setup)
+                {
+                    WINE_TRACE( "Network configuration already exists for %s\n",
+                                wine_dbgstr_w(instance_name) );
+                    RegCloseKey( ssn_key );
+                    continue;
+                }
+            }
+
+            WINE_TRACE( "Creating default network configuration for %s\n",
+                         wine_dbgstr_w(instance_name) );
+
+            /* SuperSocketNetLib root settings */
+            {
+                DWORD zero = 0;
+                RegSetValueExW( ssn_key, L"ForceEncryption", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+                RegSetValueExW( ssn_key, L"Certificate", 0, REG_SZ,
+                                (const BYTE *)L"", sizeof(WCHAR) );
+                RegSetValueExW( ssn_key, L"ExtendedProtection", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+                RegSetValueExW( ssn_key, L"HideInstance", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+                RegSetValueExW( ssn_key, L"AcceptedSPNs", 0, REG_MULTI_SZ,
+                                (const BYTE *)L"\0", 2 * sizeof(WCHAR) );
+            }
+
+            /* Named Pipes — disabled by default to avoid pipe name collisions */
+            if (!RegCreateKeyExW( ssn_key, L"Np", 0, NULL, 0,
+                                  KEY_ALL_ACCESS, NULL, &proto_key, NULL ))
+            {
+                DWORD zero = 0;
+                RegSetValueExW( proto_key, L"Enabled", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+                RegCloseKey( proto_key );
+            }
+
+            /* Shared Memory — disabled */
+            if (!RegCreateKeyExW( ssn_key, L"Sm", 0, NULL, 0,
+                                  KEY_ALL_ACCESS, NULL, &proto_key, NULL ))
+            {
+                DWORD zero = 0;
+                RegSetValueExW( proto_key, L"Enabled", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+                RegCloseKey( proto_key );
+            }
+
+            /* TCP/IP — enabled with dynamic port */
+            if (!RegCreateKeyExW( ssn_key, L"Tcp", 0, NULL, 0,
+                                  KEY_ALL_ACCESS, NULL, &proto_key, NULL ))
+            {
+                DWORD one = 1, keepalive = 30000, interval = 1000, zero = 0;
+
+                RegSetValueExW( proto_key, L"Enabled", 0, REG_DWORD,
+                                (const BYTE *)&one, sizeof(one) );
+                RegSetValueExW( proto_key, L"KeepAlive", 0, REG_DWORD,
+                                (const BYTE *)&keepalive, sizeof(keepalive) );
+                RegSetValueExW( proto_key, L"KeepAliveInterval", 0, REG_DWORD,
+                                (const BYTE *)&interval, sizeof(interval) );
+                RegSetValueExW( proto_key, L"ListenOnAllIPs", 0, REG_DWORD,
+                                (const BYTE *)&one, sizeof(one) );
+                RegSetValueExW( proto_key, L"TcpAbortiveClose", 0, REG_DWORD,
+                                (const BYTE *)&zero, sizeof(zero) );
+
+                /* IPAll — dynamic port allocation */
+                {
+                    HKEY ipall_key;
+                    if (!RegCreateKeyExW( proto_key, L"IPAll", 0, NULL, 0,
+                                          KEY_ALL_ACCESS, NULL, &ipall_key, NULL ))
+                    {
+                        RegSetValueExW( ipall_key, L"TcpPort", 0, REG_SZ,
+                                        (const BYTE *)L"", sizeof(WCHAR) );
+                        RegSetValueExW( ipall_key, L"TcpDynamicPorts", 0, REG_SZ,
+                                        (const BYTE *)L"0", 2 * sizeof(WCHAR) );
+                        RegCloseKey( ipall_key );
+                    }
+                }
+
+                RegCloseKey( proto_key );
+            }
+
+            RegCloseKey( ssn_key );
+        }
+    }
+
+    RegCloseKey( inst_key );
+}
+
 /* Some broken applications expect the ProxyEnable registry value to exist.
  * This value is automatically created by wininet when initializing.
  * This value is not initialized for new users on Windows, but it is created
@@ -1936,6 +2122,7 @@ int __cdecl main( int argc, char *argv[] )
 
     create_volatile_environment_registry_key();
     create_avalon_graphics_key();
+    setup_sql_server_localdb();
     create_known_dlls();
     initialize_internet();
 
