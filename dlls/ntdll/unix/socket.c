@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <unistd.h>
 #ifdef HAVE_IFADDRS_H
 # include <ifaddrs.h>
@@ -1692,8 +1693,184 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
         }
 
         case IOCTL_AFD_POLL:
-            status = STATUS_BAD_DEVICE_TYPE;
-            break;
+        {
+            /* Fast path for non-blocking poll (timeout == 0): perform the poll
+             * entirely client-side using Unix poll() to avoid a wineserver
+             * round-trip.  This is critical for applications like SQL Server
+             * that spin-poll TCP listener sockets with zero timeout. */
+            const struct afd_poll_params_64 *params64 = in_buffer;
+            const struct afd_poll_params_32 *params32 = in_buffer;
+            LONGLONG timeout_val;
+            BOOL is_32bit = in_wow64_call();
+            unsigned int i, poll_count;
+
+            if (is_32bit)
+            {
+                if (in_size < sizeof(struct afd_poll_params_32))
+                {
+                    status = STATUS_BAD_DEVICE_TYPE;
+                    break;
+                }
+                timeout_val = params32->timeout;
+                poll_count = params32->count;
+            }
+            else
+            {
+                if (in_size < sizeof(struct afd_poll_params_64))
+                {
+                    status = STATUS_BAD_DEVICE_TYPE;
+                    break;
+                }
+                timeout_val = params64->timeout;
+                poll_count = params64->count;
+            }
+
+            if (timeout_val != 0 || !poll_count)
+            {
+                /* Non-zero timeout or empty poll: use server path for proper
+                 * async semantics and event tracking. */
+                status = STATUS_BAD_DEVICE_TYPE;
+                break;
+            }
+
+            /* Zero-timeout poll: check sockets client-side with Unix poll(). */
+            {
+                struct pollfd *pfds = NULL;
+                int *fds = NULL;
+                int *close_flags = NULL;
+                BOOL any_signaled = FALSE;
+                BOOL fallback = FALSE;
+
+                pfds = calloc( poll_count, sizeof(*pfds) );
+                fds = calloc( poll_count, sizeof(*fds) );
+                close_flags = calloc( poll_count, sizeof(*close_flags) );
+                if (!pfds || !fds || !close_flags)
+                {
+                    free( pfds ); free( fds ); free( close_flags );
+                    status = STATUS_BAD_DEVICE_TYPE;
+                    break;
+                }
+
+                /* Get Unix fds for each socket in the poll set. */
+                for (i = 0; i < poll_count; i++)
+                {
+                    HANDLE sock_handle;
+                    int mask;
+
+                    if (is_32bit)
+                    {
+                        sock_handle = LongToHandle( params32->sockets[i].socket );
+                        mask = params32->sockets[i].flags;
+                    }
+                    else
+                    {
+                        sock_handle = (HANDLE)(ULONG_PTR)params64->sockets[i].socket;
+                        mask = params64->sockets[i].flags;
+                    }
+
+                    if (server_get_unix_fd( sock_handle, 0, &fds[i], &close_flags[i], NULL, NULL ))
+                    {
+                        /* Can't get fd — fall back to server path. */
+                        unsigned int j;
+                        for (j = 0; j < i; j++)
+                            if (close_flags[j]) close( fds[j] );
+                        fallback = TRUE;
+                        break;
+                    }
+
+                    pfds[i].fd = fds[i];
+                    pfds[i].events = 0;
+                    if (mask & (AFD_POLL_READ | AFD_POLL_ACCEPT))
+                        pfds[i].events |= POLLIN;
+                    if (mask & AFD_POLL_OOB)
+                        pfds[i].events |= POLLPRI;
+                    if (mask & AFD_POLL_WRITE)
+                        pfds[i].events |= POLLOUT;
+                    if (mask & AFD_POLL_HUP)
+                        pfds[i].events |= POLLIN;
+                }
+
+                if (fallback)
+                {
+                    free( pfds ); free( fds ); free( close_flags );
+                    status = STATUS_BAD_DEVICE_TYPE;
+                    break;
+                }
+
+                poll( pfds, poll_count, 0 );
+
+                /* Map results back to AFD flags and fill the output buffer. */
+                if (out_size >= in_size)
+                    memcpy( out_buffer, in_buffer, in_size );
+
+                for (i = 0; i < poll_count; i++)
+                {
+                    int out_flags = 0;
+                    int mask;
+
+                    if (is_32bit)
+                        mask = params32->sockets[i].flags;
+                    else
+                        mask = params64->sockets[i].flags;
+
+                    if (pfds[i].revents & POLLIN)
+                    {
+                        if (mask & AFD_POLL_ACCEPT)
+                            out_flags |= AFD_POLL_ACCEPT;
+                        else if (mask & AFD_POLL_READ)
+                            out_flags |= AFD_POLL_READ;
+                        if (mask & AFD_POLL_HUP)
+                        {
+                            /* Check for actual hangup vs data ready. */
+                            char dummy;
+                            if (recv( pfds[i].fd, &dummy, 1, MSG_PEEK | MSG_DONTWAIT ) == 0)
+                                out_flags = (out_flags & ~AFD_POLL_READ) | AFD_POLL_HUP;
+                        }
+                    }
+                    if ((pfds[i].revents & POLLPRI) && (mask & AFD_POLL_OOB))
+                        out_flags |= AFD_POLL_OOB;
+                    if ((pfds[i].revents & POLLOUT) && (mask & AFD_POLL_WRITE))
+                        out_flags |= AFD_POLL_WRITE;
+                    if (pfds[i].revents & POLLHUP)
+                        out_flags |= AFD_POLL_HUP;
+                    if (pfds[i].revents & POLLERR)
+                        out_flags |= AFD_POLL_CONNECT_ERR;
+
+                    if (is_32bit)
+                    {
+                        struct afd_poll_params_32 *out32 = out_buffer;
+                        out32->sockets[i].flags = out_flags;
+                        out32->sockets[i].status = 0;
+                    }
+                    else
+                    {
+                        struct afd_poll_params_64 *out64 = out_buffer;
+                        out64->sockets[i].flags = out_flags;
+                        out64->sockets[i].status = 0;
+                    }
+
+                    if (out_flags) any_signaled = TRUE;
+
+                    if (close_flags[i]) close( fds[i] );
+                }
+
+                free( pfds );
+                free( fds );
+                free( close_flags );
+
+                if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, NULL, &options )))
+                {
+                    status = STATUS_BAD_DEVICE_TYPE;
+                    break;
+                }
+                if (needs_close) close( fd );
+
+                io->Information = in_size;
+                status = STATUS_SUCCESS;
+                file_complete_async( handle, options, event, apc, apc_user, io, status, in_size );
+                return status;
+            }
+        }
 
         case IOCTL_AFD_RECV:
         {

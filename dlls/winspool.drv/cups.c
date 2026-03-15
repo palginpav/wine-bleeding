@@ -137,6 +137,48 @@ static WCHAR *cups_get_optionW( const char *opt_name, int num_options, cups_opti
     return ret;
 }
 
+static WCHAR *cups_wcsndup( const WCHAR *str, SIZE_T len )
+{
+    WCHAR *ret;
+
+    if (!(ret = malloc( (len + 1) * sizeof(*ret) ))) return NULL;
+    memcpy( ret, str, len * sizeof(*ret) );
+    ret[len] = 0;
+    return ret;
+}
+
+static WCHAR *cups_strdupW( const WCHAR *str )
+{
+    return cups_wcsndup( str, wcslen( str ) );
+}
+
+static const WCHAR *cups_find_host_sep( const WCHAR *str )
+{
+    static const WCHAR host_sep[] = {' ', '@', ' ', 0};
+
+    for ( ; str[0] && str[1] && str[2]; str++)
+        if (!memcmp( str, host_sep, sizeof(host_sep) )) return str;
+    return NULL;
+}
+
+static WCHAR *cups_get_driver_nameW( const char *name, const WCHAR *comment, const WCHAR *make_model )
+{
+    const WCHAR *sep;
+    WCHAR *ret;
+    int len;
+
+    if (comment && (sep = cups_find_host_sep( comment )) && sep != comment)
+        return cups_wcsndup( comment, sep - comment );
+
+    if (comment && *comment && !wcschr( comment, '(' )) return cups_strdupW( comment );
+    if (make_model && *make_model) return cups_strdupW( make_model );
+
+    len = strlen( name ) + 1;
+    if (!(ret = malloc( len * sizeof(*ret) ))) return NULL;
+    ntdll_umbstowcs( name, len, ret, len );
+    return ret;
+}
+
 static cups_ptype_t cups_get_printer_type( const cups_dest_t *dest )
 {
     const char *value;
@@ -154,6 +196,13 @@ static BOOL cups_is_scanner( cups_dest_t *dest )
 {
     return cups_get_printer_type( dest ) & 0x2000000 /* CUPS_PRINTER_SCANNER */;
 }
+
+static BOOL cups_is_remote( cups_dest_t *dest )
+{
+    cups_ptype_t type = cups_get_printer_type( dest );
+    return (type & 0x1000002) != 0; /* CUPS_PRINTER_REMOTE | CUPS_PRINTER_DISCOVERED */
+}
+
 
 static BOOL copy_file( const char *src, const char *dst )
 {
@@ -209,8 +258,8 @@ static NTSTATUS enum_printers( void *args )
 {
     const struct enum_printers_params *params = args;
 #ifdef SONAME_LIBCUPS
-    unsigned int num, i, name_len, comment_len, location_len, needed;
-    WCHAR *comment, *location, *ptr;
+    unsigned int num, i, name_len, driver_name_len, comment_len, location_len, needed;
+    WCHAR *driver_name, *comment, *location, *make_model, *ptr;
     struct printer_info *info;
     cups_dest_t *dests;
 
@@ -226,6 +275,11 @@ static NTSTATUS enum_printers( void *args )
             TRACE( "Printer %d: %s - skipping scanner\n", i, debugstr_a( dests[i].name ) );
             continue;
         }
+        if (cups_is_remote( dests + i ))
+        {
+            TRACE( "Printer %d: %s - skipping remote/avahi printer\n", i, debugstr_a( dests[i].name ) );
+            continue;
+        }
         TRACE( "Printer %d: %s\n", i, debugstr_a( dests[i].name ) );
         (*params->num)++;
     }
@@ -237,27 +291,35 @@ static NTSTATUS enum_printers( void *args )
     for (i = 0; i < num; i++)
     {
         if (cups_is_scanner( dests + i )) continue;
+        if (cups_is_remote( dests + i )) continue;
 
         comment = cups_get_optionW( "printer-info", dests[i].num_options, dests[i].options );
         location = cups_get_optionW( "printer-location", dests[i].num_options, dests[i].options );
+        make_model = cups_get_optionW( "printer-make-and-model", dests[i].num_options, dests[i].options );
+        driver_name = cups_get_driver_nameW( dests[i].name, comment, make_model );
 
         name_len = strlen( dests[i].name ) + 1;
+        driver_name_len = driver_name ? wcslen( driver_name ) + 1 : 0;
         comment_len = comment ? wcslen( comment ) + 1 : 0;
         location_len = location ? wcslen( location ) + 1 : 0;
-        needed += (name_len + comment_len + location_len) * sizeof(WCHAR);
+        needed += (name_len + driver_name_len + comment_len + location_len) * sizeof(WCHAR);
 
         if (needed <= *params->size)
         {
             info->name = ptr;
             ntdll_umbstowcs( dests[i].name, name_len, info->name, name_len );
-            info->comment = comment ? ptr + name_len : NULL;
-            memcpy( info->comment, comment, comment_len * sizeof(WCHAR) );
-            info->location = location ? ptr + name_len + comment_len : NULL;
-            memcpy( info->location, location, location_len * sizeof(WCHAR) );
+            info->driver_name = driver_name ? ptr + name_len : NULL;
+            if (driver_name) memcpy( info->driver_name, driver_name, driver_name_len * sizeof(WCHAR) );
+            info->comment = comment ? ptr + name_len + driver_name_len : NULL;
+            if (comment) memcpy( info->comment, comment, comment_len * sizeof(WCHAR) );
+            info->location = location ? ptr + name_len + driver_name_len + comment_len : NULL;
+            if (location) memcpy( info->location, location, location_len * sizeof(WCHAR) );
             info->is_default = dests[i].is_default;
             info++;
-            ptr += name_len + comment_len + location_len;
+            ptr += name_len + driver_name_len + comment_len + location_len;
         }
+        free( driver_name );
+        free( make_model );
         free( comment );
         free( location );
     }

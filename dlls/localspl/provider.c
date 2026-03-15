@@ -237,6 +237,7 @@ typedef struct {
 
     WCHAR *port;
     WCHAR *driver;
+    WCHAR *location;
     WCHAR *print_proc;
     WCHAR *datatype;
     DWORD attributes;
@@ -595,7 +596,39 @@ static printer_info_t* get_printer_info(const WCHAR *name)
 
     info->name = wcsdup(name);
     info->port = reg_query_value(hprinter, L"Port");
-    info->driver = reg_query_value(hprinter, L"Printer Driver");
+    info->location = reg_query_value(hprinter, L"Location");
+    info->driver = reg_query_value(hprinter, L"Printer Driver Name");
+    if (info->driver)
+    {
+        static const WCHAR host_sep[] = {' ', '@', ' ', 0};
+        WCHAR *sep = wcsstr( info->driver, host_sep );
+
+        if (sep && sep != info->driver) *sep = 0;
+    }
+    if (!info->driver)
+    {
+        WCHAR *description = reg_query_value( hprinter, L"Description" );
+        if (description && description[0])
+        {
+            static const WCHAR host_sep[] = {' ', '@', ' ', 0};
+            WCHAR *sep = wcsstr( description, host_sep );
+
+            if (sep && sep != description)
+            {
+                if ((info->driver = malloc( (sep - description + 1) * sizeof(WCHAR) )))
+                {
+                    memcpy( info->driver, description, (sep - description) * sizeof(WCHAR) );
+                    info->driver[sep - description] = 0;
+                }
+            }
+            else if (!wcschr( description, '(' ))
+            {
+                info->driver = wcsdup( description );
+            }
+        }
+        free( description );
+    }
+    if (!info->driver) info->driver = reg_query_value(hprinter, L"Printer Driver");
     info->print_proc = reg_query_value(hprinter, L"Print Processor");
     info->datatype = reg_query_value(hprinter, L"Datatype");
     info->attributes = reg_query_dword(hprinter, L"Attributes");
@@ -605,6 +638,7 @@ static printer_info_t* get_printer_info(const WCHAR *name)
     {
         free(info->name);
         free(info->port);
+        free(info->location);
         free(info->driver);
         free(info->print_proc);
         free(info->datatype);
@@ -648,6 +682,7 @@ static void release_printer_info(printer_info_t *info)
 
         free(info->name);
         free(info->port);
+        free(info->location);
         free(info->driver);
         free(info->print_proc);
         free(info->datatype);
@@ -3860,6 +3895,7 @@ static DWORD printer_info_2_size(const printer_t *printer)
     return sizeof(PRINTER_INFO_2W)
         + string_sizeW(printer->info->name)
         + string_sizeW(printer->info->port)
+        + string_sizeW(printer->info->location)
         + string_sizeW(printer->info->driver)
         + string_sizeW(printer->info->print_proc)
         + string_sizeW(printer->info->datatype);
@@ -3872,6 +3908,7 @@ static void fill_printer_info_2(const printer_t *printer, PRINTER_INFO_2W *info)
     memset(info, 0, sizeof(*info));
     ptr = copy_output_string(printer->info->name, ptr, &info->pPrinterName);
     ptr = copy_output_string(printer->info->port, ptr, &info->pPortName);
+    ptr = copy_output_string(printer->info->location, ptr, &info->pLocation);
     ptr = copy_output_string(printer->info->driver, ptr, &info->pDriverName);
     ptr = copy_output_string(printer->info->print_proc, ptr, &info->pPrintProcessor);
     ptr = copy_output_string(printer->info->datatype, ptr, &info->pDatatype);
