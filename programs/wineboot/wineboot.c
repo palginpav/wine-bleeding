@@ -1268,6 +1268,65 @@ static void setup_sql_server_localdb(void)
     }
 
     RegCloseKey( inst_key );
+
+    /* Fix empty InstanceName values in UserInstances.
+     *
+     * SqlUserInstance.dll has a bug where it writes InstanceName as an empty
+     * string when creating LocalDB instances.  The NtSetValueKey hook in
+     * ntdll fixes this at creation time, but instances created before the
+     * hook was installed may still have empty names.  Scan and fix them. */
+    {
+        HKEY ui_key;
+        if (!RegOpenKeyExW( HKEY_CURRENT_USER,
+                            L"SOFTWARE\\Microsoft\\Microsoft SQL Server\\UserInstances",
+                            0, KEY_READ, &ui_key ))
+        {
+            WCHAR guid_name[64];
+            DWORD j;
+
+            for (j = 0; ; j++)
+            {
+                HKEY entry_key;
+                WCHAR inst_name[256], data_dir[MAX_PATH];
+                DWORD name_size, dir_size, type;
+
+                size = ARRAY_SIZE(guid_name);
+                if (RegEnumKeyExW( ui_key, j, guid_name, &size, NULL, NULL, NULL, NULL ))
+                    break;
+
+                if (RegOpenKeyExW( ui_key, guid_name, 0, KEY_ALL_ACCESS, &entry_key ))
+                    continue;
+
+                /* Check if InstanceName is empty */
+                name_size = sizeof(inst_name);
+                if (!RegQueryValueExW( entry_key, L"InstanceName", NULL, &type,
+                                       (BYTE *)inst_name, &name_size ) &&
+                    type == REG_SZ && name_size <= sizeof(WCHAR))
+                {
+                    /* InstanceName is empty — extract from DataDirectory */
+                    dir_size = sizeof(data_dir);
+                    if (!RegQueryValueExW( entry_key, L"DataDirectory", NULL, &type,
+                                           (BYTE *)data_dir, &dir_size ) &&
+                        type == REG_SZ && dir_size > sizeof(WCHAR))
+                    {
+                        WCHAR *last_sep = wcsrchr( data_dir, '\\' );
+                        if (last_sep && last_sep[1])
+                        {
+                            WINE_TRACE( "Fixing empty InstanceName to %s\n",
+                                         wine_dbgstr_w(last_sep + 1) );
+                            RegSetValueExW( entry_key, L"InstanceName", 0, REG_SZ,
+                                            (const BYTE *)(last_sep + 1),
+                                            (wcslen(last_sep + 1) + 1) * sizeof(WCHAR) );
+                        }
+                    }
+                }
+
+                RegCloseKey( entry_key );
+            }
+
+            RegCloseKey( ui_key );
+        }
+    }
 }
 
 /* Some broken applications expect the ProxyEnable registry value to exist.

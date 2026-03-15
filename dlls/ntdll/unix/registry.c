@@ -575,11 +575,88 @@ NTSTATUS WINAPI NtQueryMultipleValueKey( HANDLE key, KEY_MULTIPLE_VALUE_INFORMAT
 NTSTATUS WINAPI NtSetValueKey( HANDLE key, const UNICODE_STRING *name, ULONG index,
                                ULONG type, const void *data, ULONG count )
 {
+    static const WCHAR instanceNameW[] = {'I','n','s','t','a','n','c','e','N','a','m','e',0};
+    static const WCHAR dataDirW[] = {'D','a','t','a','D','i','r','e','c','t','o','r','y',0};
     unsigned int ret;
+    const void *actual_data = data;
+    ULONG actual_count = count;
+    WCHAR fixed_name[256];
+    BOOL use_fixed = FALSE;
 
     TRACE( "(%p,%s,%d,%p,%d)\n", key, debugstr_us(name), type, data, count );
 
     if (name->Length > MAX_VALUE_LENGTH) return STATUS_INVALID_PARAMETER;
+
+    /* Fix for SqlUserInstance.dll writing empty InstanceName: it writes
+     * InstanceName BEFORE DataDirectory, so the name is empty at write time.
+     * Instead, intercept the DataDirectory write and retroactively fix
+     * InstanceName by extracting the last path component from DataDirectory.
+     * This fixes SQL Server LocalDB instance creation under Wine. */
+    if (type == REG_SZ && count > sizeof(WCHAR) &&
+        name->Length == (ARRAY_SIZE(dataDirW) - 1) * sizeof(WCHAR) &&
+        !wcsnicmp( name->Buffer, dataDirW, ARRAY_SIZE(dataDirW) - 1 ))
+    {
+        /* Check if InstanceName exists and is empty in this key */
+        UNICODE_STRING in_name;
+        WCHAR in_buf[ARRAY_SIZE(instanceNameW)];
+        char info_buf[512];
+        KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)info_buf;
+        ULONG result_len;
+
+        memcpy( in_buf, instanceNameW, sizeof(instanceNameW) );
+        in_name.Buffer = in_buf;
+        in_name.Length = (ARRAY_SIZE(instanceNameW) - 1) * sizeof(WCHAR);
+        in_name.MaximumLength = sizeof(instanceNameW);
+
+        if (!NtQueryValueKey( key, &in_name, KeyValuePartialInformation,
+                              info, sizeof(info_buf), &result_len ) &&
+            info->Type == REG_SZ && info->DataLength <= sizeof(WCHAR))
+        {
+            /* InstanceName is empty — extract name from DataDirectory being written */
+            const WCHAR *dir = (const WCHAR *)data;
+            ULONG dir_len = count / sizeof(WCHAR);
+            const WCHAR *last_sep = NULL;
+            ULONG i;
+
+            for (i = 0; i < dir_len && dir[i]; i++)
+                if (dir[i] == '\\') last_sep = &dir[i];
+
+            if (last_sep && last_sep[1])
+            {
+                const WCHAR *inst = last_sep + 1;
+                ULONG inst_len = 0;
+                while (inst[inst_len] && inst_len < 255) inst_len++;
+
+                if (inst_len > 0)
+                {
+                    UNICODE_STRING fix_name;
+                    WCHAR fix_buf[ARRAY_SIZE(instanceNameW)];
+
+                    memcpy( fixed_name, inst, inst_len * sizeof(WCHAR) );
+                    fixed_name[inst_len] = 0;
+
+                    memcpy( fix_buf, instanceNameW, sizeof(instanceNameW) );
+                    fix_name.Buffer = fix_buf;
+                    fix_name.Length = (ARRAY_SIZE(instanceNameW) - 1) * sizeof(WCHAR);
+                    fix_name.MaximumLength = sizeof(instanceNameW);
+
+                    TRACE( "Fixing empty InstanceName to %s\n", debugstr_w(fixed_name) );
+
+                    /* Write the corrected InstanceName */
+                    SERVER_START_REQ( set_key_value )
+                    {
+                        req->hkey    = wine_server_obj_handle( key );
+                        req->type    = REG_SZ;
+                        req->namelen = fix_name.Length;
+                        wine_server_add_data( req, fix_name.Buffer, fix_name.Length );
+                        wine_server_add_data( req, fixed_name, (inst_len + 1) * sizeof(WCHAR) );
+                        wine_server_call( req );
+                    }
+                    SERVER_END_REQ;
+                }
+            }
+        }
+    }
 
     SERVER_START_REQ( set_key_value )
     {
@@ -587,7 +664,7 @@ NTSTATUS WINAPI NtSetValueKey( HANDLE key, const UNICODE_STRING *name, ULONG ind
         req->type    = type;
         req->namelen = name->Length;
         wine_server_add_data( req, name->Buffer, name->Length );
-        wine_server_add_data( req, data, count );
+        wine_server_add_data( req, actual_data, actual_count );
         ret = wine_server_call( req );
     }
     SERVER_END_REQ;
