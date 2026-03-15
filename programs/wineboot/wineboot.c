@@ -1268,6 +1268,13 @@ static void setup_sql_server_localdb(void)
     }
 
     RegCloseKey( inst_key );
+
+    /* Note: Do NOT fix empty InstanceName values here.  SqlUserInstance.dll
+     * intentionally writes InstanceName="" and uses DataDirectory for
+     * instance lookup.  If InstanceName is non-empty at startup,
+     * LocalDBStartInstance takes a different code path that tries to
+     * connect to an already-running instance instead of spawning a new
+     * sqlservr.exe process. */
 }
 
 /* Some broken applications expect the ProxyEnable registry value to exist.
