@@ -45,11 +45,13 @@ extern const struct luid SeImpersonatePrivilege;
 extern const struct luid SeCreateGlobalPrivilege;
 
 extern const struct sid world_sid;
-extern const struct sid local_user_sid;
+extern struct sid local_user_sid;
 extern const struct sid local_system_sid;
 extern const struct sid builtin_users_sid;
 extern const struct sid builtin_admins_sid;
-extern const struct sid domain_users_sid;
+extern struct sid domain_users_sid;
+
+extern void init_domain_sid(void);
 
 struct ace
 {

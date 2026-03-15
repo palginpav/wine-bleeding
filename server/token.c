@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -72,10 +74,10 @@ struct sid_attrs
 
 const struct sid world_sid = { SID_REVISION, 1, SECURITY_WORLD_SID_AUTHORITY, { SECURITY_WORLD_RID } };
 const struct sid local_system_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_LOCAL_SYSTEM_RID } };
-const struct sid local_user_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1000 } };
+struct sid local_user_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1000 } };
 const struct sid builtin_admins_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS } };
 const struct sid builtin_users_sid = { SID_REVISION, 2, SECURITY_NT_AUTHORITY, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS } };
-const struct sid domain_users_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, DOMAIN_GROUP_RID_USERS } };
+struct sid domain_users_sid = { SID_REVISION, 5, SECURITY_NT_AUTHORITY, { SECURITY_NT_NON_UNIQUE, 0, 0, 0, DOMAIN_GROUP_RID_USERS } };
 
 static const struct sid local_sid = { SID_REVISION, 1, SECURITY_LOCAL_SID_AUTHORITY, { SECURITY_LOCAL_RID } };
 static const struct sid interactive_sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_INTERACTIVE_RID } };
@@ -196,6 +198,61 @@ void security_set_thread_token( struct thread *thread, obj_handle_t handle )
                 release_object( thread->token );
             thread->token = token;
         }
+    }
+}
+
+/* Derive stable domain SID sub-authorities from /etc/machine-id.
+ * This gives each machine a unique domain SID while remaining stable
+ * across reboots, which is important for SQL Server and other apps
+ * that store SID-based ACLs in databases. */
+void init_domain_sid(void)
+{
+    unsigned int sub1 = 0, sub2 = 0, sub3 = 0;
+    char buf[64];
+    int fd, len;
+
+    fd = open( "/etc/machine-id", O_RDONLY );
+    if (fd == -1)
+        fd = open( "/var/lib/dbus/machine-id", O_RDONLY );
+
+    if (fd != -1)
+    {
+        len = read( fd, buf, sizeof(buf) - 1 );
+        close( fd );
+        if (len > 0)
+        {
+            unsigned int i;
+            buf[len] = 0;
+            /* Hash the machine-id into three 32-bit values using FNV-1a */
+            sub1 = 2166136261u;
+            for (i = 0; buf[i] && buf[i] != '\n'; i++)
+            {
+                sub1 ^= (unsigned char)buf[i];
+                sub1 *= 16777619u;
+            }
+            sub2 = sub1;
+            sub2 ^= 0x12345678;
+            sub2 *= 16777619u;
+            sub3 = sub2;
+            sub3 ^= 0x9abcdef0;
+            sub3 *= 16777619u;
+
+            /* Ensure non-zero values */
+            if (!sub1) sub1 = 1;
+            if (!sub2) sub2 = 1;
+            if (!sub3) sub3 = 1;
+        }
+    }
+
+    if (sub1)
+    {
+        local_user_sid.sub_auth[1] = sub1;
+        local_user_sid.sub_auth[2] = sub2;
+        local_user_sid.sub_auth[3] = sub3;
+        domain_users_sid.sub_auth[1] = sub1;
+        domain_users_sid.sub_auth[2] = sub2;
+        domain_users_sid.sub_auth[3] = sub3;
+        fprintf( stderr, "wine: domain SID: S-1-5-21-%u-%u-%u\n", sub1, sub2, sub3 );
     }
 }
 

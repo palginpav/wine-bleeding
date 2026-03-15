@@ -39,6 +39,7 @@
 #include "file.h"
 #include "thread.h"
 #include "request.h"
+#include "security.h"
 #include "unicode.h"
 
 /* command-line options */
@@ -255,6 +256,7 @@ int main( int argc, char *argv[] )
     signal( SIGTERM, sigterm_handler );
     signal( SIGABRT, sigterm_handler );
     init_limits();
+    init_domain_sid();
 
     sock_init();
     open_master_socket();
