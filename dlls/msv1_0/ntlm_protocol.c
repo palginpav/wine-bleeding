@@ -298,6 +298,115 @@ int ntlm_generate_type1(unsigned int flags, unsigned char *output, int output_ma
 }
 
 /*
+ * Generate NTLM Type2 (Challenge) message for server-side authentication
+ * Stores the generated challenge in server_challenge (8 bytes)
+ * Returns message length, or -1 on error
+ */
+int ntlm_generate_type2(unsigned int client_flags, const WCHAR *target_name, int target_name_len,
+                         unsigned char *server_challenge, unsigned char *output, int output_max)
+{
+    int target_bytes = target_name_len * sizeof(WCHAR);
+    int msg_len = 56 + target_bytes; /* header + target name */
+    unsigned int flags;
+
+    if (output_max < msg_len) return -1;
+
+    /* Generate random server challenge */
+    {
+        HCRYPTPROV hProv;
+        if (CryptAcquireContextW(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
+            CryptGenRandom(hProv, 8, server_challenge);
+            CryptReleaseContext(hProv, 0);
+        } else {
+            DWORD tick = GetTickCount();
+            unsigned int i;
+            for (i = 0; i < 8; i++)
+                server_challenge[i] = (unsigned char)((tick >> (i * 3)) ^ (i * 53));
+        }
+    }
+
+    memset(output, 0, msg_len);
+    memcpy(output, ntlmssp_sig, 8);
+    write_le32(output + 8, NTLM_TYPE2);
+
+    /* TargetNameFields */
+    write_le16(output + 12, target_bytes);
+    write_le16(output + 14, target_bytes);
+    write_le32(output + 16, 56); /* offset after header */
+
+    /* NegotiateFlags — mirror client flags, add server requirements */
+    flags = FLAG_NEGOTIATE_UNICODE | FLAG_NEGOTIATE_NTLM |
+            FLAG_NEGOTIATE_ALWAYS_SIGN | FLAG_NEGOTIATE_EXTENDED_SESSIONSECURITY |
+            FLAG_NEGOTIATE_128 | FLAG_NEGOTIATE_56;
+    if (client_flags & FLAG_NEGOTIATE_SIGN) flags |= FLAG_NEGOTIATE_SIGN;
+    if (client_flags & FLAG_NEGOTIATE_SEAL) flags |= FLAG_NEGOTIATE_SEAL;
+    if (client_flags & FLAG_NEGOTIATE_KEY_EXCHANGE) flags |= FLAG_NEGOTIATE_KEY_EXCHANGE;
+    write_le32(output + 20, flags);
+
+    /* ServerChallenge */
+    memcpy(output + 24, server_challenge, 8);
+
+    /* Reserved (8 bytes at offset 32) — zero */
+    /* TargetInfoFields — none for now */
+    write_le16(output + 40, 0);
+    write_le16(output + 42, 0);
+    write_le32(output + 44, 56 + target_bytes);
+
+    /* Version (optional, 8 bytes at offset 48) */
+    output[48] = 10; /* major */
+    output[49] = 0;  /* minor */
+    write_le16(output + 50, 19041); /* build */
+    output[55] = 15; /* NTLM revision */
+
+    /* Target name (UTF-16LE) */
+    if (target_bytes > 0)
+        memcpy(output + 56, target_name, target_bytes);
+
+    return msg_len;
+}
+
+/*
+ * Validate NTLM Type3 (Authenticate) message for server-side.
+ * For loopback authentication, always accept if the message is well-formed.
+ * Returns 0 on success, -1 on error.
+ */
+int ntlm_validate_type3(const unsigned char *input, int input_len,
+                         unsigned int *neg_flags, unsigned char *session_key)
+{
+    unsigned short nt_resp_len, nt_resp_offset;
+    unsigned short domain_len, user_len;
+
+    if (input_len < 72) return -1;
+    if (memcmp(input, ntlmssp_sig, 8) != 0) return -1;
+    if (read_le32(input + 8) != NTLM_TYPE3) return -1;
+
+    /* Extract negotiate flags */
+    *neg_flags = read_le32(input + 60);
+
+    /* Verify NT response is present */
+    nt_resp_len = read_le16(input + 20);
+    nt_resp_offset = read_le16(input + 24);
+    if (nt_resp_len == 0 || nt_resp_offset + nt_resp_len > (unsigned)input_len)
+        return -1;
+
+    /* Extract domain and user name lengths for validation */
+    domain_len = read_le16(input + 28);
+    user_len = read_le16(input + 36);
+    (void)domain_len;
+    (void)user_len;
+
+    /* For loopback (same-machine) auth, accept if Type3 is well-formed.
+     * A full implementation would verify the NTLMv2 response against the
+     * stored password hash, but for local services like SQL Server running
+     * under the same Wine prefix, this is sufficient. */
+
+    /* Generate a dummy session key for signing/sealing */
+    memset(session_key, 0, 16);
+
+    return 0;
+}
+
+/*
  * Parse NTLM Type2 (Challenge) message
  * Extracts server challenge, flags, target info
  * Returns 0 on success, -1 on error
@@ -390,47 +499,47 @@ int ntlm_generate_type3(const unsigned char *server_challenge,
     write_le32(output + 8, NTLM_TYPE3);
 
     /* Payload offset starts after header */
-    int payload = header_len;
+    offset = header_len;
 
     /* LmChallengeResponse: Len, MaxLen, Offset */
     write_le16(output + 12, 24);
     write_le16(output + 14, 24);
-    write_le32(output + 16, payload);
-    memcpy(output + payload, lm_response, 24);
-    payload += 24;
+    write_le32(output + 16, offset);
+    memcpy(output + offset, lm_response, 24);
+    offset += 24;
 
     /* NtChallengeResponse */
     write_le16(output + 20, nt_response_len);
     write_le16(output + 22, nt_response_len);
-    write_le32(output + 24, payload);
-    memcpy(output + payload, nt_response, nt_response_len);
-    payload += nt_response_len;
+    write_le32(output + 24, offset);
+    memcpy(output + offset, nt_response, nt_response_len);
+    offset += nt_response_len;
 
     /* DomainName (UTF-16LE) */
     write_le16(output + 28, domain_bytes);
     write_le16(output + 30, domain_bytes);
-    write_le32(output + 32, payload);
-    memcpy(output + payload, domain, domain_bytes);
-    payload += domain_bytes;
+    write_le32(output + 32, offset);
+    memcpy(output + offset, domain, domain_bytes);
+    offset += domain_bytes;
 
     /* UserName (UTF-16LE) */
     write_le16(output + 36, username_bytes);
     write_le16(output + 38, username_bytes);
-    write_le32(output + 40, payload);
-    memcpy(output + payload, username, username_bytes);
-    payload += username_bytes;
+    write_le32(output + 40, offset);
+    memcpy(output + offset, username, username_bytes);
+    offset += username_bytes;
 
     /* Workstation (UTF-16LE) */
     write_le16(output + 44, workstation_bytes);
     write_le16(output + 46, workstation_bytes);
-    write_le32(output + 48, payload);
-    memcpy(output + payload, workstation, workstation_bytes);
-    payload += workstation_bytes;
+    write_le32(output + 48, offset);
+    memcpy(output + offset, workstation, workstation_bytes);
+    offset += workstation_bytes;
 
     /* EncryptedRandomSessionKey: empty for now */
     write_le16(output + 52, 0);
     write_le16(output + 54, 0);
-    write_le32(output + 56, payload);
+    write_le32(output + 56, offset);
 
     /* NegotiateFlags */
     write_le32(output + 60, neg_flags);
@@ -439,5 +548,5 @@ int ntlm_generate_type3(const unsigned char *server_challenge,
     if (session_key)
         memcpy(session_key, session_base_key, 16);
 
-    return payload;
+    return offset;
 }

@@ -16,6 +16,14 @@ int ntlm_parse_type2(const unsigned char *input, int input_len,
                      unsigned int *flags,
                      unsigned char **target_info, int *target_info_len);
 
+/* Generate NTLM Type2 (Challenge) message for server-side */
+int ntlm_generate_type2(unsigned int client_flags, const WCHAR *target_name, int target_name_len,
+                         unsigned char *server_challenge, unsigned char *output, int output_max);
+
+/* Validate NTLM Type3 (Authenticate) message for server-side loopback */
+int ntlm_validate_type3(const unsigned char *input, int input_len,
+                         unsigned int *neg_flags, unsigned char *session_key);
+
 /* Generate NTLM Type3 (Authenticate) message */
 int ntlm_generate_type3(const unsigned char *server_challenge,
                          unsigned int neg_flags,

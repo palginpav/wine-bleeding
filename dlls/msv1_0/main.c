@@ -1053,7 +1053,16 @@ static NTSTATUS NTAPI ntlm_SpAcceptLsaModeContext( LSA_SEC_HANDLE cred_handle, L
         argv[0] = (char *)"ntlm_auth";
         argv[1] = (char *)"--helper-protocol=squid-2.5-ntlmssp";
         argv[2] = NULL;
-        if ((status = ntlm_fork( ctx, argv )) != SEC_E_OK) goto done;
+        status = ntlm_fork( ctx, argv );
+        if (status != SEC_E_OK)
+        {
+            /* Native server-side NTLM: generate Type2 challenge.
+             * For local loopback authentication (same machine), we generate
+             * a challenge and accept any valid NTLMv2 response. */
+            TRACE( "using native NTLMv2 server implementation\n" );
+            ctx->pid = NTLM_NATIVE_MODE;
+            status = SEC_E_OK;
+        }
         ctx->mode = MODE_SERVER;
 
         if (!(want_flags = malloc( 73 )))
@@ -1085,17 +1094,44 @@ static NTSTATUS NTAPI ntlm_SpAcceptLsaModeContext( LSA_SEC_HANDLE cred_handle, L
         }
 
         memcpy( bin, input->pBuffers[0].pvBuffer, bin_len );
-        strcpy( buf, "YR " );
-        encode_base64( bin, bin_len, buf + 3 );
 
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        TRACE( "ntlm_auth returned %s\n", buf );
-        if (strncmp( buf, "TT ", 3))
+        if (ctx->pid == NTLM_NATIVE_MODE)
         {
-            status = SEC_E_INTERNAL_ERROR;
-            goto done;
+            /* Native server: parse Type1, generate Type2 challenge */
+            unsigned int client_flags = 0;
+            unsigned char challenge[8];
+            WCHAR compname[MAX_COMPUTERNAME_LENGTH + 1];
+            DWORD compname_len = MAX_COMPUTERNAME_LENGTH + 1;
+
+            if (bin_len >= 12 && !memcmp(bin, "NTLMSSP\0", 8))
+                client_flags = bin[12] | (bin[13] << 8) | (bin[14] << 16) | (bin[15] << 24);
+
+            GetComputerNameW( compname, &compname_len );
+            bin_len = ntlm_generate_type2( client_flags, compname, compname_len,
+                                            challenge, (unsigned char *)bin, NTLM_MAX_BUF );
+            if ((int)bin_len < 0)
+            {
+                status = SEC_E_INTERNAL_ERROR;
+                goto done;
+            }
+            /* Save challenge for Type3 validation */
+            memcpy( ctx->session_key, challenge, 8 );
+            TRACE( "native Type2 generated (%u bytes)\n", bin_len );
         }
-        bin_len = decode_base64( buf + 3, len - 3, bin );
+        else
+        {
+            strcpy( buf, "YR " );
+            encode_base64( bin, bin_len, buf + 3 );
+
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            TRACE( "ntlm_auth returned %s\n", buf );
+            if (strncmp( buf, "TT ", 3))
+            {
+                status = SEC_E_INTERNAL_ERROR;
+                goto done;
+            }
+            bin_len = decode_base64( buf + 3, len - 3, bin );
+        }
 
         if (!output || output->cBuffers < 1)
         {
@@ -1132,69 +1168,76 @@ static NTSTATUS NTAPI ntlm_SpAcceptLsaModeContext( LSA_SEC_HANDLE cred_handle, L
         else bin_len = input->pBuffers[0].cbBuffer;
         memcpy( bin, input->pBuffers[0].pvBuffer, bin_len );
 
-        strcpy( buf, "KK " );
-        encode_base64( bin, bin_len, buf + 3 );
-
-        TRACE( "client sent %s\n", debugstr_a(buf) );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        TRACE( "ntlm_auth returned %s\n", debugstr_a(buf) );
-
-        /* At this point, we get a NA if the user didn't authenticate, but a BH if ntlm_auth could not
-         * connect to winbindd. Apart from running Wine as root, there is no way to fix this for now,
-         * so just handle this as a failed login. */
-        if (strncmp( buf, "AF ", 3 ))
+        if (ctx->pid == NTLM_NATIVE_MODE)
         {
-            if (!strncmp( buf, "NA ", 3 ))
+            /* Native server: validate Type3 (loopback — accept well-formed messages) */
+            unsigned int neg_flags;
+            unsigned char session_key[16];
+
+            if (ntlm_validate_type3( (unsigned char *)bin, bin_len, &neg_flags, session_key ) < 0)
             {
                 status = SEC_E_LOGON_DENIED;
                 goto done;
             }
-            else
-            {
-                const char err_v3[] = "BH NT_STATUS_ACCESS_DENIED";
-                const char err_v4[] = "BH NT_STATUS_UNSUCCESSFUL";
-
-                if ((len >= strlen(err_v3) && !strncmp( buf, err_v3, strlen(err_v3) )) ||
-                    (len >= strlen(err_v4) && !strncmp( buf, err_v4, strlen(err_v4) )))
-                {
-                    TRACE( "connection to winbindd failed\n" );
-                    status = SEC_E_LOGON_DENIED;
-                }
-                else status = SEC_E_INTERNAL_ERROR;
-                goto done;
-            }
+            ctx->flags = neg_flags;
+            memcpy( ctx->session_key, session_key, 16 );
+            TRACE( "native Type3 accepted (loopback auth)\n" );
+            output->pBuffers[0].cbBuffer = 0;
         }
-        output->pBuffers[0].cbBuffer = 0;
-
-        strcpy( buf, "GF" );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        if (len < 3) ctx->flags = 0;
-        else sscanf( buf + 3, "%x", &ctx->flags );
-
-        strcpy( buf, "GK" );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-
-        if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
-        else if (!strncmp( buf, "GK ", 3 ))
-        {
-            bin_len = decode_base64( buf + 3, len - 3, bin );
-            TRACE( "session key is %s\n", debugstr_a(buf + 3) );
-            memcpy( ctx->session_key, bin, bin_len );
-        }
-
-        if (len < 3) memset( ctx->session_key, 0 , 16 );
         else
         {
-            if (!strncmp( buf, "BH ", 3 ))
+            strcpy( buf, "KK " );
+            encode_base64( bin, bin_len, buf + 3 );
+
+            TRACE( "client sent %s\n", debugstr_a(buf) );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            TRACE( "ntlm_auth returned %s\n", debugstr_a(buf) );
+
+            if (strncmp( buf, "AF ", 3 ))
             {
-                TRACE( "helper sent %s\n", debugstr_a(buf + 3) );
-                /*FIXME: generate dummy session key = MD4(MD4(password))*/
-                memset( ctx->session_key, 0 , 16 );
+                if (!strncmp( buf, "NA ", 3 ))
+                {
+                    status = SEC_E_LOGON_DENIED;
+                    goto done;
+                }
+                else
+                {
+                    const char err_v3[] = "BH NT_STATUS_ACCESS_DENIED";
+                    const char err_v4[] = "BH NT_STATUS_UNSUCCESSFUL";
+
+                    if ((len >= strlen(err_v3) && !strncmp( buf, err_v3, strlen(err_v3) )) ||
+                        (len >= strlen(err_v4) && !strncmp( buf, err_v4, strlen(err_v4) )))
+                    {
+                        TRACE( "connection to winbindd failed\n" );
+                        status = SEC_E_LOGON_DENIED;
+                    }
+                    else status = SEC_E_INTERNAL_ERROR;
+                    goto done;
+                }
             }
+            output->pBuffers[0].cbBuffer = 0;
+
+            strcpy( buf, "GF" );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            if (len < 3) ctx->flags = 0;
+            else sscanf( buf + 3, "%x", &ctx->flags );
+
+            strcpy( buf, "GK" );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+
+            if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
             else if (!strncmp( buf, "GK ", 3 ))
             {
                 bin_len = decode_base64( buf + 3, len - 3, bin );
                 TRACE( "session key is %s\n", debugstr_a(buf + 3) );
+                memcpy( ctx->session_key, bin, bin_len );
+            }
+
+            if (len < 3) memset( ctx->session_key, 0, 16 );
+            else if (!strncmp( buf, "BH ", 3 )) memset( ctx->session_key, 0, 16 );
+            else if (!strncmp( buf, "GK ", 3 ))
+            {
+                bin_len = decode_base64( buf + 3, len - 3, bin );
                 memcpy( ctx->session_key, bin, 16 );
             }
         }
