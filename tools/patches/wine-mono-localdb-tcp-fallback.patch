@@ -1,0 +1,52 @@
+diff --git a/mcs/class/Mono.Data.Tds/Mono.Data.Tds.Protocol/TdsComm.cs b/mcs/class/Mono.Data.Tds/Mono.Data.Tds.Protocol/TdsComm.cs
+index 8e19ec9af96..1177c7b0f7a 100644
+--- a/mcs/class/Mono.Data.Tds/Mono.Data.Tds.Protocol/TdsComm.cs
++++ b/mcs/class/Mono.Data.Tds/Mono.Data.Tds.Protocol/TdsComm.cs
+@@ -88,16 +88,27 @@ public TdsComm (string dataSource, int port, int packetSize, int timeout, TdsVer
+ 			inBufferLength = packetSize;
+ 
+ 			lsb = true;
+-			
++
+ 			IPEndPoint endPoint;
+ 			bool have_exception = false;
+-			
++
+ 			try {
+ 				IPAddress ip;
+-				if(IPAddress.TryParse(this.dataSource, out ip)) {
++				string resolvedHost = this.dataSource;
++
++				// Handle LocalDB data source: (localdb)\InstanceName
++				// LocalDB uses SqlUserInstance.dll to start a local SQL Server
++				// instance and returns a named pipe. Under Wine, we redirect
++				// to localhost on the configured TCP port instead.
++				if (resolvedHost != null &&
++				    resolvedHost.StartsWith ("(localdb)", StringComparison.OrdinalIgnoreCase)) {
++					resolvedHost = "127.0.0.1";
++				}
++
++				if(IPAddress.TryParse(resolvedHost, out ip)) {
+ 					endPoint = new IPEndPoint(ip, port);
+ 				} else {
+-					IPHostEntry hostEntry = Dns.GetHostEntry (this.dataSource);
++					IPHostEntry hostEntry = Dns.GetHostEntry (resolvedHost);
+ 					endPoint = new IPEndPoint(hostEntry.AddressList [0], port);
+ 				}
+ 			} catch (SocketException e) {
+diff --git a/mcs/class/System.Data/win32_net_4_x_System.Data.dll.sources b/mcs/class/System.Data/win32_net_4_x_System.Data.dll.sources
+index d948f329cdb..e2bd3295d99 100644
+--- a/mcs/class/System.Data/win32_net_4_x_System.Data.dll.sources
++++ b/mcs/class/System.Data/win32_net_4_x_System.Data.dll.sources
+@@ -7,7 +7,10 @@
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/TdsParserStateObjectNative.cs
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/TdsParserStateObjectFactory.Managed.cs
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/TdsParser.Windows.cs
+-../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/SNI/LocalDB.Windows.cs
++# Wine: Use Unix LocalDB implementation which has TCP fallback
++# when named pipe connection fails (LocalDB.Windows.cs only returns
++# pipe names which don't work under Wine's managed SNI).
++../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/SNI/LocalDB.Unix.cs
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/LocalDBAPI.Common.cs
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/SqlClient/LocalDBAPI.Windows.cs
+ ../../../external/corefx/src/System.Data.SqlClient/src/System/Data/ProviderBase/DbConnectionPoolIdentity.Windows.cs
