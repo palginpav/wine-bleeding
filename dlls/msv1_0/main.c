@@ -48,8 +48,18 @@ static LSA_DISPATCH_TABLE lsa_dispatch;
 
 static void ntlm_cleanup( struct ntlm_ctx *ctx )
 {
-    if (ctx && ctx->pid != NTLM_NATIVE_MODE)
-        WINE_UNIX_CALL( unix_cleanup, ctx );
+    if (!ctx) return;
+    if (ctx->pid == NTLM_NATIVE_MODE)
+    {
+        free( ctx->native_username );
+        free( ctx->native_domain );
+        if (ctx->native_password)
+        {
+            SecureZeroMemory( ctx->native_password, ctx->native_password_len * sizeof(WCHAR) );
+            free( ctx->native_password );
+        }
+    }
+    else WINE_UNIX_CALL( unix_cleanup, ctx );
 }
 
 static NTSTATUS ntlm_chat( struct ntlm_ctx *ctx, char *buf, unsigned int buflen, unsigned int *retlen )
@@ -591,9 +601,10 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
 
     if (!ctx_handle && (!input || !input->cBuffers))
     {
-        char *argv[5];
+        char *argv[5] = {0};
         int password_len = 0;
         struct ntlm_cred *cred = (struct ntlm_cred *)cred_handle;
+        (void)argv; /* may be unused in native-only path */
 
         if (!cred || !(cred->mode & MODE_CLIENT))
         {
@@ -664,13 +675,57 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
 
         if (!(ctx = calloc( 1, sizeof(*ctx) ))) goto done;
 
-        status = ntlm_fork( ctx, argv );
-        if (status != SEC_E_OK)
+        /* Use native NTLMv2 for client-side authentication.
+         * This eliminates the dependency on Samba's ntlm_auth helper
+         * and provides correct NTLMv2 responses with proper session
+         * key derivation for signing and sealing. */
+        TRACE( "using native NTLMv2 implementation\n" );
+        ctx->pid = NTLM_NATIVE_MODE;
+
+        /* Store credentials in ctx for Type3 generation (second call) */
         {
-            /* ntlm_auth not available — use native NTLMv2 implementation */
-            TRACE( "ntlm_auth not available, using native NTLMv2\n" );
-            ctx->pid = NTLM_NATIVE_MODE;
-            status = SEC_E_OK;
+            WKSTA_USER_INFO_1 *ui = NULL;
+
+            if (cred->username_arg)
+            {
+                const char *eq = strchr( cred->username_arg, '=' );
+                const char *u = eq ? eq + 1 : cred->username_arg;
+                int wlen = MultiByteToWideChar( CP_ACP, 0, u, -1, NULL, 0 );
+                ctx->native_username = malloc( wlen * sizeof(WCHAR) );
+                if (ctx->native_username) {
+                    MultiByteToWideChar( CP_ACP, 0, u, -1, ctx->native_username, wlen );
+                    ctx->native_username_len = wlen - 1;
+                }
+            }
+            else if (NetWkstaUserGetInfo( NULL, 1, (BYTE **)&ui ) == NERR_Success && ui)
+            {
+                ctx->native_username_len = lstrlenW( ui->wkui1_username );
+                ctx->native_username = malloc( (ctx->native_username_len + 1) * sizeof(WCHAR) );
+                if (ctx->native_username) lstrcpyW( ctx->native_username, ui->wkui1_username );
+                NetApiBufferFree( ui );
+            }
+
+            if (cred->domain_arg)
+            {
+                const char *eq = strchr( cred->domain_arg, '=' );
+                const char *d = eq ? eq + 1 : cred->domain_arg;
+                int wlen = MultiByteToWideChar( CP_ACP, 0, d, -1, NULL, 0 );
+                ctx->native_domain = malloc( wlen * sizeof(WCHAR) );
+                if (ctx->native_domain) {
+                    MultiByteToWideChar( CP_ACP, 0, d, -1, ctx->native_domain, wlen );
+                    ctx->native_domain_len = wlen - 1;
+                }
+            }
+
+            if (cred->password)
+            {
+                int wlen = MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, NULL, 0 );
+                ctx->native_password = malloc( (wlen + 1) * sizeof(WCHAR) );
+                if (ctx->native_password) {
+                    MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, ctx->native_password, wlen + 1 );
+                    ctx->native_password_len = wlen;
+                }
+            }
         }
         status = SEC_E_INSUFFICIENT_MEMORY;
 
@@ -800,7 +855,6 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
             unsigned int neg_flags;
             unsigned char *target_info = NULL;
             int target_info_len = 0;
-            struct ntlm_cred *cred = (struct ntlm_cred *)cred_handle;
             WCHAR *usernameW = NULL, *domainW = NULL, *passwordW = NULL, *workstationW = NULL;
             int usernameW_len = 0, domainW_len = 0, passwordW_len = 0, workstationW_len = 0;
             WCHAR compname[MAX_COMPUTERNAME_LENGTH + 1];
@@ -814,44 +868,13 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
             }
             TRACE( "native Type2 parsed: flags=%#x, target_info_len=%d\n", neg_flags, target_info_len );
 
-            /* Get username/domain from credentials */
-            if (cred && cred->username_arg)
-            {
-                /* Extract from --username=xxx format */
-                const char *eq = strchr( cred->username_arg, '=' );
-                const char *u = eq ? eq + 1 : cred->username_arg;
-                usernameW_len = MultiByteToWideChar( CP_ACP, 0, u, -1, NULL, 0 ) - 1;
-                usernameW = malloc( (usernameW_len + 1) * sizeof(WCHAR) );
-                if (usernameW) MultiByteToWideChar( CP_ACP, 0, u, -1, usernameW, usernameW_len + 1 );
-            }
-            else
-            {
-                WKSTA_USER_INFO_1 *ui = NULL;
-                if (NetWkstaUserGetInfo( NULL, 1, (BYTE **)&ui ) == NERR_Success && ui)
-                {
-                    usernameW_len = lstrlenW( ui->wkui1_username );
-                    usernameW = malloc( (usernameW_len + 1) * sizeof(WCHAR) );
-                    if (usernameW) lstrcpyW( usernameW, ui->wkui1_username );
-                    NetApiBufferFree( ui );
-                }
-            }
-
-            if (cred && cred->domain_arg)
-            {
-                const char *eq = strchr( cred->domain_arg, '=' );
-                const char *d = eq ? eq + 1 : cred->domain_arg;
-                domainW_len = MultiByteToWideChar( CP_ACP, 0, d, -1, NULL, 0 ) - 1;
-                domainW = malloc( (domainW_len + 1) * sizeof(WCHAR) );
-                if (domainW) MultiByteToWideChar( CP_ACP, 0, d, -1, domainW, domainW_len + 1 );
-            }
-
-            /* Get password (UTF-16LE for NT hash) */
-            if (cred && cred->password)
-            {
-                passwordW_len = MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, NULL, 0 );
-                passwordW = malloc( (passwordW_len + 1) * sizeof(WCHAR) );
-                if (passwordW) MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, passwordW, passwordW_len + 1 );
-            }
+            /* Use credentials stored in ctx from first call */
+            usernameW = ctx->native_username;
+            usernameW_len = ctx->native_username_len;
+            domainW = ctx->native_domain;
+            domainW_len = ctx->native_domain_len;
+            passwordW = ctx->native_password;
+            passwordW_len = ctx->native_password_len;
 
             /* Get workstation name */
             GetComputerNameW( compname, &compname_len );
@@ -868,9 +891,7 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
                                             (unsigned char *)ctx->session_key );
 
             free( target_info );
-            free( usernameW );
-            free( domainW );
-            free( passwordW );
+            /* Don't free usernameW/domainW/passwordW — they belong to ctx */
 
             if ((int)bin_len < 0)
             {

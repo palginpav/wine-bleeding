@@ -70,6 +70,13 @@ struct ntlm_ctx
     char         session_key[16];
     unsigned int flags;
     com_buf_ptr  com_buf;
+    /* Native NTLM credentials (stored for Type3 generation) */
+    WCHAR       *native_username;
+    int          native_username_len;
+    WCHAR       *native_domain;
+    int          native_domain_len;
+    WCHAR       *native_password;
+    int          native_password_len;
     struct
     {
         struct
