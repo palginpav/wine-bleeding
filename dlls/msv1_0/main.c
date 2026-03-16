@@ -585,7 +585,7 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
     if (!(buf = malloc( NTLM_MAX_BUF * 3 + 64 ))) return SEC_E_INSUFFICIENT_MEMORY;
     if (!(bin = malloc( NTLM_MAX_BUF ))) goto done;
 
-    if (!ctx_handle && !input)
+    if (!ctx_handle && (!input || !input->cBuffers))
     {
         char *argv[5];
         int password_len = 0;
@@ -699,7 +699,12 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
         /* use cached credentials if no password was given, fall back to an empty password on failure */
         if (!password && !cred->password)
         {
-            strcpy( buf, "OK" );
+            /* Send "YR" to request initial NTLM Type1 message.
+             * Wine traditionally sent "OK" for cached credentials, but standard
+             * ntlm_auth (Samba) only supports "YR" for ntlmssp-client-1 protocol.
+             * With --use-cached-creds flag, ntlm_auth handles the credentials
+             * automatically on "YR". */
+            strcpy( buf, "YR" );
             if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
 
             /* if the helper replied with "PW" using cached credentials failed */

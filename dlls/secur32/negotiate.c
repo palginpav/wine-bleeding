@@ -166,7 +166,7 @@ static NTSTATUS NTAPI nego_SpAcquireCredentialsHandle(
 
     if ((package = lsa_find_package( "NTLM", &user )))
     {
-        ULONG cred_use = auth_data ? credential_use : credential_use | WINE_NO_CACHED_CREDENTIALS;
+        ULONG cred_use = credential_use;
 
         ret = package->SpAcquireCredentialsHandle( principal_us, cred_use, logon_id, auth_data,
                                                    get_key_fn, get_key_arg, &cred->handle_ntlm, expiry );
