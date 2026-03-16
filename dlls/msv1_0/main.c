@@ -37,15 +37,19 @@
 
 #include "wine/debug.h"
 #include "unixlib.h"
+#include "ntlm_protocol.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(ntlm);
+
+#define NTLM_NATIVE_MODE  (-2)  /* ctx->pid value indicating native NTLM mode */
 
 static ULONG ntlm_package_id;
 static LSA_DISPATCH_TABLE lsa_dispatch;
 
 static void ntlm_cleanup( struct ntlm_ctx *ctx )
 {
-    WINE_UNIX_CALL( unix_cleanup, ctx );
+    if (ctx && ctx->pid != NTLM_NATIVE_MODE)
+        WINE_UNIX_CALL( unix_cleanup, ctx );
 }
 
 static NTSTATUS ntlm_chat( struct ntlm_ctx *ctx, char *buf, unsigned int buflen, unsigned int *retlen )
@@ -660,7 +664,14 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
 
         if (!(ctx = calloc( 1, sizeof(*ctx) ))) goto done;
 
-        if ((status = ntlm_fork( ctx, argv )) != SEC_E_OK) goto done;
+        status = ntlm_fork( ctx, argv );
+        if (status != SEC_E_OK)
+        {
+            /* ntlm_auth not available — use native NTLMv2 implementation */
+            TRACE( "ntlm_auth not available, using native NTLMv2\n" );
+            ctx->pid = NTLM_NATIVE_MODE;
+            status = SEC_E_OK;
+        }
         status = SEC_E_INSUFFICIENT_MEMORY;
 
         ctx->mode = MODE_CLIENT;
@@ -696,52 +707,65 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
         if (ctx_req & ISC_REQ_DELEGATE) ctx->attrs |= ISC_RET_DELEGATE;
         if (ctx_req & ISC_REQ_STREAM) FIXME( "ISC_REQ_STREAM\n" );
 
-        /* use cached credentials if no password was given, fall back to an empty password on failure */
-        if (!password && !cred->password)
+        if (ctx->pid == NTLM_NATIVE_MODE)
         {
-            /* Send "YR" to request initial NTLM Type1 message.
-             * Wine traditionally sent "OK" for cached credentials, but standard
-             * ntlm_auth (Samba) only supports "YR" for ntlmssp-client-1 protocol.
-             * With --use-cached-creds flag, ntlm_auth handles the credentials
-             * automatically on "YR". */
-            strcpy( buf, "YR" );
-            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            /* Native NTLM: generate Type1 message directly */
+            unsigned int type1_flags = 0;
+            if (ctx_req & ISC_REQ_CONFIDENTIALITY) type1_flags |= 0x20; /* SEAL */
+            if (ctx_req & ISC_REQ_INTEGRITY) type1_flags |= 0x10; /* SIGN */
 
-            /* if the helper replied with "PW" using cached credentials failed */
-            if (!strncmp( buf, "PW", 2 ))
+            bin_len = ntlm_generate_type1( type1_flags, (unsigned char *)bin, NTLM_MAX_BUF );
+            if ((int)bin_len < 0)
             {
-                TRACE( "using cached credentials failed\n" );
-                strcpy( buf, "PW AA==" );
+                status = SEC_E_INTERNAL_ERROR;
+                goto done;
             }
-            else strcpy( buf, "OK" ); /* just do a noop on the next run */
+            TRACE( "native Type1 generated (%u bytes)\n", bin_len );
         }
         else
         {
-            strcpy( buf, "PW " );
-            encode_base64( password ? password : cred->password, password ? password_len : cred->password_len, buf + 3 );
-        }
+            /* ntlm_auth helper path (existing code) */
+            /* use cached credentials if no password was given, fall back to an empty password on failure */
+            if (!password && !cred->password)
+            {
+                strcpy( buf, "YR" );
+                if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
 
-        TRACE( "sending to ntlm_auth: %s\n", debugstr_a(buf) );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        TRACE( "ntlm_auth returned %s\n", debugstr_a(buf) );
+                if (!strncmp( buf, "PW", 2 ))
+                {
+                    TRACE( "using cached credentials failed\n" );
+                    strcpy( buf, "PW AA==" );
+                }
+                else strcpy( buf, "OK" );
+            }
+            else
+            {
+                strcpy( buf, "PW " );
+                encode_base64( password ? password : cred->password, password ? password_len : cred->password_len, buf + 3 );
+            }
 
-        if (strlen( want_flags ) > 2)
-        {
-            TRACE( "want flags are %s\n", debugstr_a(want_flags) );
-            strcpy( buf, want_flags );
+            TRACE( "sending to ntlm_auth: %s\n", debugstr_a(buf) );
             if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-            if (!strncmp( buf, "BH", 2 )) ERR( "ntlm_auth doesn't understand new command set\n" );
-        }
+            TRACE( "ntlm_auth returned %s\n", debugstr_a(buf) );
 
-        strcpy( buf, "YR" );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        TRACE( "ntlm_auth returned %s\n", buf );
-        if (strncmp( buf, "YR ", 3 ))
-        {
-            status = SEC_E_INTERNAL_ERROR;
-            goto done;
+            if (strlen( want_flags ) > 2)
+            {
+                TRACE( "want flags are %s\n", debugstr_a(want_flags) );
+                strcpy( buf, want_flags );
+                if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+                if (!strncmp( buf, "BH", 2 )) ERR( "ntlm_auth doesn't understand new command set\n" );
+            }
+
+            strcpy( buf, "YR" );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            TRACE( "ntlm_auth returned %s\n", buf );
+            if (strncmp( buf, "YR ", 3 ))
+            {
+                status = SEC_E_INTERNAL_ERROR;
+                goto done;
+            }
+            bin_len = decode_base64( buf + 3, len - 3, bin );
         }
-        bin_len = decode_base64( buf + 3, len - 3, bin );
 
         *new_ctx_handle = (LSA_SEC_HANDLE)ctx;
         status = SEC_I_CONTINUE_NEEDED;
@@ -769,19 +793,111 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
         bin_len = input->pBuffers[idx].cbBuffer;
         memcpy( bin, input->pBuffers[idx].pvBuffer, bin_len );
 
-        strcpy( buf, "TT " );
-        encode_base64( bin, bin_len, buf + 3 );
-        TRACE( "server sent: %s\n", debugstr_a(buf) );
-
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len ))) goto done;
-        TRACE( "ntlm_auth returned: %s\n", debugstr_a(buf) );
-
-        if (strncmp( buf, "KK ", 3 ) && strncmp( buf, "AF ", 3 ))
+        if (ctx->pid == NTLM_NATIVE_MODE)
         {
-            status = SEC_E_INVALID_TOKEN;
-            goto done;
+            /* Native NTLM: parse Type2, generate Type3 */
+            unsigned char server_challenge[8];
+            unsigned int neg_flags;
+            unsigned char *target_info = NULL;
+            int target_info_len = 0;
+            struct ntlm_cred *cred = (struct ntlm_cred *)cred_handle;
+            WCHAR *usernameW = NULL, *domainW = NULL, *passwordW = NULL, *workstationW = NULL;
+            int usernameW_len = 0, domainW_len = 0, passwordW_len = 0, workstationW_len = 0;
+            WCHAR compname[MAX_COMPUTERNAME_LENGTH + 1];
+            DWORD compname_len = MAX_COMPUTERNAME_LENGTH + 1;
+
+            if (ntlm_parse_type2( (const unsigned char *)bin, bin_len, server_challenge,
+                                   &neg_flags, &target_info, &target_info_len ) < 0)
+            {
+                status = SEC_E_INVALID_TOKEN;
+                goto done;
+            }
+            TRACE( "native Type2 parsed: flags=%#x, target_info_len=%d\n", neg_flags, target_info_len );
+
+            /* Get username/domain from credentials */
+            if (cred && cred->username_arg)
+            {
+                /* Extract from --username=xxx format */
+                const char *eq = strchr( cred->username_arg, '=' );
+                const char *u = eq ? eq + 1 : cred->username_arg;
+                usernameW_len = MultiByteToWideChar( CP_ACP, 0, u, -1, NULL, 0 ) - 1;
+                usernameW = malloc( (usernameW_len + 1) * sizeof(WCHAR) );
+                if (usernameW) MultiByteToWideChar( CP_ACP, 0, u, -1, usernameW, usernameW_len + 1 );
+            }
+            else
+            {
+                WKSTA_USER_INFO_1 *ui = NULL;
+                if (NetWkstaUserGetInfo( NULL, 1, (BYTE **)&ui ) == NERR_Success && ui)
+                {
+                    usernameW_len = lstrlenW( ui->wkui1_username );
+                    usernameW = malloc( (usernameW_len + 1) * sizeof(WCHAR) );
+                    if (usernameW) lstrcpyW( usernameW, ui->wkui1_username );
+                    NetApiBufferFree( ui );
+                }
+            }
+
+            if (cred && cred->domain_arg)
+            {
+                const char *eq = strchr( cred->domain_arg, '=' );
+                const char *d = eq ? eq + 1 : cred->domain_arg;
+                domainW_len = MultiByteToWideChar( CP_ACP, 0, d, -1, NULL, 0 ) - 1;
+                domainW = malloc( (domainW_len + 1) * sizeof(WCHAR) );
+                if (domainW) MultiByteToWideChar( CP_ACP, 0, d, -1, domainW, domainW_len + 1 );
+            }
+
+            /* Get password (UTF-16LE for NT hash) */
+            if (cred && cred->password)
+            {
+                passwordW_len = MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, NULL, 0 );
+                passwordW = malloc( (passwordW_len + 1) * sizeof(WCHAR) );
+                if (passwordW) MultiByteToWideChar( CP_ACP, 0, cred->password, cred->password_len, passwordW, passwordW_len + 1 );
+            }
+
+            /* Get workstation name */
+            GetComputerNameW( compname, &compname_len );
+            workstationW = compname;
+            workstationW_len = compname_len;
+
+            bin_len = ntlm_generate_type3( server_challenge, neg_flags,
+                                            usernameW ? usernameW : L"", usernameW_len,
+                                            domainW ? domainW : L"", domainW_len,
+                                            passwordW ? passwordW : L"", passwordW_len,
+                                            workstationW, workstationW_len,
+                                            target_info, target_info_len,
+                                            (unsigned char *)bin, NTLM_MAX_BUF,
+                                            (unsigned char *)ctx->session_key );
+
+            free( target_info );
+            free( usernameW );
+            free( domainW );
+            free( passwordW );
+
+            if ((int)bin_len < 0)
+            {
+                status = SEC_E_INTERNAL_ERROR;
+                goto done;
+            }
+
+            ctx->flags = neg_flags;
+            TRACE( "native Type3 generated (%u bytes)\n", bin_len );
         }
-        bin_len = decode_base64( buf + 3, len - 3, bin );
+        else
+        {
+            /* ntlm_auth helper path */
+            strcpy( buf, "TT " );
+            encode_base64( bin, bin_len, buf + 3 );
+            TRACE( "server sent: %s\n", debugstr_a(buf) );
+
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len ))) goto done;
+            TRACE( "ntlm_auth returned: %s\n", debugstr_a(buf) );
+
+            if (strncmp( buf, "KK ", 3 ) && strncmp( buf, "AF ", 3 ))
+            {
+                status = SEC_E_INVALID_TOKEN;
+                goto done;
+            }
+            bin_len = decode_base64( buf + 3, len - 3, bin );
+        }
 
         *new_ctx_handle = (LSA_SEC_HANDLE)ctx;
         status = SEC_E_OK;
@@ -822,21 +938,26 @@ static NTSTATUS NTAPI ntlm_SpInitLsaModeContext( LSA_SEC_HANDLE cred_handle, LSA
     memcpy( output->pBuffers[idx].pvBuffer, bin, bin_len );
     if (status == SEC_E_OK)
     {
-        strcpy( buf, "GF" );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-        if (len < 3) ctx->flags = 0;
-        else sscanf( buf + 3, "%x", &ctx->flags );
-
-        strcpy( buf, "GK" );
-        if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-
-        if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
-        else if (!strncmp( buf, "GK ", 3 ))
+        if (ctx->pid != NTLM_NATIVE_MODE)
         {
-            bin_len = decode_base64( buf + 3, len - 3, bin );
-            TRACE( "session key is %s\n", debugstr_a(buf + 3) );
-            memcpy( ctx->session_key, bin, bin_len );
+            /* ntlm_auth path: get flags and session key from helper */
+            strcpy( buf, "GF" );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+            if (len < 3) ctx->flags = 0;
+            else sscanf( buf + 3, "%x", &ctx->flags );
+
+            strcpy( buf, "GK" );
+            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+
+            if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
+            else if (!strncmp( buf, "GK ", 3 ))
+            {
+                bin_len = decode_base64( buf + 3, len - 3, bin );
+                TRACE( "session key is %s\n", debugstr_a(buf + 3) );
+                memcpy( ctx->session_key, bin, bin_len );
+            }
         }
+        /* else: native mode — flags and session_key already set by ntlm_generate_type3 */
 
         arc4_init( &ctx->crypt.ntlm.arc4info, ctx->session_key, 16 );
         ctx->crypt.ntlm.seq_no = 0;
