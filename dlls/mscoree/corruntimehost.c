@@ -1949,6 +1949,38 @@ __int32 WINAPI _CorExeMain(void)
 
     get_utf8_args(&argc, &argv);
 
+    /* Initialize CRT argc/argv globals so that native DLLs loaded by the
+     * managed application (e.g., C++/CLI, Qt6, MFC) can access command line
+     * arguments via __argc/__argv/__wargv.  Without this, applications like
+     * KOMPAS-3D whose native Qt6 DLLs call QApplication(argc, argv) crash
+     * because the CRT globals are zero/NULL — the managed _CorExeMain entry
+     * point bypasses the normal CRT startup that initializes them. */
+    {
+        HMODULE ucrt = GetModuleHandleW(L"ucrtbase");
+        if (!ucrt) ucrt = GetModuleHandleW(L"msvcrt");
+        if (ucrt)
+        {
+            int *p_argc = (int *)GetProcAddress(ucrt, "__argc");
+            char ***p_argv = (char ***)GetProcAddress(ucrt, "__argv");
+            WCHAR ***p_wargv = (WCHAR ***)GetProcAddress(ucrt, "__wargv");
+
+            if (p_argc && *p_argc == 0)
+            {
+                /* __wgetmainargs initializes __argc, __argv, __wargv, _environ */
+                typedef int (__cdecl *p___wgetmainargs)(int*, WCHAR***, WCHAR***, int, int*);
+                p___wgetmainargs wgetmainargs = (p___wgetmainargs)GetProcAddress(ucrt, "__wgetmainargs");
+                if (wgetmainargs)
+                {
+                    int wargc; WCHAR **wargv, **wenvp;
+                    int startinfo = 0;
+                    wgetmainargs(&wargc, &wargv, &wenvp, 0, &startinfo);
+                    TRACE("initialized CRT globals: __argc=%d __wargv[0]=%s\n",
+                          wargc, debugstr_w(wargv ? wargv[0] : NULL));
+                }
+            }
+        }
+    }
+
     GetModuleFileNameW(NULL, filename, MAX_PATH);
 
     TRACE("%s argc=%i\n", debugstr_w(filename), argc);
