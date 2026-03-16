@@ -1200,18 +1200,30 @@ static NTSTATUS NTAPI ntlm_SpAcceptLsaModeContext( LSA_SEC_HANDLE cred_handle, L
                     status = SEC_E_LOGON_DENIED;
                     goto done;
                 }
+                else if (!strncmp( buf, "BH ", 3 ))
+                {
+                    /* ntlm_auth/winbindd failed — fall back to native loopback validation.
+                     * This is the common case on systems without Samba/winbind. */
+                    unsigned int neg_flags;
+                    unsigned char session_key[16];
+
+                    TRACE( "ntlm_auth failed (%s), falling back to native validation\n", debugstr_a(buf) );
+                    ntlm_cleanup( ctx );
+                    ctx->pid = NTLM_NATIVE_MODE;
+
+                    if (ntlm_validate_type3( (unsigned char *)bin, bin_len, &neg_flags, session_key ) < 0)
+                    {
+                        status = SEC_E_LOGON_DENIED;
+                        goto done;
+                    }
+                    ctx->flags = neg_flags;
+                    memcpy( ctx->session_key, session_key, 16 );
+                    output->pBuffers[0].cbBuffer = 0;
+                    TRACE( "native Type3 accepted (loopback fallback)\n" );
+                }
                 else
                 {
-                    const char err_v3[] = "BH NT_STATUS_ACCESS_DENIED";
-                    const char err_v4[] = "BH NT_STATUS_UNSUCCESSFUL";
-
-                    if ((len >= strlen(err_v3) && !strncmp( buf, err_v3, strlen(err_v3) )) ||
-                        (len >= strlen(err_v4) && !strncmp( buf, err_v4, strlen(err_v4) )))
-                    {
-                        TRACE( "connection to winbindd failed\n" );
-                        status = SEC_E_LOGON_DENIED;
-                    }
-                    else status = SEC_E_INTERNAL_ERROR;
+                    status = SEC_E_INTERNAL_ERROR;
                     goto done;
                 }
             }
