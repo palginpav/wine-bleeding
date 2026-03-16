@@ -396,12 +396,20 @@ int ntlm_validate_type3(const unsigned char *input, int input_len,
     (void)user_len;
 
     /* For loopback (same-machine) auth, accept if Type3 is well-formed.
-     * A full implementation would verify the NTLMv2 response against the
-     * stored password hash, but for local services like SQL Server running
-     * under the same Wine prefix, this is sufficient. */
+     * Extract the NTProofStr from the NT response and use it to derive
+     * a deterministic session key. For full auth, we would need the
+     * password hash to verify the response cryptographically. */
+    {
+        const unsigned char *nt_resp = input + nt_resp_offset;
 
-    /* Generate a dummy session key for signing/sealing */
-    memset(session_key, 0, 16);
+        /* NTLMv2 response: first 16 bytes = NTProofStr (HMAC-MD5 output)
+         * Use NTProofStr as session key — it's unique per session and
+         * derived from the password. Both sides have this value. */
+        if (nt_resp_len >= 16)
+            memcpy(session_key, nt_resp, 16);
+        else
+            memset(session_key, 0, 16);
+    }
 
     return 0;
 }

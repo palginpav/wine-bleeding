@@ -1229,28 +1229,31 @@ static NTSTATUS NTAPI ntlm_SpAcceptLsaModeContext( LSA_SEC_HANDLE cred_handle, L
             }
             output->pBuffers[0].cbBuffer = 0;
 
-            strcpy( buf, "GF" );
-            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-            if (len < 3) ctx->flags = 0;
-            else sscanf( buf + 3, "%x", &ctx->flags );
-
-            strcpy( buf, "GK" );
-            if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
-
-            if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
-            else if (!strncmp( buf, "GK ", 3 ))
+            if (ctx->pid != NTLM_NATIVE_MODE)
             {
-                bin_len = decode_base64( buf + 3, len - 3, bin );
-                TRACE( "session key is %s\n", debugstr_a(buf + 3) );
-                memcpy( ctx->session_key, bin, bin_len );
-            }
+                strcpy( buf, "GF" );
+                if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+                if (len < 3) ctx->flags = 0;
+                else sscanf( buf + 3, "%x", &ctx->flags );
 
-            if (len < 3) memset( ctx->session_key, 0, 16 );
-            else if (!strncmp( buf, "BH ", 3 )) memset( ctx->session_key, 0, 16 );
-            else if (!strncmp( buf, "GK ", 3 ))
-            {
-                bin_len = decode_base64( buf + 3, len - 3, bin );
-                memcpy( ctx->session_key, bin, 16 );
+                strcpy( buf, "GK" );
+                if ((status = ntlm_chat( ctx, buf, NTLM_MAX_BUF, &len )) != SEC_E_OK) goto done;
+
+                if (!strncmp( buf, "BH", 2 )) TRACE( "no key negotiated\n" );
+                else if (!strncmp( buf, "GK ", 3 ))
+                {
+                    bin_len = decode_base64( buf + 3, len - 3, bin );
+                    TRACE( "session key is %s\n", debugstr_a(buf + 3) );
+                    memcpy( ctx->session_key, bin, bin_len );
+                }
+
+                if (len < 3) memset( ctx->session_key, 0, 16 );
+                else if (!strncmp( buf, "BH ", 3 )) memset( ctx->session_key, 0, 16 );
+                else if (!strncmp( buf, "GK ", 3 ))
+                {
+                    bin_len = decode_base64( buf + 3, len - 3, bin );
+                    memcpy( ctx->session_key, bin, 16 );
+                }
             }
         }
         arc4_init( &ctx->crypt.ntlm.arc4info, ctx->session_key, 16 );
@@ -1317,7 +1320,32 @@ static NTSTATUS NTAPI ntlm_SpQueryContextAttributes( LSA_SEC_HANDLE handle, ULON
     X(SECPKG_ATTR_AUTHORITY);
     X(SECPKG_ATTR_DCE_INFO);
     X(SECPKG_ATTR_LIFESPAN);
-    X(SECPKG_ATTR_NAMES);
+    case SECPKG_ATTR_NAMES:
+    {
+        SecPkgContext_NamesW *names = (SecPkgContext_NamesW *)buf;
+        WCHAR username[256];
+        DWORD username_len = ARRAY_SIZE(username);
+
+        if (GetUserNameW( username, &username_len ))
+        {
+            WCHAR computer[MAX_COMPUTERNAME_LENGTH + 1];
+            DWORD comp_len = MAX_COMPUTERNAME_LENGTH + 1;
+            WCHAR *full;
+            int full_len;
+
+            GetComputerNameW( computer, &comp_len );
+            full_len = comp_len + 1 + username_len; /* COMPUTER\user\0 */
+            full = RtlAllocateHeap( GetProcessHeap(), 0, full_len * sizeof(WCHAR) );
+            if (!full) return SEC_E_INSUFFICIENT_MEMORY;
+            memcpy( full, computer, comp_len * sizeof(WCHAR) );
+            full[comp_len] = '\\';
+            memcpy( full + comp_len + 1, username, username_len * sizeof(WCHAR) );
+            names->sUserName = full;
+            TRACE( "returning name %s\n", debugstr_w(full) );
+            return SEC_E_OK;
+        }
+        return SEC_E_INTERNAL_ERROR;
+    }
     X(SECPKG_ATTR_NATIVE_NAMES);
     X(SECPKG_ATTR_PACKAGE_INFO);
     X(SECPKG_ATTR_PASSWORD_EXPIRY);
