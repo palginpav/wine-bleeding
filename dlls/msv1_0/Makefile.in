@@ -4,4 +4,5 @@ IMPORTS   = netapi32 advapi32
 
 SOURCES = \
 	main.c \
+	ntlm_protocol.c \
 	unixlib.c
