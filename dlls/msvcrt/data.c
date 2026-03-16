@@ -26,6 +26,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
+/* Forward declaration for lazy-init in __p___argv/__p___wargv */
+int CDECL __wgetmainargs(int *argc, wchar_t** *wargv, wchar_t** *wenvp,
+                          int expand_wildcards, int *new_mode);
+
 static WCHAR **initial_wargv;
 static int initial_argc;
 int MSVCRT___argc = 0;
@@ -252,13 +256,35 @@ wchar_t** CDECL __p__wcmdln(void) { return &MSVCRT__wcmdln; }
 
 /*********************************************************************
  *		__p___argv (MSVCRT.@)
+ *
+ * Lazy-initialize argv if __wgetmainargs was never called.  On Windows,
+ * the CRT always initializes __argv/__wargv during DLL_PROCESS_ATTACH.
+ * Wine defers this to __wgetmainargs, but some applications (e.g.,
+ * Qt6 apps loaded through .NET/Mono) call __p___argv before
+ * __wgetmainargs and expect non-NULL.
  */
-char*** CDECL __p___argv(void) { return &MSVCRT___argv; }
+char*** CDECL __p___argv(void)
+{
+    if (!MSVCRT___argv && !MSVCRT___argc)
+    {
+        int newmode = 0;
+        __wgetmainargs(&MSVCRT___argc, &MSVCRT___wargv, &MSVCRT___winitenv, 0, &newmode);
+    }
+    return &MSVCRT___argv;
+}
 
 /*********************************************************************
  *		__p___wargv (MSVCRT.@)
  */
-wchar_t*** CDECL __p___wargv(void) { return &MSVCRT___wargv; }
+wchar_t*** CDECL __p___wargv(void)
+{
+    if (!MSVCRT___wargv && !MSVCRT___argc)
+    {
+        int newmode = 0;
+        __wgetmainargs(&MSVCRT___argc, &MSVCRT___wargv, &MSVCRT___winitenv, 0, &newmode);
+    }
+    return &MSVCRT___wargv;
+}
 
 /*********************************************************************
  *		__p__environ (MSVCRT.@)
