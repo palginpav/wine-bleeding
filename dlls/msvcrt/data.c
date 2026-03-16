@@ -361,9 +361,24 @@ void msvcrt_init_args(void)
   MSVCRT__acmdln = _strdup( GetCommandLineA() );
   MSVCRT__wcmdln = _wcsdup( GetCommandLineW() );
   initial_wargv  = cmdline_to_argv( GetCommandLineW(), &initial_argc );
+
+  /* On Windows, ucrtbase.dll does NOT initialize __argc/__argv during
+   * DLL_PROCESS_ATTACH.  They remain 0/NULL until the application's CRT
+   * startup (e.g., mainCRTStartup in VCRUNTIME140) explicitly calls
+   * __wgetmainargs.  Some applications (e.g., Qt6 in KOMPAS-3D) compare
+   * their own argc with CRT __argc — if they match, Qt6 iterates over
+   * the application's argv array using __argc as the count.  When the
+   * application's argv contains NULL entries, this crashes.
+   *
+   * For ucrtbase (_MSVCR_VER >= 140), defer __argc/__argv initialization
+   * to __wgetmainargs/__getmainargs, matching Windows behavior.  For
+   * older CRT versions (msvcrt, msvcr*.dll), keep eager initialization
+   * for backward compatibility. */
+#if _MSVCR_VER < 140
   MSVCRT___argc  = initial_argc;
   MSVCRT___wargv = initial_wargv;
   MSVCRT___argv  = build_argv( initial_wargv );
+#endif
 
   TRACE("got %s, wide = %s argc=%d\n", debugstr_a(MSVCRT__acmdln),
         debugstr_w(MSVCRT__wcmdln),MSVCRT___argc);
