@@ -1382,10 +1382,11 @@ NetUserGetInfo(LPCWSTR servername, LPCWSTR username, DWORD level,
         NetApiBufferFree(ui0);
         ui->usri1_password[0] = 0;
         ui->usri1_password_age = 0;
-        ui->usri1_priv = 0;
+        /* On Wine, the current user always has admin privileges */
+        ui->usri1_priv = USER_PRIV_ADMIN; /* 2 */
         GetEnvironmentVariableW(L"HOME", ui->usri1_home_dir,home_dir_sz);
         ui->usri1_comment[0] = 0;
-        ui->usri1_flags = 0;
+        ui->usri1_flags = UF_NORMAL_ACCOUNT | UF_DONT_EXPIRE_PASSWD;
         ui->usri1_script_path[0] = 0;
         break;
       }
@@ -2440,8 +2441,79 @@ NET_API_STATUS WINAPI NetLocalGroupEnum(
     LPDWORD totalentries,
     PDWORD_PTR resumehandle)
 {
-    FIXME("(%s %ld %p %ld %p %p %p) stub!\n", debugstr_w(servername),
+    /* Standard Windows local groups that applications expect to exist */
+    static const WCHAR *builtin_groups[] = {
+        L"Administrators",
+        L"Users",
+        L"Guests",
+        L"Backup Operators",
+        L"Power Users",
+    };
+    DWORD i, count = ARRAY_SIZE(builtin_groups);
+
+    TRACE("(%s %ld %p %ld %p %p %p)\n", debugstr_w(servername),
           level, bufptr, prefmaxlen, entriesread, totalentries, resumehandle);
+
+    if (level == 0)
+    {
+        DWORD size = 0;
+        BYTE *ptr;
+        LOCALGROUP_INFO_0 *info;
+
+        for (i = 0; i < count; i++)
+            size += sizeof(LOCALGROUP_INFO_0) + (lstrlenW(builtin_groups[i]) + 1) * sizeof(WCHAR);
+
+        if (NetApiBufferAllocate(size, (LPVOID *)bufptr) != NERR_Success)
+            return ERROR_NOT_ENOUGH_MEMORY;
+
+        info = (LOCALGROUP_INFO_0 *)*bufptr;
+        ptr = *bufptr + count * sizeof(LOCALGROUP_INFO_0);
+
+        for (i = 0; i < count; i++)
+        {
+            DWORD len = (lstrlenW(builtin_groups[i]) + 1) * sizeof(WCHAR);
+            info[i].lgrpi0_name = (WCHAR *)ptr;
+            memcpy(ptr, builtin_groups[i], len);
+            ptr += len;
+        }
+
+        *entriesread = count;
+        *totalentries = count;
+        return NERR_Success;
+    }
+    else if (level == 1)
+    {
+        DWORD size = 0;
+        BYTE *ptr;
+        LOCALGROUP_INFO_1 *info;
+        static const WCHAR commentW[] = L"";
+
+        for (i = 0; i < count; i++)
+            size += sizeof(LOCALGROUP_INFO_1) + (lstrlenW(builtin_groups[i]) + 1) * sizeof(WCHAR) + sizeof(commentW);
+
+        if (NetApiBufferAllocate(size, (LPVOID *)bufptr) != NERR_Success)
+            return ERROR_NOT_ENOUGH_MEMORY;
+
+        info = (LOCALGROUP_INFO_1 *)*bufptr;
+        ptr = *bufptr + count * sizeof(LOCALGROUP_INFO_1);
+
+        for (i = 0; i < count; i++)
+        {
+            DWORD len = (lstrlenW(builtin_groups[i]) + 1) * sizeof(WCHAR);
+            info[i].lgrpi1_name = (WCHAR *)ptr;
+            memcpy(ptr, builtin_groups[i], len);
+            ptr += len;
+            info[i].lgrpi1_comment = (WCHAR *)ptr;
+            memcpy(ptr, commentW, sizeof(commentW));
+            ptr += sizeof(commentW);
+        }
+
+        *entriesread = count;
+        *totalentries = count;
+        return NERR_Success;
+    }
+
+    FIXME("level %ld not implemented\n", level);
     *entriesread = 0;
     *totalentries = 0;
     return NERR_Success;
@@ -2490,9 +2562,74 @@ NET_API_STATUS WINAPI NetLocalGroupGetMembers(
     LPDWORD totalentries,
     PDWORD_PTR resumehandle)
 {
-    FIXME("(%s %s %ld %p %ld, %p %p %p) stub!\n", debugstr_w(servername),
+    TRACE("(%s %s %ld %p %ld, %p %p %p)\n", debugstr_w(servername),
           debugstr_w(localgroupname), level, bufptr, prefmaxlen, entriesread,
           totalentries, resumehandle);
+
+    /* For all levels, return current user as member of every local group.
+     * This is a simplification — on real Windows, group membership comes
+     * from SAM database. On Wine, the current user has full admin rights. */
+
+    if (level == 0)
+    {
+        /* LOCALGROUP_MEMBERS_INFO_0: SID only */
+        LOCALGROUP_MEMBERS_INFO_0 *info;
+        HANDLE token;
+        TOKEN_USER *user;
+        DWORD sid_len, token_len;
+
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+        GetTokenInformation(token, TokenUser, NULL, 0, &token_len);
+        user = malloc(token_len);
+        GetTokenInformation(token, TokenUser, user, token_len, &token_len);
+        CloseHandle(token);
+
+        sid_len = GetLengthSid(user->User.Sid);
+        NetApiBufferAllocate(sizeof(*info) + sid_len, (LPVOID *)bufptr);
+        info = (LOCALGROUP_MEMBERS_INFO_0 *)*bufptr;
+        info->lgrmi0_sid = (PSID)(*bufptr + sizeof(*info));
+        CopySid(sid_len, info->lgrmi0_sid, user->User.Sid);
+        free(user);
+
+        *entriesread = 1;
+        *totalentries = 1;
+        return NERR_Success;
+    }
+
+    if (level == 1)
+    {
+        /* LOCALGROUP_MEMBERS_INFO_1: SID + SidUsage + Name */
+        LOCALGROUP_MEMBERS_INFO_1 *info;
+        HANDLE token;
+        TOKEN_USER *user;
+        WCHAR username[256], domain[256];
+        DWORD sid_len, token_len, ulen = 256, dlen = 256;
+        SID_NAME_USE use;
+        DWORD name_len;
+
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+        GetTokenInformation(token, TokenUser, NULL, 0, &token_len);
+        user = malloc(token_len);
+        GetTokenInformation(token, TokenUser, user, token_len, &token_len);
+        CloseHandle(token);
+
+        LookupAccountSidW(NULL, user->User.Sid, username, &ulen, domain, &dlen, &use);
+        sid_len = GetLengthSid(user->User.Sid);
+        name_len = lstrlenW(username) + 1;
+
+        NetApiBufferAllocate(sizeof(*info) + sid_len + name_len * sizeof(WCHAR), (LPVOID *)bufptr);
+        info = (LOCALGROUP_MEMBERS_INFO_1 *)*bufptr;
+        info->lgrmi1_sid = (PSID)(*bufptr + sizeof(*info));
+        CopySid(sid_len, info->lgrmi1_sid, user->User.Sid);
+        info->lgrmi1_sidusage = use;
+        info->lgrmi1_name = (WCHAR *)(*bufptr + sizeof(*info) + sid_len);
+        lstrcpyW(info->lgrmi1_name, username);
+        free(user);
+
+        *entriesread = 1;
+        *totalentries = 1;
+        return NERR_Success;
+    }
 
     if (level == 3)
     {
