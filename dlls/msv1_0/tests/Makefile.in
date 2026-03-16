@@ -1,0 +1,5 @@
+TESTDLL   = msv1_0.dll
+IMPORTS   = secur32
+
+SOURCES = \
+	ntlm.c
