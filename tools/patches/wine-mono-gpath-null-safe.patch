@@ -1,0 +1,14 @@
+diff --git a/mono/eglib/gpath.c b/mono/eglib/gpath.c
+index e6ec47b05f1..b01bad8c9f9 100644
+--- a/mono/eglib/gpath.c
++++ b/mono/eglib/gpath.c
+@@ -112,7 +112,8 @@ g_path_get_dirname (const gchar *filename)
+ {
+ 	char *p, *r;
+ 	size_t count;
+-	g_return_val_if_fail (filename != NULL, NULL);
++	if (filename == NULL)
++		return g_strdup (".");
+ 
+ 	p = strrchr_seperator (filename);
+ 	if (p == NULL)
