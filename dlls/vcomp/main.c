@@ -83,6 +83,10 @@ struct vcomp_thread_data
     unsigned int            dynamic_type;
     unsigned int            dynamic_begin;
     unsigned int            dynamic_end;
+
+    /* dynamic i8 (64-bit loop counters) */
+    ULONG64                 dynamic_begin_i8;
+    ULONG64                 dynamic_end_i8;
 };
 
 struct vcomp_team_data
@@ -1383,6 +1387,151 @@ int CDECL _vcomp_for_dynamic_next(unsigned int *begin, unsigned int *end)
     }
 
     return 0;
+}
+
+void CDECL _vcomp_for_dynamic_init_i8(unsigned int flags, ULONG64 first, ULONG64 last,
+                                      LONG64 step, ULONG64 chunksize)
+{
+    ULONG64 iterations, per_thread, remaining;
+    struct vcomp_thread_data *thread_data = vcomp_init_thread_data();
+    struct vcomp_team_data *team_data = thread_data->team;
+    struct vcomp_task_data *task_data = thread_data->task;
+    int num_threads = team_data ? team_data->num_threads : 1;
+    int thread_num = thread_data->thread_num;
+    unsigned int type = flags & ~VCOMP_DYNAMIC_FLAGS_INCREMENT;
+
+    TRACE("(%u, %s, %s, %s, %s)\n", flags, wine_dbgstr_longlong(first),
+          wine_dbgstr_longlong(last), wine_dbgstr_longlong(step),
+          wine_dbgstr_longlong(chunksize));
+
+    if (step <= 0)
+    {
+        thread_data->dynamic_type = 0;
+        return;
+    }
+
+    if (flags & VCOMP_DYNAMIC_FLAGS_INCREMENT)
+        iterations = 1 + (last - first) / step;
+    else
+    {
+        iterations = 1 + (first - last) / step;
+        step *= -1;
+    }
+
+    if (type == VCOMP_DYNAMIC_FLAGS_STATIC)
+    {
+        per_thread = iterations / num_threads;
+        remaining  = iterations - per_thread * num_threads;
+
+        if ((unsigned int)thread_num < remaining)
+            per_thread++;
+        else if (per_thread)
+            first += remaining * step;
+        else
+        {
+            thread_data->dynamic_type = 0;
+            return;
+        }
+
+        thread_data->dynamic_type     = VCOMP_DYNAMIC_FLAGS_STATIC;
+        thread_data->dynamic_begin_i8 = first + per_thread * thread_num * step;
+        thread_data->dynamic_end_i8   = thread_data->dynamic_begin_i8 + (per_thread - 1) * step;
+    }
+    else
+    {
+        if (type != VCOMP_DYNAMIC_FLAGS_CHUNKED &&
+            type != VCOMP_DYNAMIC_FLAGS_GUIDED)
+        {
+            FIXME("unsupported flags %u\n", flags);
+            type = VCOMP_DYNAMIC_FLAGS_GUIDED;
+        }
+
+        EnterCriticalSection(&vcomp_section);
+        thread_data->dynamic++;
+        thread_data->dynamic_type = type;
+        if ((int)(thread_data->dynamic - task_data->dynamic) > 0)
+        {
+            task_data->dynamic              = thread_data->dynamic;
+            task_data->dynamic_first        = (unsigned int)first;
+            task_data->dynamic_last         = (unsigned int)last;
+            task_data->dynamic_iterations   = (unsigned int)iterations;
+            task_data->dynamic_step         = (int)step;
+            task_data->dynamic_chunksize    = chunksize ? (unsigned int)chunksize : 1;
+        }
+        LeaveCriticalSection(&vcomp_section);
+    }
+}
+
+int CDECL _vcomp_for_dynamic_next_i8(ULONG64 *begin, ULONG64 *end)
+{
+    struct vcomp_thread_data *thread_data = vcomp_init_thread_data();
+
+    TRACE("(%p, %p)\n", begin, end);
+
+    if (thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_STATIC)
+    {
+        *begin = thread_data->dynamic_begin_i8;
+        *end   = thread_data->dynamic_end_i8;
+        thread_data->dynamic_type = 0;
+        return 1;
+    }
+    else if (thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_CHUNKED ||
+             thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_GUIDED)
+    {
+        /* Delegate to 32-bit version for chunked/guided scheduling */
+        unsigned int begin32, end32;
+        int ret = _vcomp_for_dynamic_next(&begin32, &end32);
+        *begin = begin32;
+        *end = end32;
+        return ret;
+    }
+
+    return 0;
+}
+
+void CDECL _vcomp_ordered_begin(void)
+{
+    TRACE("()\n");
+    EnterCriticalSection(&vcomp_section);
+}
+
+void CDECL _vcomp_ordered_end(void)
+{
+    TRACE("()\n");
+    LeaveCriticalSection(&vcomp_section);
+}
+
+void CDECL _vcomp_ordered_loop_end(void)
+{
+    TRACE("()\n");
+    /* No-op: loop end cleanup for ordered loops is handled by the
+     * normal for loop end functions. */
+}
+
+void CDECL _vcomp_master_barrier(void)
+{
+    TRACE("()\n");
+    _vcomp_barrier();
+}
+
+static void *copyprivate_value;
+
+void CDECL _vcomp_copyprivate_broadcast(void *value)
+{
+    TRACE("(%p)\n", value);
+    EnterCriticalSection(&vcomp_section);
+    copyprivate_value = value;
+    LeaveCriticalSection(&vcomp_section);
+}
+
+void * CDECL _vcomp_copyprivate_receive(void)
+{
+    void *value;
+    TRACE("()\n");
+    EnterCriticalSection(&vcomp_section);
+    value = copyprivate_value;
+    LeaveCriticalSection(&vcomp_section);
+    return value;
 }
 
 int CDECL omp_in_parallel(void)

@@ -52,14 +52,14 @@
 @ cdecl _vcomp_atomic_xor_i4(ptr long)
 @ cdecl _vcomp_atomic_xor_i8(ptr int64)
 @ cdecl _vcomp_barrier()
-@ stub _vcomp_copyprivate_broadcast
-@ stub _vcomp_copyprivate_receive
+@ cdecl _vcomp_copyprivate_broadcast(ptr) vcomp._vcomp_copyprivate_broadcast
+@ cdecl _vcomp_copyprivate_receive() vcomp._vcomp_copyprivate_receive
 @ cdecl _vcomp_enter_critsect(ptr)
 @ cdecl _vcomp_flush()
 @ cdecl _vcomp_for_dynamic_init(long long long long long)
-@ stub _vcomp_for_dynamic_init_i8
+@ cdecl _vcomp_for_dynamic_init_i8(long int64 int64 int64 int64) vcomp._vcomp_for_dynamic_init_i8
 @ cdecl _vcomp_for_dynamic_next(ptr ptr)
-@ stub _vcomp_for_dynamic_next_i8
+@ cdecl _vcomp_for_dynamic_next_i8(ptr ptr) vcomp._vcomp_for_dynamic_next_i8
 @ cdecl _vcomp_for_static_end()
 @ cdecl _vcomp_for_static_init(long long long long ptr ptr ptr ptr ptr)
 @ cdecl _vcomp_for_static_init_i8(int64 int64 int64 int64 ptr ptr ptr ptr ptr)
@@ -68,12 +68,12 @@
 @ varargs _vcomp_fork(long long ptr)
 @ cdecl _vcomp_get_thread_num()
 @ cdecl _vcomp_leave_critsect(ptr)
-@ stub _vcomp_master_barrier
+@ cdecl _vcomp_master_barrier() vcomp._vcomp_master_barrier
 @ cdecl _vcomp_master_begin()
 @ cdecl _vcomp_master_end()
-@ stub _vcomp_ordered_begin
-@ stub _vcomp_ordered_end
-@ stub _vcomp_ordered_loop_end
+@ cdecl _vcomp_ordered_begin() vcomp._vcomp_ordered_begin
+@ cdecl _vcomp_ordered_end() vcomp._vcomp_ordered_end
+@ cdecl _vcomp_ordered_loop_end() vcomp._vcomp_ordered_loop_end
 @ cdecl _vcomp_reduction_i1(long ptr long)
 @ cdecl _vcomp_reduction_i2(long ptr long)
 @ cdecl _vcomp_reduction_i4(long ptr long)
