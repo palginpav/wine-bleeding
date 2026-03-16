@@ -1,0 +1,42 @@
+diff --git a/mcs/class/System.Runtime.Remoting/System.Runtime.Remoting.Channels.Tcp/TcpChannel.cs b/mcs/class/System.Runtime.Remoting/System.Runtime.Remoting.Channels.Tcp/TcpChannel.cs
+index be93aecdd40..43e97b17a3f 100644
+--- a/mcs/class/System.Runtime.Remoting/System.Runtime.Remoting.Channels.Tcp/TcpChannel.cs
++++ b/mcs/class/System.Runtime.Remoting/System.Runtime.Remoting.Channels.Tcp/TcpChannel.cs
+@@ -34,11 +34,20 @@
+ 
+ namespace System.Runtime.Remoting.Channels.Tcp
+ {
+-	public class TcpChannel : IChannelReceiver, IChannel, IChannelSender
++	public class TcpChannel : IChannelReceiver, IChannel, IChannelSender, ISecurableChannel
+ 	{
+ 		private TcpClientChannel _clientChannel;
+ 		private TcpServerChannel _serverChannel;
+ 		private string _name = "tcp";
++		private bool _isSecured;
++
++		// ISecurableChannel implementation - security is not actually
++		// enforced on Mono/Wine, but we accept the flag to avoid
++		// RemotingException when ensureSecurity=true is requested.
++		public bool IsSecured {
++			get { return _isSecured; }
++			set { _isSecured = value; }
++		}
+ 		private int _priority = 1;
+ 	
+ 		public TcpChannel ()
+diff --git a/mcs/class/corlib/System.Runtime.Remoting.Channels/ServerDispatchSinkProvider.cs b/mcs/class/corlib/System.Runtime.Remoting.Channels/ServerDispatchSinkProvider.cs
+index 789e022673c..322817442b9 100644
+--- a/mcs/class/corlib/System.Runtime.Remoting.Channels/ServerDispatchSinkProvider.cs
++++ b/mcs/class/corlib/System.Runtime.Remoting.Channels/ServerDispatchSinkProvider.cs
+@@ -51,7 +51,10 @@ public IServerChannelSinkProvider Next
+ 			}
+ 
+ 			set {
+-				throw new NotSupportedException ();
++				// ServerDispatchSinkProvider is always the last in the
++				// chain. On .NET Framework, setting Next is a no-op.
++				// Throwing NotSupportedException breaks applications
++				// like BarTender/Maestro that build custom sink chains.
+ 			}
+ 		}
+ 

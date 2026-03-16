@@ -14,6 +14,11 @@ MONO_PATCHES=(
     "$MONO_PATCH_DIR/wine-mono-cabarc-ascii-path.patch"
     "$MONO_PATCH_DIR/wine-mono-combobox-reentrancy.patch"
     "$MONO_PATCH_DIR/wine-mono-listbox-reentrancy.patch"
+    "$MONO_PATCH_DIR/wine-mono-com-event-provider.patch"
+    "$MONO_PATCH_DIR/wine-mono-exception-code.patch"
+    "$MONO_PATCH_DIR/wine-mono-ipc-boolean-properties.patch"
+    "$MONO_PATCH_DIR/wine-mono-switch-i8-selector.patch"
+    "$MONO_PATCH_DIR/wine-mono-wine-path-mapping.patch"
 )
 MSCOREE_HEADER="$WINE_ROOT/dlls/mscoree/mscoree_private.h"
 
@@ -92,6 +97,21 @@ apply_patch_if_needed() {
     case "$patch_name" in
         wine-mono-combobox-reentrancy.patch|wine-mono-listbox-reentrancy.patch)
             apply_dir="$MONO_SRC_DIR/winforms"
+            ;;
+        wine-mono-com-event-provider.patch)
+            apply_dir="$MONO_SRC_DIR/mono"
+            ;;
+        wine-mono-exception-code.patch)
+            apply_dir="$MONO_SRC_DIR/mono"
+            ;;
+        wine-mono-ipc-boolean-properties.patch)
+            apply_dir="$MONO_SRC_DIR/mono"
+            ;;
+        wine-mono-switch-i8-selector.patch)
+            apply_dir="$MONO_SRC_DIR/mono"
+            ;;
+        wine-mono-wine-path-mapping.patch)
+            apply_dir="$MONO_SRC_DIR/mono"
             ;;
     esac
 
