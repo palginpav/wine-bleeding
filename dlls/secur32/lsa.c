@@ -738,26 +738,84 @@ static SECURITY_STATUS WINAPI lsa_QueryContextAttributesA(CtxtHandle *context, U
 
 static SECURITY_STATUS WINAPI lsa_ImpersonateSecurityContext(CtxtHandle *context)
 {
+    HANDLE process_token, imp_token;
+    SECURITY_QUALITY_OF_SERVICE sqos;
+    OBJECT_ATTRIBUTES attr;
+    NTSTATUS status;
+
     TRACE("%p\n", context);
     if (!context) return SEC_E_INVALID_HANDLE;
 
-    /* On Wine, impersonation sets the thread token to match the authenticated
-     * client.  For local loopback authentication (same machine), the client
-     * IS the current user, so impersonation is effectively a no-op — the
-     * thread already runs as the authenticated user.
+    /* Create an impersonation token from the current process token.
+     * On Windows, this would use the authenticated client's token from
+     * the NTLM context.  For Wine's loopback authentication, the client
+     * IS the current user, so we duplicate the process token as an
+     * impersonation token and set it on the current thread.
      *
-     * A full implementation would call NtSetInformationThread with the
-     * impersonation token from the NTLM context.  For now, returning
-     * SEC_E_OK is sufficient for applications like SQL Server that check
-     * the return code before proceeding with login validation. */
+     * This enables applications like SQL Server, IIS, and WCF services
+     * to call OpenThreadToken/GetTokenInformation after impersonation
+     * and get the expected user SID. */
+
+    if (!OpenProcessToken( GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &process_token ))
+    {
+        ERR( "OpenProcessToken failed: %lu\n", GetLastError() );
+        return SEC_E_INTERNAL_ERROR;
+    }
+
+    sqos.Length = sizeof(sqos);
+    sqos.ImpersonationLevel = SecurityImpersonation;
+    sqos.ContextTrackingMode = SECURITY_STATIC_TRACKING;
+    sqos.EffectiveOnly = FALSE;
+
+    attr.Length = sizeof(attr);
+    attr.RootDirectory = NULL;
+    attr.ObjectName = NULL;
+    attr.Attributes = 0;
+    attr.SecurityDescriptor = NULL;
+    attr.SecurityQualityOfService = &sqos;
+
+    status = NtDuplicateToken( process_token, TOKEN_ALL_ACCESS, &attr,
+                               FALSE, TokenImpersonation, &imp_token );
+    CloseHandle( process_token );
+
+    if (status)
+    {
+        ERR( "NtDuplicateToken failed: %#lx\n", status );
+        return SEC_E_INTERNAL_ERROR;
+    }
+
+    status = NtSetInformationThread( GetCurrentThread(), ThreadImpersonationToken,
+                                     &imp_token, sizeof(imp_token) );
+    CloseHandle( imp_token );
+
+    if (status)
+    {
+        ERR( "NtSetInformationThread failed: %#lx\n", status );
+        return SEC_E_INTERNAL_ERROR;
+    }
+
+    TRACE( "thread impersonation token set successfully\n" );
     return SEC_E_OK;
 }
 
 static SECURITY_STATUS WINAPI lsa_RevertSecurityContext(CtxtHandle *context)
 {
+    HANDLE null_token = NULL;
+    NTSTATUS status;
+
     TRACE("%p\n", context);
     if (!context) return SEC_E_INVALID_HANDLE;
-    /* Revert from impersonation — no-op for loopback auth */
+
+    /* Remove impersonation token from current thread */
+    status = NtSetInformationThread( GetCurrentThread(), ThreadImpersonationToken,
+                                     &null_token, sizeof(null_token) );
+    if (status)
+    {
+        ERR( "NtSetInformationThread (revert) failed: %#lx\n", status );
+        return SEC_E_INTERNAL_ERROR;
+    }
+
+    TRACE( "thread impersonation reverted\n" );
     return SEC_E_OK;
 }
 
