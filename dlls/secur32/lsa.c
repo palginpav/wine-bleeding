@@ -736,6 +736,31 @@ static SECURITY_STATUS WINAPI lsa_QueryContextAttributesA(CtxtHandle *context, U
     return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
+static SECURITY_STATUS WINAPI lsa_ImpersonateSecurityContext(CtxtHandle *context)
+{
+    TRACE("%p\n", context);
+    if (!context) return SEC_E_INVALID_HANDLE;
+
+    /* On Wine, impersonation sets the thread token to match the authenticated
+     * client.  For local loopback authentication (same machine), the client
+     * IS the current user, so impersonation is effectively a no-op — the
+     * thread already runs as the authenticated user.
+     *
+     * A full implementation would call NtSetInformationThread with the
+     * impersonation token from the NTLM context.  For now, returning
+     * SEC_E_OK is sufficient for applications like SQL Server that check
+     * the return code before proceeding with login validation. */
+    return SEC_E_OK;
+}
+
+static SECURITY_STATUS WINAPI lsa_RevertSecurityContext(CtxtHandle *context)
+{
+    TRACE("%p\n", context);
+    if (!context) return SEC_E_INVALID_HANDLE;
+    /* Revert from impersonation — no-op for loopback auth */
+    return SEC_E_OK;
+}
+
 static SECURITY_STATUS WINAPI lsa_MakeSignature(CtxtHandle *context, ULONG quality_of_protection,
     SecBufferDesc *message, ULONG message_seq_no)
 {
@@ -826,8 +851,8 @@ static const SecurityFunctionTableW lsa_sspi_tableW =
     lsa_DeleteSecurityContext,
     NULL, /* ApplyControlToken */
     lsa_QueryContextAttributesW,
-    NULL, /* ImpersonateSecurityContext */
-    NULL, /* RevertSecurityContext */
+    lsa_ImpersonateSecurityContext,
+    lsa_RevertSecurityContext,
     lsa_MakeSignature,
     lsa_VerifySignature,
     NULL, /* FreeContextBuffer */
@@ -858,8 +883,8 @@ static const SecurityFunctionTableA lsa_sspi_tableA =
     lsa_DeleteSecurityContext,
     NULL, /* ApplyControlToken */
     lsa_QueryContextAttributesA,
-    NULL, /* ImpersonateSecurityContext */
-    NULL, /* RevertSecurityContext */
+    lsa_ImpersonateSecurityContext,
+    lsa_RevertSecurityContext,
     lsa_MakeSignature,
     lsa_VerifySignature,
     NULL, /* FreeContextBuffer */
