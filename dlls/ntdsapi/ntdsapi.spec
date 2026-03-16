@@ -30,7 +30,7 @@
 @ stub DsGetDomainControllerInfoW
 @ stub DsGetRdnW
 @ stdcall DsGetSpnA(long str str long long ptr ptr ptr ptr)
-@ stub DsGetSpnW
+@ stdcall DsGetSpnW(long wstr wstr long long ptr ptr ptr ptr)
 @ stub DsInheritSecurityIdentityA
 @ stub DsInheritSecurityIdentityW
 @ stub DsIsMangledDnA
