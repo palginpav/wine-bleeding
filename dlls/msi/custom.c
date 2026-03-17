@@ -38,6 +38,8 @@
 #include "wine/asm.h"
 #include "wine/debug.h"
 #include "wine/exception.h"
+#include "mscoree.h"
+#include "metahost.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msi);
 
@@ -1039,6 +1041,124 @@ static UINT HANDLE_CustomType18( MSIPACKAGE *package, const WCHAR *source, const
     return wait_process_handle( package, type, handle, action );
 }
 
+typedef HRESULT (WINAPI *pCLRCreateInstance)(REFCLSID, REFIID, LPVOID *);
+
+static const GUID msi_CLSID_CLRMetaHost =
+    {0x9280188d,0x0e8e,0x4867,{0xb3,0x0c,0x7f,0xa8,0x38,0x84,0xe8,0xde}};
+static const GUID msi_IID_ICLRMetaHost =
+    {0xd332db9e,0xb9b3,0x4125,{0x82,0x07,0xa1,0x48,0x84,0xf5,0x32,0x16}};
+static const GUID msi_IID_ICLRRuntimeInfo =
+    {0xbd39d1d2,0xba2f,0x486a,{0x89,0xb0,0xb4,0xb0,0xcb,0x46,0x68,0x91}};
+static const GUID msi_CLSID_CLRRuntimeHost =
+    {0x90f1a06e,0x7712,0x4762,{0x86,0xb5,0x7a,0x5e,0xba,0x6b,0xdb,0x02}};
+static const GUID msi_IID_ICLRRuntimeHost =
+    {0x90f1a06c,0x7712,0x4762,{0x86,0xb5,0x7a,0x5e,0xba,0x6b,0xdb,0x02}};
+
+static UINT HANDLE_CustomType20( MSIPACKAGE *package, const WCHAR *source, const WCHAR *target,
+                                 INT type, const WCHAR *action )
+{
+    MSIBINARY *binary;
+    HRESULT hr;
+    ICLRMetaHost *metahost = NULL;
+    ICLRRuntimeInfo *runtimeinfo = NULL;
+    ICLRRuntimeHost *runtimehost = NULL;
+    HMODULE hmscoree;
+    pCLRCreateInstance create_instance;
+    DWORD ret_val = 0;
+    WCHAR *class_and_method, *separator;
+    MSIHANDLE hsession;
+    WCHAR session_str[16], type_name[512], method_name[256];
+    size_t class_len;
+
+    if (!(binary = get_temp_binary(package, source)))
+        return ERROR_FUNCTION_FAILED;
+
+    TRACE("managed custom action: source=%s target=%s tempfile=%s\n",
+          debugstr_w(source), debugstr_w(target), debugstr_w(binary->tmpfile));
+
+    separator = wcschr(target, '!');
+    class_and_method = separator ? separator + 1 : (WCHAR *)target;
+
+    separator = wcsrchr(class_and_method, '.');
+    if (!separator)
+    {
+        ERR("invalid managed custom action target: %s\n", debugstr_w(target));
+        return ERROR_FUNCTION_FAILED;
+    }
+
+    class_len = separator - class_and_method;
+    if (class_len >= ARRAY_SIZE(type_name)) return ERROR_FUNCTION_FAILED;
+    memcpy(type_name, class_and_method, class_len * sizeof(WCHAR));
+    type_name[class_len] = 0;
+    lstrcpynW(method_name, separator + 1, ARRAY_SIZE(method_name));
+
+    TRACE("assembly=%s type=%s method=%s\n",
+          debugstr_w(binary->tmpfile), debugstr_w(type_name), debugstr_w(method_name));
+
+    hmscoree = LoadLibraryW(L"mscoree.dll");
+    if (!hmscoree)
+    {
+        ERR("failed to load mscoree.dll\n");
+        return ERROR_FUNCTION_FAILED;
+    }
+    create_instance = (pCLRCreateInstance)GetProcAddress(hmscoree, "CLRCreateInstance");
+    if (!create_instance)
+    {
+        ERR("CLRCreateInstance not found in mscoree.dll\n");
+        FreeLibrary(hmscoree);
+        return ERROR_FUNCTION_FAILED;
+    }
+
+    hsession = alloc_msihandle(&package->hdr);
+    swprintf(session_str, ARRAY_SIZE(session_str), L"%lu", hsession);
+
+    hr = create_instance(&msi_CLSID_CLRMetaHost, &msi_IID_ICLRMetaHost, (void **)&metahost);
+    if (FAILED(hr))
+    {
+        ERR("CLRCreateInstance failed: %#lx\n", hr);
+        MsiCloseHandle(hsession);
+        FreeLibrary(hmscoree);
+        return ERROR_FUNCTION_FAILED;
+    }
+
+    hr = ICLRMetaHost_GetRuntime(metahost, L"v4.0.30319",
+                                 &msi_IID_ICLRRuntimeInfo, (void **)&runtimeinfo);
+    if (FAILED(hr)) goto done;
+
+    hr = ICLRRuntimeInfo_GetInterface(runtimeinfo, &msi_CLSID_CLRRuntimeHost,
+                                      &msi_IID_ICLRRuntimeHost, (void **)&runtimehost);
+    if (FAILED(hr)) goto done;
+
+    hr = ICLRRuntimeHost_Start(runtimehost);
+    if (FAILED(hr) && hr != S_FALSE) goto done;
+
+    hr = ICLRRuntimeHost_ExecuteInDefaultAppDomain(runtimehost,
+            binary->tmpfile, type_name, method_name, session_str, &ret_val);
+    if (FAILED(hr))
+        ERR("ExecuteInDefaultAppDomain failed: %#lx (%s %s %s)\n",
+            hr, debugstr_w(binary->tmpfile), debugstr_w(type_name), debugstr_w(method_name));
+    else
+        TRACE("managed custom action returned %lu\n", ret_val);
+
+done:
+    if (runtimehost) ICLRRuntimeHost_Release(runtimehost);
+    if (runtimeinfo) ICLRRuntimeInfo_Release(runtimeinfo);
+    if (metahost) ICLRMetaHost_Release(metahost);
+    MsiCloseHandle(hsession);
+    FreeLibrary(hmscoree);
+
+    if (FAILED(hr)) return ERROR_FUNCTION_FAILED;
+
+    switch (ret_val)
+    {
+    case 0: return ERROR_FUNCTION_NOT_CALLED;
+    case 1: return ERROR_SUCCESS;
+    case 2: return ERROR_INSTALL_USEREXIT;
+    case 3: return ERROR_INSTALL_FAILURE;
+    default: return ERROR_SUCCESS;
+    }
+}
+
 static UINT HANDLE_CustomType19( MSIPACKAGE *package, const WCHAR *source, const WCHAR *target,
                                  INT type, const WCHAR *action )
 {
@@ -1630,6 +1750,10 @@ UINT ACTION_CustomAction(MSIPACKAGE *package, const WCHAR *action)
     case 53: /* JScript/VBScript text specified by a property value */
     case 54:
         rc = HANDLE_CustomType53_54( package, source, target, type, action );
+        break;
+    case 20: /* .NET assembly from Binary table (managed custom action, 32-bit) */
+    case 48: /* .NET assembly from Binary table (managed custom action, 64-bit) */
+        rc = HANDLE_CustomType20( package, source, target, type, action );
         break;
     default:
         FIXME( "unhandled action type %u (%s %s)\n", type & CUSTOM_ACTION_TYPE_MASK, debugstr_w(source),
