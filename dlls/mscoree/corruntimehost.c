@@ -2114,12 +2114,20 @@ BOOL WINAPI _CorDllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
         {
             if (!NativeEntryPoint)
                 DisableThreadLibraryCalls(hinstDLL);
+            else
+                TRACE("mixed-mode DLL %p has native entrypoint %p\n", hinstDLL, NativeEntryPoint);
             FixupVTable_Assembly(hinstDLL,assembly);
         }
         assembly_release(assembly);
         /* FIXME: clean up the vtables on DLL_PROCESS_DETACH */
         if (NativeEntryPoint)
-            return NativeEntryPoint(hinstDLL, fdwReason, lpvReserved);
+        {
+            BOOL ret;
+            TRACE("calling native entrypoint %p for DLL %p reason %ld\n", NativeEntryPoint, hinstDLL, fdwReason);
+            ret = NativeEntryPoint(hinstDLL, fdwReason, lpvReserved);
+            TRACE("native entrypoint %p returned %d\n", NativeEntryPoint, ret);
+            return ret;
+        }
     }
     else
         ERR("failed to read CLR headers, hr=%lx\n", hr);
