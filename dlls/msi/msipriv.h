@@ -476,6 +476,11 @@ typedef struct tagMSIPACKAGE
     unsigned char need_reboot_now : 1;
     unsigned char need_rollback : 1;
     unsigned char rpc_server_started : 1;
+
+    /* embedded UI */
+    HMODULE embedded_ui_dll;
+    LPWSTR  embedded_ui_path;
+    DWORD   embedded_ui_filter;
 } MSIPACKAGE;
 
 typedef struct tagMSIPREVIEW
@@ -1009,6 +1014,10 @@ extern DWORD gUIFilterRecord;
 extern LPVOID gUIContext;
 extern LPVOID gUIContextRecord;
 extern WCHAR *gszLogFile;
+
+/* embedded UI handler (set by action.c, used by package.c) */
+typedef UINT (WINAPI *EMBEDDEDUIHANDLERPROC)(UINT, MSIHANDLE);
+extern EMBEDDEDUIHANDLERPROC gEmbeddedUIHandler;
 extern HINSTANCE msi_hInstance;
 
 /* action related functions */

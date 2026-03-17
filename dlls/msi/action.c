@@ -7893,6 +7893,143 @@ static UINT ACTION_PerformEndAction( MSIPACKAGE *package, const WCHAR *action, U
  * TOP level entry points
  *****************************************************/
 
+typedef UINT (WINAPI *INITIALIZEEMBEDDEDUIPROC)(MSIHANDLE hSession, LPCWSTR szResourcePath, LPDWORD pdwInternalUILevel);
+typedef UINT (WINAPI *SHUTDOWNEMBEDDEDUIPROC)(void);
+
+EMBEDDEDUIHANDLERPROC gEmbeddedUIHandler;
+static SHUTDOWNEMBEDDEDUIPROC gEmbeddedUIShutdown;
+
+static UINT msi_load_embedded_ui(MSIPACKAGE *package)
+{
+    MSIQUERY *view = NULL;
+    MSIRECORD *rec = NULL;
+    UINT r;
+    WCHAR tempdir[MAX_PATH], tempfile[MAX_PATH], filename[MAX_PATH];
+    DWORD attrs, sz;
+    HANDLE hfile;
+    char *buf = NULL;
+    DWORD bufsize, written;
+    INITIALIZEEMBEDDEDUIPROC init_proc;
+    DWORD msg_filter;
+    MSIHANDLE hsession;
+
+    r = MSI_DatabaseOpenViewW(package->db,
+        L"SELECT `FileName`, `Attributes`, `Data` FROM `MsiEmbeddedUI`", &view);
+    if (r != ERROR_SUCCESS) return r;
+
+    r = MSI_ViewExecute(view, 0);
+    if (r != ERROR_SUCCESS) { msiobj_release(&view->hdr); return r; }
+
+    GetTempPathW(MAX_PATH, tempdir);
+
+    /* Extract all files, remember the entry point DLL */
+    while (MSI_ViewFetch(view, &rec) == ERROR_SUCCESS)
+    {
+        sz = MAX_PATH;
+        MSI_RecordGetStringW(rec, 1, filename, &sz);
+        attrs = MSI_RecordGetInteger(rec, 2);
+
+        swprintf(tempfile, MAX_PATH, L"%s%s", tempdir, filename);
+
+        /* Extract binary data to file */
+        bufsize = 0;
+        MSI_RecordReadStream(rec, 3, NULL, &bufsize);
+        if (bufsize > 0)
+        {
+            buf = malloc(bufsize);
+            if (buf)
+            {
+                MSI_RecordReadStream(rec, 3, buf, &bufsize);
+                hfile = CreateFileW(tempfile, GENERIC_WRITE, 0, NULL,
+                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hfile != INVALID_HANDLE_VALUE)
+                {
+                    WriteFile(hfile, buf, bufsize, &written, NULL);
+                    CloseHandle(hfile);
+                    TRACE("extracted embedded UI file %s (%lu bytes)\n",
+                          debugstr_w(tempfile), bufsize);
+                }
+                free(buf);
+                buf = NULL;
+            }
+        }
+
+        /* Attributes bit 0 = entry point DLL */
+        if ((attrs & 1) && !package->embedded_ui_dll)
+        {
+            package->embedded_ui_dll = LoadLibraryW(tempfile);
+            if (package->embedded_ui_dll)
+            {
+                package->embedded_ui_path = wcsdup(tempdir);
+                TRACE("loaded embedded UI DLL %s\n", debugstr_w(tempfile));
+            }
+            else
+                WARN("failed to load embedded UI DLL %s\n", debugstr_w(tempfile));
+        }
+
+        msiobj_release(&rec->hdr);
+    }
+
+    msiobj_release(&view->hdr);
+
+    if (!package->embedded_ui_dll)
+        return ERROR_FUNCTION_FAILED;
+
+    init_proc = (INITIALIZEEMBEDDEDUIPROC)GetProcAddress(
+        package->embedded_ui_dll, "InitializeEmbeddedUI");
+    if (!init_proc)
+    {
+        WARN("embedded UI DLL has no InitializeEmbeddedUI export\n");
+        FreeLibrary(package->embedded_ui_dll);
+        package->embedded_ui_dll = NULL;
+        return ERROR_FUNCTION_FAILED;
+    }
+
+    gEmbeddedUIHandler = (EMBEDDEDUIHANDLERPROC)GetProcAddress(
+        package->embedded_ui_dll, "EmbeddedUIHandler");
+    gEmbeddedUIShutdown = (SHUTDOWNEMBEDDEDUIPROC)GetProcAddress(
+        package->embedded_ui_dll, "ShutdownEmbeddedUI");
+
+    hsession = alloc_msihandle(&package->hdr);
+    msg_filter = INSTALLUILEVEL_FULL;
+
+    TRACE("calling InitializeEmbeddedUI(%lu, %s, %p)\n",
+          hsession, debugstr_w(package->embedded_ui_path), &msg_filter);
+
+    r = init_proc(hsession, package->embedded_ui_path, &msg_filter);
+
+    MsiCloseHandle(hsession);
+
+    if (r == ERROR_SUCCESS)
+    {
+        package->embedded_ui_filter = msg_filter;
+        /* Set UI level to FULL for embedded UI */
+        package->ui_level = INSTALLUILEVEL_FULL;
+        TRACE("embedded UI initialized, filter=%#lx\n", msg_filter);
+        return ERROR_SUCCESS;
+    }
+
+    TRACE("InitializeEmbeddedUI returned %u\n", r);
+    FreeLibrary(package->embedded_ui_dll);
+    package->embedded_ui_dll = NULL;
+    return r;
+}
+
+static void msi_shutdown_embedded_ui(MSIPACKAGE *package)
+{
+    if (package->embedded_ui_dll)
+    {
+        if (gEmbeddedUIShutdown)
+            gEmbeddedUIShutdown();
+        gEmbeddedUIHandler = NULL;
+        gEmbeddedUIShutdown = NULL;
+        FreeLibrary(package->embedded_ui_dll);
+        package->embedded_ui_dll = NULL;
+        free(package->embedded_ui_path);
+        package->embedded_ui_path = NULL;
+    }
+}
+
 UINT MSI_InstallPackage( MSIPACKAGE *package, LPCWSTR szPackagePath,
                          LPCWSTR szCommandLine )
 {
@@ -7968,6 +8105,10 @@ UINT MSI_InstallPackage( MSIPACKAGE *package, LPCWSTR szPackagePath,
         msi_set_property( package->db, L"RollbackDisabled", L"1", -1 );
     }
 
+    /* Try to load embedded UI from MsiEmbeddedUI table */
+    if (msi_load_embedded_ui(package) == ERROR_SUCCESS)
+        TRACE("using embedded UI\n");
+
     rc = ACTION_PerformAction(package, action);
 
     /* process the ending type action */
@@ -7996,6 +8137,8 @@ UINT MSI_InstallPackage( MSIPACKAGE *package, LPCWSTR szPackagePath,
     }
     free( reinstall );
     free( action );
+
+    msi_shutdown_embedded_ui(package);
 
     if (rc == ERROR_SUCCESS && package->need_reboot_at_end)
         return ERROR_SUCCESS_REBOOT_REQUIRED;

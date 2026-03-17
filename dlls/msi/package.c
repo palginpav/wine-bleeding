@@ -1813,7 +1813,17 @@ INT MSI_ProcessMessageVerbatim(MSIPACKAGE *package, INSTALLMESSAGE eMessageType,
     msg = malloc( len );
     WideCharToMultiByte( CP_ACP, 0, message, -1, msg, len, NULL, NULL );
 
-    if (gUIHandlerRecord && (gUIFilterRecord & log_type))
+    /* Try embedded UI handler first */
+    if (package && package->embedded_ui_dll && gEmbeddedUIHandler &&
+        (package->embedded_ui_filter & log_type))
+    {
+        MSIHANDLE rec = alloc_msihandle(&record->hdr);
+        TRACE( "calling embedded UI handler (iMessageType = %#x, hRecord = %lu)\n",
+               eMessageType, rec );
+        rc = gEmbeddedUIHandler( eMessageType, rec );
+        MsiCloseHandle( rec );
+    }
+    if (!rc && gUIHandlerRecord && (gUIFilterRecord & log_type))
     {
         MSIHANDLE rec = alloc_msihandle(&record->hdr);
         TRACE( "calling UI handler %p(pvContext = %p, iMessageType = %#x, hRecord = %lu)\n",
