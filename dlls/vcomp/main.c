@@ -58,7 +58,12 @@ static RTL_CRITICAL_SECTION vcomp_section = { &critsect_debug, -1, 0, 0, 0, 0 };
 #define VCOMP_DYNAMIC_FLAGS_STATIC      0x01
 #define VCOMP_DYNAMIC_FLAGS_CHUNKED     0x02
 #define VCOMP_DYNAMIC_FLAGS_GUIDED      0x03
+#define VCOMP_DYNAMIC_FLAGS_MONOTONIC   0x10
+#define VCOMP_DYNAMIC_FLAGS_NONMONOTONIC 0x20
 #define VCOMP_DYNAMIC_FLAGS_INCREMENT   0x40
+#define VCOMP_DYNAMIC_FLAGS_MODIFIERS   (VCOMP_DYNAMIC_FLAGS_INCREMENT | \
+                                         VCOMP_DYNAMIC_FLAGS_MONOTONIC | \
+                                         VCOMP_DYNAMIC_FLAGS_NONMONOTONIC)
 
 struct vcomp_thread_data
 {
@@ -105,6 +110,8 @@ struct vcomp_team_data
     int                     barrier_count;
 };
 
+#define VCOMP_SPIN_COUNT 4096
+
 struct vcomp_task_data
 {
     /* single */
@@ -119,9 +126,11 @@ struct vcomp_task_data
     unsigned int            dynamic;
     unsigned int            dynamic_first;
     unsigned int            dynamic_last;
-    unsigned int            dynamic_iterations;
+    volatile LONG           dynamic_iterations;
     int                     dynamic_step;
     unsigned int            dynamic_chunksize;
+    unsigned int            dynamic_first_orig;
+    unsigned int            dynamic_total;
 };
 
 extern void CDECL _vcomp_fork_call_wrapper(void *wrapper, int nargs, void **args);
@@ -1283,7 +1292,7 @@ void CDECL _vcomp_for_dynamic_init(unsigned int flags, unsigned int first, unsig
     struct vcomp_task_data *task_data = thread_data->task;
     int num_threads = team_data ? team_data->num_threads : 1;
     int thread_num = thread_data->thread_num;
-    unsigned int type = flags & ~VCOMP_DYNAMIC_FLAGS_INCREMENT;
+    unsigned int type = flags & ~VCOMP_DYNAMIC_FLAGS_MODIFIERS;
 
     TRACE("(%u, %u, %u, %d, %u)\n", flags, first, last, step, chunksize);
 
@@ -1340,6 +1349,8 @@ void CDECL _vcomp_for_dynamic_init(unsigned int flags, unsigned int first, unsig
             task_data->dynamic_iterations   = iterations;
             task_data->dynamic_step         = step;
             task_data->dynamic_chunksize    = chunksize;
+            task_data->dynamic_first_orig   = first;
+            task_data->dynamic_total        = iterations;
         }
         LeaveCriticalSection(&vcomp_section);
     }
@@ -1364,26 +1375,37 @@ int CDECL _vcomp_for_dynamic_next(unsigned int *begin, unsigned int *end)
     else if (thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_CHUNKED ||
              thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_GUIDED)
     {
-        unsigned int iterations = 0;
-        EnterCriticalSection(&vcomp_section);
-        if (thread_data->dynamic == task_data->dynamic &&
-            task_data->dynamic_iterations != 0)
+        LONG old_iters, new_iters, chunk;
+        unsigned int consumed;
+
+        if (thread_data->dynamic != task_data->dynamic)
+            return 0;
+
+        for (;;)
         {
-            iterations = min(task_data->dynamic_iterations, task_data->dynamic_chunksize);
+            old_iters = task_data->dynamic_iterations;
+            if (old_iters <= 0)
+                return 0;
+
+            chunk = min((unsigned int)old_iters, task_data->dynamic_chunksize);
             if (thread_data->dynamic_type == VCOMP_DYNAMIC_FLAGS_GUIDED &&
-                task_data->dynamic_iterations > num_threads * task_data->dynamic_chunksize)
+                (unsigned int)old_iters > (unsigned int)num_threads * task_data->dynamic_chunksize)
             {
-                iterations = (task_data->dynamic_iterations + num_threads - 1) / num_threads;
+                chunk = ((unsigned int)old_iters + num_threads - 1) / num_threads;
             }
-            *begin = task_data->dynamic_first;
-            *end   = task_data->dynamic_first + (iterations - 1) * task_data->dynamic_step;
-            task_data->dynamic_iterations -= iterations;
-            task_data->dynamic_first      += iterations * task_data->dynamic_step;
-            if (!task_data->dynamic_iterations)
-                *end = task_data->dynamic_last;
+
+            new_iters = old_iters - chunk;
+            if (InterlockedCompareExchange(&task_data->dynamic_iterations,
+                                           new_iters, old_iters) == old_iters)
+                break;
         }
-        LeaveCriticalSection(&vcomp_section);
-        return iterations != 0;
+
+        consumed = task_data->dynamic_total - (unsigned int)old_iters;
+        *begin = task_data->dynamic_first_orig + consumed * task_data->dynamic_step;
+        *end   = *begin + (chunk - 1) * task_data->dynamic_step;
+        if (new_iters == 0)
+            *end = task_data->dynamic_last;
+        return 1;
     }
 
     return 0;
@@ -1398,7 +1420,7 @@ void CDECL _vcomp_for_dynamic_init_i8(unsigned int flags, ULONG64 first, ULONG64
     struct vcomp_task_data *task_data = thread_data->task;
     int num_threads = team_data ? team_data->num_threads : 1;
     int thread_num = thread_data->thread_num;
-    unsigned int type = flags & ~VCOMP_DYNAMIC_FLAGS_INCREMENT;
+    unsigned int type = flags & ~VCOMP_DYNAMIC_FLAGS_MODIFIERS;
 
     TRACE("(%u, %s, %s, %s, %s)\n", flags, wine_dbgstr_longlong(first),
           wine_dbgstr_longlong(last), wine_dbgstr_longlong(step),
@@ -1457,6 +1479,8 @@ void CDECL _vcomp_for_dynamic_init_i8(unsigned int flags, ULONG64 first, ULONG64
             task_data->dynamic_iterations   = (unsigned int)iterations;
             task_data->dynamic_step         = (int)step;
             task_data->dynamic_chunksize    = chunksize ? (unsigned int)chunksize : 1;
+            task_data->dynamic_first_orig   = (unsigned int)first;
+            task_data->dynamic_total        = (unsigned int)iterations;
         }
         LeaveCriticalSection(&vcomp_section);
     }
@@ -1547,31 +1571,54 @@ static DWORD WINAPI _vcomp_fork_worker(void *param)
 
     TRACE("starting worker thread for %p\n", thread_data);
 
-    EnterCriticalSection(&vcomp_section);
     for (;;)
     {
-        struct vcomp_team_data *team = thread_data->team;
+        struct vcomp_team_data *team;
+        int spin;
+
+        /* Spin-wait phase: check for work without taking any locks.
+         * thread_data->team is set by _vcomp_fork under vcomp_section,
+         * pointer-sized writes are atomic on x86/x64. */
+        for (spin = 0; spin < VCOMP_SPIN_COUNT; spin++)
+        {
+            if (*(volatile void **)&thread_data->team != NULL)
+                break;
+            YieldProcessor();
+        }
+
+        team = thread_data->team;
         if (team != NULL)
         {
-            LeaveCriticalSection(&vcomp_section);
             _vcomp_fork_call_wrapper(team->wrapper, team->nargs, ptr_from_va_list(team->valist));
-            EnterCriticalSection(&vcomp_section);
 
+            /* Completion signaling MUST stay inside CS to prevent use-after-free:
+             * team points to team_data on _vcomp_fork's stack. The main thread's
+             * join waits inside the same CS, so it cannot return (and free team_data)
+             * until we leave the CS. */
+            EnterCriticalSection(&vcomp_section);
             thread_data->team = NULL;
             list_remove(&thread_data->entry);
             list_add_tail(&vcomp_idle_threads, &thread_data->entry);
             if (++team->finished_threads >= team->num_threads)
                 WakeAllConditionVariable(&team->cond);
+            LeaveCriticalSection(&vcomp_section);
+            continue;
         }
 
-        if (!SleepConditionVariableCS(&thread_data->cond, &vcomp_section, 5000) &&
-            GetLastError() == ERROR_TIMEOUT && !thread_data->team)
+        /* Spin expired — fall back to condition variable sleep */
+        EnterCriticalSection(&vcomp_section);
+        if (!thread_data->team)
         {
-            break;
+            if (!SleepConditionVariableCS(&thread_data->cond, &vcomp_section, 5000) &&
+                GetLastError() == ERROR_TIMEOUT && !thread_data->team)
+            {
+                list_remove(&thread_data->entry);
+                LeaveCriticalSection(&vcomp_section);
+                break;
+            }
         }
+        LeaveCriticalSection(&vcomp_section);
     }
-    list_remove(&thread_data->entry);
-    LeaveCriticalSection(&vcomp_section);
 
     TRACE("terminating worker thread for %p\n", thread_data);
 
@@ -1694,6 +1741,8 @@ void WINAPIV _vcomp_fork(BOOL ifval, int nargs, void *wrapper, ...)
 
     if (team_data.num_threads > 1)
     {
+        /* Join: must use CS to ensure workers finish accessing team_data
+         * before we return (team_data is on our stack). */
         EnterCriticalSection(&vcomp_section);
 
         team_data.finished_threads++;
