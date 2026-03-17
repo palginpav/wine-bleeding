@@ -7991,6 +7991,10 @@ static UINT msi_load_embedded_ui(MSIPACKAGE *package)
         package->embedded_ui_dll, "ShutdownEmbeddedUI");
 
     hsession = alloc_msihandle(&package->hdr);
+    /* On Windows, the initial value of pdwInternalUILevel is the current internal
+     * UI level. The embedded UI handler can modify it to indicate what message
+     * types MSI should handle internally (vs what the embedded UI handles).
+     * We pass INSTALLUILEVEL_FULL as default per Windows behavior. */
     msg_filter = INSTALLUILEVEL_FULL;
 
     TRACE("calling InitializeEmbeddedUI(%lu, %s, %p)\n",
@@ -8002,11 +8006,21 @@ static UINT msi_load_embedded_ui(MSIPACKAGE *package)
 
     if (r == ERROR_SUCCESS)
     {
-        package->embedded_ui_filter = msg_filter;
-        /* Set UI level to FULL for embedded UI */
-        package->ui_level = INSTALLUILEVEL_FULL;
+        /* The returned msg_filter indicates which message types the embedded
+         * UI wants to handle. Convert to a bitmask for message routing.
+         * If the handler returns 0, it handles everything. */
+        package->embedded_ui_filter = msg_filter ? msg_filter : (DWORD)-1;
+        package->ui_level = INSTALLUILEVEL_NONE;
         TRACE("embedded UI initialized, filter=%#lx\n", msg_filter);
         return ERROR_SUCCESS;
+    }
+
+    if (r == ERROR_INSTALL_USEREXIT)
+    {
+        TRACE("embedded UI canceled by user\n");
+        FreeLibrary(package->embedded_ui_dll);
+        package->embedded_ui_dll = NULL;
+        return r;
     }
 
     TRACE("InitializeEmbeddedUI returned %u\n", r);

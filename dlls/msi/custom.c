@@ -1159,6 +1159,85 @@ done:
     }
 }
 
+static UINT HANDLE_CustomType52( MSIPACKAGE *package, const WCHAR *source, const WCHAR *target,
+                                 INT type, const WCHAR *action )
+{
+    /* Type 52: .NET assembly path from a property value.
+     * source = property name containing the DLL path
+     * target = Namespace.Class.Method */
+    HRESULT hr;
+    HMODULE hmscoree;
+    pCLRCreateInstance create_instance;
+    ICLRMetaHost *metahost = NULL;
+    ICLRRuntimeInfo *runtimeinfo = NULL;
+    ICLRRuntimeHost *runtimehost = NULL;
+    DWORD ret_val = 0;
+    WCHAR *dll_path, *class_and_method, *separator;
+    MSIHANDLE hsession;
+    WCHAR session_str[16], type_name[512], method_name[256];
+    size_t class_len;
+
+    if (!(dll_path = msi_dup_property(package->db, source)))
+    {
+        ERR("property %s not found\n", debugstr_w(source));
+        return ERROR_FUNCTION_FAILED;
+    }
+
+    separator = wcschr(target, '!');
+    class_and_method = separator ? separator + 1 : (WCHAR *)target;
+    separator = wcsrchr(class_and_method, '.');
+    if (!separator) { free(dll_path); return ERROR_FUNCTION_FAILED; }
+
+    class_len = separator - class_and_method;
+    if (class_len >= ARRAY_SIZE(type_name)) { free(dll_path); return ERROR_FUNCTION_FAILED; }
+    memcpy(type_name, class_and_method, class_len * sizeof(WCHAR));
+    type_name[class_len] = 0;
+    lstrcpynW(method_name, separator + 1, ARRAY_SIZE(method_name));
+
+    TRACE("managed CA type52: dll=%s type=%s method=%s\n",
+          debugstr_w(dll_path), debugstr_w(type_name), debugstr_w(method_name));
+
+    hmscoree = LoadLibraryW(L"mscoree.dll");
+    if (!hmscoree) { free(dll_path); return ERROR_FUNCTION_FAILED; }
+    create_instance = (pCLRCreateInstance)GetProcAddress(hmscoree, "CLRCreateInstance");
+    if (!create_instance) { FreeLibrary(hmscoree); free(dll_path); return ERROR_FUNCTION_FAILED; }
+
+    hsession = alloc_msihandle(&package->hdr);
+    swprintf(session_str, ARRAY_SIZE(session_str), L"%lu", hsession);
+
+    hr = create_instance(&msi_CLSID_CLRMetaHost, &msi_IID_ICLRMetaHost, (void **)&metahost);
+    if (SUCCEEDED(hr))
+        hr = ICLRMetaHost_GetRuntime(metahost, L"v4.0.30319", &msi_IID_ICLRRuntimeInfo, (void **)&runtimeinfo);
+    if (SUCCEEDED(hr))
+        hr = ICLRRuntimeInfo_GetInterface(runtimeinfo, &msi_CLSID_CLRRuntimeHost, &msi_IID_ICLRRuntimeHost, (void **)&runtimehost);
+    if (SUCCEEDED(hr))
+        hr = ICLRRuntimeHost_Start(runtimehost);
+    if (SUCCEEDED(hr) || hr == S_FALSE)
+        hr = ICLRRuntimeHost_ExecuteInDefaultAppDomain(runtimehost, dll_path, type_name, method_name, session_str, &ret_val);
+
+    if (FAILED(hr))
+        ERR("managed CA type52 failed: %#lx\n", hr);
+    else
+        TRACE("managed CA type52 returned %lu\n", ret_val);
+
+    if (runtimehost) ICLRRuntimeHost_Release(runtimehost);
+    if (runtimeinfo) ICLRRuntimeInfo_Release(runtimeinfo);
+    if (metahost) ICLRMetaHost_Release(metahost);
+    MsiCloseHandle(hsession);
+    FreeLibrary(hmscoree);
+    free(dll_path);
+
+    if (FAILED(hr)) return ERROR_FUNCTION_FAILED;
+    switch (ret_val)
+    {
+    case 0: return ERROR_FUNCTION_NOT_CALLED;
+    case 1: return ERROR_SUCCESS;
+    case 2: return ERROR_INSTALL_USEREXIT;
+    case 3: return ERROR_INSTALL_FAILURE;
+    default: return ERROR_SUCCESS;
+    }
+}
+
 static UINT HANDLE_CustomType19( MSIPACKAGE *package, const WCHAR *source, const WCHAR *target,
                                  INT type, const WCHAR *action )
 {
@@ -1754,6 +1833,9 @@ UINT ACTION_CustomAction(MSIPACKAGE *package, const WCHAR *action)
     case 20: /* .NET assembly from Binary table (managed custom action, 32-bit) */
     case 48: /* .NET assembly from Binary table (managed custom action, 64-bit) */
         rc = HANDLE_CustomType20( package, source, target, type, action );
+        break;
+    case 52: /* .NET assembly specified by a property value */
+        rc = HANDLE_CustomType52( package, source, target, type, action );
         break;
     default:
         FIXME( "unhandled action type %u (%s %s)\n", type & CUSTOM_ACTION_TYPE_MASK, debugstr_w(source),
