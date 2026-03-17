@@ -110,7 +110,7 @@ fi
 WINE_SYS32="$PREFIX_DIR/drive_c/windows/system32"
 if [ -d "$WINE_SYS32" ]; then
     # Copy Wine builtin vcomp DLLs to replace any native overrides
-    for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140; do
+    for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 cryptbase; do
         src="$DIST_DST/lib/wine/x86_64-windows/${dll}.dll"
         if [ -f "$src" ]; then
             cp -f "$src" "$WINE_SYS32/${dll}.dll"
@@ -119,9 +119,27 @@ if [ -d "$WINE_SYS32" ]; then
     info "Updated builtin DLL overrides in system32"
 fi
 
-# 4. Kill stale wineserver for this prefix
+# 4. Initialize prefix (start services.exe via wineboot --init)
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
+sleep 1
 export WINEPREFIX="$PREFIX_DIR"
+export WINEDEBUG=-all
+info "Initializing prefix (starting services.exe)..."
+"$DIST_DST/bin/wineboot" --init 2>/dev/null || true
+sleep 2
+"$DIST_DST/bin/wineserver" -k 2>/dev/null || true
+
+# 5. Update shared mono if PortProton uses symlinked mono
+SHARED_MONO="$(dirname "$PP_DATA")/data/tmp/mono/$MONO_VER"
+if [ -d "$SHARED_MONO" ] && [ -d "$MONO_SRC/$MONO_VER" ]; then
+    info "Updating shared PortProton mono..."
+    cp -f "$MONO_SRC/$MONO_VER/lib/mono/4.5/mscorlib.dll" "$SHARED_MONO/lib/mono/4.5/mscorlib.dll" 2>/dev/null
+    for ndll in PresentationNative_cor3.dll wpfgfx_cor3.dll; do
+        [ -f "$MONO_SRC/$MONO_VER/lib/x86_64/$ndll" ] && \
+            cp -f "$MONO_SRC/$MONO_VER/lib/x86_64/$ndll" "$SHARED_MONO/lib/x86_64/$ndll" 2>/dev/null
+    done
+    info "Shared mono updated"
+fi
 
 echo ""
 info "=== Deployment complete ==="
