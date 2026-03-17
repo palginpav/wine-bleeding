@@ -37,6 +37,8 @@ After a successful run, use:
 | `./tools/configure-wine-full.sh` | Configure Wine with max features (WoW64, X, build-id; no optional features disabled). |
 | `./tools/build-full-wine-deps.sh` | Build DXVK, VKD3D-Proton, DXVK-NVAPI, patched local wine-mono and create dist; install Wine into dist if already built. |
 | `./tools/install-wine-mono.sh` | Build patched local wine-mono and install it into `share/wine/mono` of a dist. |
+| `./tools/deploy-to-portproton.sh` | Deploy dist to PortProton: copy dist, install mono/DLLs into a prefix, update `.wine_ver`. |
+| `./tools/publish-release.sh` | Package dist, create GitHub Release with release notes, upload asset. |
 
 All commands are meant to be run from the **wine-bleeding tree root**.
 
@@ -119,6 +121,47 @@ The output lives under `dist/WINE-BLEEDING-DDMMYYYY/` (or `DIST_NAME` if set):
 | `share/` | Wine data (fonts, nls, etc.), including local `wine-mono` in `share/wine/mono/` (unless disabled). |
 
 Use this dist as a standalone Wine runtime or drop it into PortProton-style launchers.
+
+---
+
+## PortProton deployment
+
+After building, deploy the dist to [PortProton](https://github.com/Castro-Fidel/PortProton) and configure a prefix:
+
+```bash
+./tools/deploy-to-portproton.sh
+```
+
+This will:
+1. Copy the dist to `~/PortProton/data/dist/`
+2. Show available prefixes (or create a new one)
+3. Install wine-mono (including `PresentationNative_cor3.dll` and other native WPF DLLs) into the prefix
+4. Copy builtin DLL overrides (vcomp, etc.) to `system32`
+5. Update `.wine_ver` to point to the new dist
+
+---
+
+## Publishing releases
+
+```bash
+./tools/publish-release.sh [DDMMYYYY] [--notes-file FILE | --notes "text" | --edit-notes]
+```
+
+Creates a GitHub Release with the dist tarball and release notes. Without `--notes*`, auto-generates a changelog from git log since the last tag.
+
+---
+
+## wine-mono (forked submodules)
+
+wine-mono is built from [palginpav forks](https://github.com/palginpav) with patches as commits on `wine-bleeding` branches:
+
+| Fork | Patches |
+|------|---------|
+| [palginpav/mono](https://github.com/palginpav/mono/tree/wine-bleeding) | Satellite assembly exception safety, gpath NULL-safe, IconConverter, Wine path mapping, int64 switch, IPC booleans, SEH ExceptionCode, COM events |
+| [palginpav/wpf](https://github.com/palginpav/wpf/tree/wine-bleeding) | GCHandle.Free null-safety in WPF rendering |
+| [palginpav/winforms](https://github.com/palginpav/winforms/tree/wine-bleeding) | ComboBox and ListBox reentrancy fixes |
+
+The build script (`install-wine-mono.sh`) checks out these forks automatically.
 
 ---
 
