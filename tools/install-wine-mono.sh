@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build patched local wine-mono and install it into a Wine dist (share/wine/mono).
+# Build wine-mono from palginpav forks and install into a Wine dist (share/wine/mono).
+# Forks contain all patches as proper commits on the wine-bleeding branch.
 # Run from Wine source tree root:
 #   ./tools/install-wine-mono.sh [dist-path]
 
@@ -8,32 +9,20 @@ set -euo pipefail
 WINE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS_DIR="${DEPS_DIR:-$WINE_ROOT/build-deps}"
 MONO_SRC_DIR="$DEPS_DIR/wine-mono"
-MONO_PATCH_DIR="$WINE_ROOT/tools/patches"
-MONO_PATCHES=(
-    "$MONO_PATCH_DIR/wine-mono-iconconverter.patch"
-    "$MONO_PATCH_DIR/wine-mono-cabarc-ascii-path.patch"
-    "$MONO_PATCH_DIR/wine-mono-combobox-reentrancy.patch"
-    "$MONO_PATCH_DIR/wine-mono-listbox-reentrancy.patch"
-    "$MONO_PATCH_DIR/wine-mono-com-event-provider.patch"
-    "$MONO_PATCH_DIR/wine-mono-exception-code.patch"
-    "$MONO_PATCH_DIR/wine-mono-ipc-boolean-properties.patch"
-    "$MONO_PATCH_DIR/wine-mono-switch-i8-selector.patch"
-    "$MONO_PATCH_DIR/wine-mono-wine-path-mapping.patch"
-)
 MSCOREE_HEADER="$WINE_ROOT/dlls/mscoree/mscoree_private.h"
+
+# Fork URLs — patches live as commits on wine-bleeding branches
+FORK_WINE_MONO="https://github.com/palginpav/wine-mono.git"
+FORK_MONO="https://github.com/palginpav/mono.git"
+FORK_WPF="https://github.com/palginpav/wpf.git"
+FORK_WINFORMS="https://github.com/palginpav/winforms.git"
+FORK_BRANCH="wine-bleeding"
 
 for cmd in git make tar sed; do
     command -v "$cmd" >/dev/null 2>&1 || {
         echo "Error: required command not found: $cmd" >&2
         exit 1
     }
-done
-
-for patch in "${MONO_PATCHES[@]}"; do
-    if [ ! -f "$patch" ]; then
-        echo "Error: patch file not found: $patch" >&2
-        exit 1
-    fi
 done
 
 if [ ! -f "$MSCOREE_HEADER" ]; then
@@ -46,8 +35,6 @@ if [ -z "$WINE_MONO_VERSION" ]; then
     echo "Error: failed to read WINE_MONO_VERSION from $MSCOREE_HEADER" >&2
     exit 1
 fi
-
-MONO_TAG="wine-mono-$WINE_MONO_VERSION"
 
 if [ -n "${1:-}" ]; then
     DIST_DIR="$(cd "$1" && pwd)"
@@ -63,77 +50,64 @@ fi
 echo "Dist: $DIST_DIR"
 echo "Target Wine Mono version: $WINE_MONO_VERSION"
 
+# Clone or update wine-mono from our fork
 mkdir -p "$DEPS_DIR"
 if [ ! -d "$MONO_SRC_DIR/.git" ]; then
-    echo "Cloning wine-mono (GitHub mirror)..."
-    git clone https://github.com/wine-mono/wine-mono.git "$MONO_SRC_DIR"
+    echo "Cloning wine-mono from fork..."
+    git clone "$FORK_WINE_MONO" "$MONO_SRC_DIR"
 fi
 
 cd "$MONO_SRC_DIR"
+
+# Ensure our fork is a remote
+git remote set-url origin "$FORK_WINE_MONO" 2>/dev/null || true
 git fetch --tags origin >/dev/null 2>&1 || true
 
-if git show-ref --verify --quiet "refs/tags/$MONO_TAG"; then
-    echo "Checking out $MONO_TAG..."
-    git checkout -f "$MONO_TAG" >/dev/null
-else
-    origin_head="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    [ -z "$origin_head" ] && origin_head="origin/main"
-    echo "Warning: tag $MONO_TAG not found; using $origin_head" >&2
-    git checkout -f "${origin_head#origin/}" >/dev/null 2>&1 || git checkout -f "$origin_head" >/dev/null
-fi
+# Checkout our wine-bleeding branch
+echo "Checking out $FORK_BRANCH..."
+git checkout -f "$FORK_BRANCH" >/dev/null 2>&1 || {
+    git fetch origin "$FORK_BRANCH"
+    git checkout -f "$FORK_BRANCH" >/dev/null
+}
+git reset --hard "origin/$FORK_BRANCH" 2>/dev/null || true
+
+# Point submodules to our forks
+setup_fork_remote() {
+    local submodule="$1"
+    local fork_url="$2"
+    if [ -d "$MONO_SRC_DIR/$submodule/.git" ] || [ -f "$MONO_SRC_DIR/$submodule/.git" ]; then
+        git -C "$MONO_SRC_DIR/$submodule" remote set-url origin "$fork_url" 2>/dev/null || true
+    fi
+}
 
 echo "Syncing full submodule tree..."
 GIT_TERMINAL_PROMPT=0 git submodule sync --recursive >/dev/null 2>&1 || true
 GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive
-# Ensure submodule worktrees are fully populated after switching tags.
-git submodule foreach --recursive 'git reset --hard -q || true'
 
-apply_patch_if_needed() {
-    local patch_file="$1"
-    local patch_name
-    patch_name="$(basename "$patch_file")"
-    local apply_dir="$MONO_SRC_DIR"
-
-    case "$patch_name" in
-        wine-mono-combobox-reentrancy.patch|wine-mono-listbox-reentrancy.patch)
-            apply_dir="$MONO_SRC_DIR/winforms"
-            ;;
-        wine-mono-com-event-provider.patch)
-            apply_dir="$MONO_SRC_DIR/mono"
-            ;;
-        wine-mono-exception-code.patch)
-            apply_dir="$MONO_SRC_DIR/mono"
-            ;;
-        wine-mono-ipc-boolean-properties.patch)
-            apply_dir="$MONO_SRC_DIR/mono"
-            ;;
-        wine-mono-switch-i8-selector.patch)
-            apply_dir="$MONO_SRC_DIR/mono"
-            ;;
-        wine-mono-wine-path-mapping.patch)
-            apply_dir="$MONO_SRC_DIR/mono"
-            ;;
-    esac
-
-    if git -C "$apply_dir" apply --check "$patch_file" >/dev/null 2>&1; then
-        echo "Applying $patch_name..."
-        git -C "$apply_dir" apply "$patch_file"
-    elif git -C "$apply_dir" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
-        echo "$patch_name already applied."
-    else
-        echo "Error: unable to apply $patch_name cleanly." >&2
-        exit 1
+# Ensure forked submodules are on wine-bleeding branch
+for sub in mono wpf winforms; do
+    if [ -d "$MONO_SRC_DIR/$sub" ]; then
+        cd "$MONO_SRC_DIR/$sub"
+        # Fetch wine-bleeding from fork
+        git fetch origin "$FORK_BRANCH" 2>/dev/null || true
+        # Check if current HEAD matches origin/wine-bleeding
+        local_head="$(git rev-parse HEAD)"
+        remote_head="$(git rev-parse "origin/$FORK_BRANCH" 2>/dev/null || echo "")"
+        if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
+            echo "Updating $sub to origin/$FORK_BRANCH..."
+            git checkout -f "$FORK_BRANCH" 2>/dev/null || git checkout -f "origin/$FORK_BRANCH" 2>/dev/null || true
+        fi
+        cd "$MONO_SRC_DIR"
     fi
-}
-
-for patch in "${MONO_PATCHES[@]}"; do
-    apply_patch_if_needed "$patch"
 done
 
-PATCH_HASH="$(sha256sum "${MONO_PATCHES[@]}" | sha256sum | awk '{print $1}')"
+# No patch application needed — patches are commits in fork branches
+
 SRC_REV="$(git rev-parse HEAD)"
 MONO_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/mono" rev-parse HEAD)"
-BUILD_ID="${WINE_MONO_VERSION}|${SRC_REV}|${MONO_SUBMODULE_REV}|${PATCH_HASH}"
+WPF_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/wpf" rev-parse HEAD)"
+WINFORMS_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/winforms" rev-parse HEAD)"
+BUILD_ID="${WINE_MONO_VERSION}|${SRC_REV}|${MONO_SUBMODULE_REV}|${WPF_SUBMODULE_REV}|${WINFORMS_SUBMODULE_REV}"
 BUILD_STAMP="$DEPS_DIR/.wine-mono-build-id"
 TARBALL="$MONO_SRC_DIR/wine-mono-${WINE_MONO_VERSION}-x86.tar.xz"
 
