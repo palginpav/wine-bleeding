@@ -216,8 +216,17 @@ static WCHAR *get_parent_dir(const WCHAR* path)
 
 static BOOL is_option(const WCHAR* arg, const WCHAR* opt)
 {
-    return CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE,
-                          arg, -1, opt, -1) == CSTR_EQUAL;
+    /* Use simple ASCII case-insensitive compare — options are always ASCII.
+     * CompareStringW and wcsicmp may not work during prefix bootstrap
+     * when locale tables are not yet initialized. */
+    for (; *arg && *opt; arg++, opt++)
+    {
+        WCHAR a = *arg, o = *opt;
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (o >= 'A' && o <= 'Z') o += 'a' - 'A';
+        if (a != o) return FALSE;
+    }
+    return *arg == *opt;
 }
 
 static BOOL is_option_with_arg(WCHAR **argv, int *pos, const WCHAR* opt)
@@ -565,6 +574,20 @@ static void parse_command_line( int argc, WCHAR *argv[] )
 int __cdecl wmain (int argc, WCHAR *argv[])
 {
 	DWORD binary_type;
+
+        /* If CRT failed to parse argv (deferred argv issue during bootstrap),
+         * fall back to parsing GetCommandLineW() directly */
+        if (argc <= 0 || !argv || !argv[0])
+        {
+            WCHAR *cmdline = GetCommandLineW();
+            int new_argc;
+            WCHAR **new_argv = CommandLineToArgvW( cmdline, &new_argc );
+            if (new_argv && new_argc > 0)
+            {
+                argc = new_argc;
+                argv = new_argv;
+            }
+        }
 
         parse_command_line( argc, argv );
 

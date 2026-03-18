@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <dirent.h>
 #include <errno.h>
 #include <locale.h>
 #include <langinfo.h>
@@ -1534,6 +1535,194 @@ static WCHAR *build_command_line( WCHAR **wargv )
 
 
 /***********************************************************************
+ *           deploy_builtin_pe
+ *
+ * Copy a single builtin PE file from dist to prefix, if needed.
+ * Returns 1 if copied, 0 if skipped (up to date), -1 on error.
+ */
+static int deploy_builtin_pe( const char *src_path, const char *dst_path )
+{
+    struct stat src_st, dst_st;
+    int src_fd, dst_fd;
+    char buf[65536];
+    ssize_t n;
+
+    if (stat( src_path, &src_st ) == -1) return -1;
+    if (!S_ISREG( src_st.st_mode )) return 0;
+
+    /* skip if destination exists and has same size and is not older */
+    if (stat( dst_path, &dst_st ) == 0 &&
+        dst_st.st_size == src_st.st_size &&
+        dst_st.st_mtime >= src_st.st_mtime)
+        return 0;
+
+    if ((src_fd = open( src_path, O_RDONLY )) == -1) return -1;
+    if ((dst_fd = open( dst_path, O_WRONLY | O_CREAT | O_TRUNC, 0644 )) == -1)
+    {
+        close( src_fd );
+        return -1;
+    }
+    while ((n = read( src_fd, buf, sizeof(buf) )) > 0)
+    {
+        if (write( dst_fd, buf, n ) != n) { close( src_fd ); close( dst_fd ); return -1; }
+    }
+    close( src_fd );
+    close( dst_fd );
+    return 1;
+}
+
+
+/***********************************************************************
+ *           ensure_dir_exists
+ *
+ * Create directory and all parent components (like mkdir -p).
+ */
+static void ensure_dir_exists( const char *path )
+{
+    char *tmp = strdup( path );
+    char *p;
+
+    if (!tmp) return;
+    for (p = tmp + 1; *p; p++)
+    {
+        if (*p == '/')
+        {
+            *p = 0;
+            mkdir( tmp, 0755 );
+            *p = '/';
+        }
+    }
+    mkdir( tmp, 0755 );
+    free( tmp );
+}
+
+
+/***********************************************************************
+ *           deploy_builtin_dlls
+ *
+ * Deploy real builtin DLLs from dist to prefix system32/syswow64.
+ * Called from unix side before any PE code runs (before wineboot).
+ * This eliminates the need for fake DLLs — real builtins are used directly.
+ */
+static void deploy_builtin_dlls(void)
+{
+    static const char *pe_dirs[] = { "/x86_64-windows", "/i386-windows", NULL };
+    static const char *target_dirs[] = { "/drive_c/windows/system32", "/drive_c/windows/syswow64", NULL };
+    static const char *extra_dirs[] = {
+        "/drive_c/windows",
+        "/drive_c/Program Files",
+        "/drive_c/Program Files (x86)",
+        "/drive_c/ProgramData",
+        "/drive_c/users",
+        "/dosdevices",
+        NULL
+    };
+    char src_path[4096], dst_path[4096], link_path[4096];
+    const char *src_base = NULL;
+    struct stat st;
+    DIR *dir;
+    struct dirent *entry;
+    int i, total_copied = 0, total_skipped = 0;
+
+    if (!config_dir || !dll_paths) return;
+
+    /* create prefix directory structure */
+    for (i = 0; extra_dirs[i]; i++)
+    {
+        snprintf( dst_path, sizeof(dst_path), "%s%s", config_dir, extra_dirs[i] );
+        ensure_dir_exists( dst_path );
+    }
+
+    /* create dosdevices symlinks */
+    snprintf( link_path, sizeof(link_path), "%s/dosdevices/c:", config_dir );
+    if (lstat( link_path, &st ) == -1)
+        symlink( "../drive_c", link_path );
+    snprintf( link_path, sizeof(link_path), "%s/dosdevices/z:", config_dir );
+    if (lstat( link_path, &st ) == -1)
+        symlink( "/", link_path );
+
+    /* find the first dll_path that has PE directories */
+    for (i = 0; dll_paths[i]; i++)
+    {
+        snprintf( src_path, sizeof(src_path), "%s%s", dll_paths[i], pe_dirs[0] );
+        if (stat( src_path, &st ) == 0 && S_ISDIR( st.st_mode ))
+        {
+            src_base = dll_paths[i];
+            break;
+        }
+    }
+    /* also try build_dir */
+    if (!src_base && build_dir)
+    {
+        /* in build mode, DLLs are spread across dlls/ and programs/ — skip deployment,
+         * the loader handles it via build_dir paths */
+        TRACE( "build mode detected, skipping builtin deployment\n" );
+        return;
+    }
+    if (!src_base)
+    {
+        WARN( "no builtin PE directory found, skipping deployment\n" );
+        return;
+    }
+
+    /* deploy PE files for each architecture */
+    for (i = 0; pe_dirs[i] && target_dirs[i]; i++)
+    {
+        snprintf( src_path, sizeof(src_path), "%s%s", src_base, pe_dirs[i] );
+        snprintf( dst_path, sizeof(dst_path), "%s%s", config_dir, target_dirs[i] );
+
+        /* ensure target directory exists */
+        ensure_dir_exists( dst_path );
+
+        dir = opendir( src_path );
+        if (!dir) continue;
+
+        while ((entry = readdir( dir )))
+        {
+            const char *name = entry->d_name;
+            size_t name_len;
+            char src_file[4096], dst_file[4096];
+            int ret;
+
+            if (name[0] == '.') continue;
+            name_len = strlen( name );
+
+            /* only copy .dll, .exe, .sys, .drv, .ocx, .cpl, .acm, .ax files */
+            if (name_len < 4) continue;
+            {
+                const char *ext = name + name_len - 4;
+                if (strcasecmp( ext, ".dll" ) && strcasecmp( ext, ".exe" ) &&
+                    strcasecmp( ext, ".sys" ) && strcasecmp( ext, ".drv" ) &&
+                    strcasecmp( ext, ".ocx" ) && strcasecmp( ext, ".cpl" ) &&
+                    strcasecmp( ext, ".acm" ))
+                {
+                    /* also check 3-char extensions */
+                    if (name_len >= 3)
+                    {
+                        ext = name + name_len - 3;
+                        if (strcasecmp( ext, ".ax" ))
+                            continue;
+                    }
+                    else continue;
+                }
+            }
+
+            snprintf( src_file, sizeof(src_file), "%s/%s", src_path, name );
+            snprintf( dst_file, sizeof(dst_file), "%s/%s", dst_path, name );
+
+            ret = deploy_builtin_pe( src_file, dst_file );
+            if (ret > 0) total_copied++;
+            else if (ret == 0) total_skipped++;
+        }
+        closedir( dir );
+    }
+
+    if (total_copied > 0)
+        TRACE( "deployed %d builtin PEs (%d up-to-date) to prefix\n", total_copied, total_skipped );
+}
+
+
+/***********************************************************************
  *           run_wineboot
  */
 static void run_wineboot( WCHAR *env, SIZE_T size )
@@ -1900,6 +2089,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     bootstrap = get_env_var( env, env_pos, bootstrapW, ARRAY_SIZE(bootstrapW) );
     set_env_var( &env, &env_pos, &env_size, bootstrapW, ARRAY_SIZE(bootstrapW), valueW );
     is_prefix_bootstrap = TRUE;
+    deploy_builtin_dlls();
     env[env_pos] = 0;
     run_wineboot( env, env_pos );
 

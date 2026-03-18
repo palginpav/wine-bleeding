@@ -380,6 +380,22 @@ static BOOL is_fake_dll( HANDLE h )
             !memcmp( dos + 1, fakedll_signature, sizeof(fakedll_signature) ));
 }
 
+/* check if file is a real wine builtin (not a placeholder) */
+static BOOL is_real_builtin_dll( HANDLE h )
+{
+    IMAGE_DOS_HEADER *dos;
+    DWORD size;
+    BYTE buffer[sizeof(*dos) + 32];
+
+    SetFilePointer( h, 0, NULL, FILE_BEGIN );
+    if (!ReadFile( h, buffer, sizeof(buffer), &size, NULL ) || size != sizeof(buffer))
+        return FALSE;
+    dos = (IMAGE_DOS_HEADER *)buffer;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
+    if (dos->e_lfanew < size) return FALSE;
+    return !memcmp( dos + 1, builtin_signature, sizeof(builtin_signature) );
+}
+
 /* create directories leading to a given file */
 static void create_directories( const WCHAR *name )
 {
@@ -1115,6 +1131,23 @@ BOOL create_fake_dll( const WCHAR *name, const WCHAR *source )
     if (wcspbrk( filename, L"*?" )) return create_wildcard_dlls( name, filename, delete );
 
     add_handled_dll( filename );
+
+    /* check if the file is already a real builtin (deployed by deploy_builtin_dlls) */
+    h = CreateFileW( name, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL );
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        if (is_real_builtin_dll( h ))
+        {
+            TRACE( "%s is a real builtin, skipping overwrite, performing registration\n", debugstr_w(name) );
+            CloseHandle( h );
+            /* still register COM/manifests from the dist copy */
+            if ((buffer = load_fake_dll( source, &size )))
+                register_fake_dll( name, buffer, size, &delay_copy );
+            delay_copy_files( &delay_copy );
+            return TRUE;
+        }
+        CloseHandle( h );
+    }
 
     if (!(h = create_dest_file( name, delete ))) return TRUE;  /* not a fake dll */
     if (h == INVALID_HANDLE_VALUE) return FALSE;

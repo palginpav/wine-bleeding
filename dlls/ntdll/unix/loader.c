@@ -1399,8 +1399,9 @@ BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine )
     unsigned int i, len = path->Length / sizeof(WCHAR), dirlen;
     const WCHAR *sysdir, *p = path->Buffer;
 
-    /* only fake builtin existence during prefix bootstrap */
-    if (!is_prefix_bootstrap) return FALSE;
+    /* allow builtin resolution at any time, not just during prefix bootstrap —
+     * real builtins are deployed to prefix by deploy_builtin_dlls(), but this
+     * fallback ensures loading works even if a file is missing from system32 */
 
     for (i = 0; i < supported_machines_count; i++)
     {

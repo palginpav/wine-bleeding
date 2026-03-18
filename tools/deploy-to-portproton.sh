@@ -3,8 +3,9 @@
 # Usage:
 #   ./tools/deploy-to-portproton.sh [dist-name]
 #
-# Creates proper prefixes using PortProton's default_pfx.tar.xz as base,
-# syncs system DLLs, mono, and shared mono.
+# Wine now deploys real builtin DLLs to prefix automatically (no fake DLLs).
+# This script copies dist to PortProton, creates/updates a prefix via wineboot,
+# and installs mono.
 
 set -euo pipefail
 
@@ -13,7 +14,6 @@ PP_ROOT="${PORTPROTON_ROOT:-$HOME/PortProton}"
 PP_DATA="$PP_ROOT/data"
 PP_DIST="$PP_DATA/dist"
 PP_PREFIXES="$PP_DATA/prefixes"
-PP_PLUGINS="$PP_DATA/tmp/plugins_v20"
 PP_TMP="$PP_DATA/tmp"
 
 # Colors
@@ -87,75 +87,25 @@ PREFIX_DIR="$PP_PREFIXES/$PREFIX_NAME"
 info "Prefix: $PREFIX_NAME ($PREFIX_DIR)"
 
 # ============================================================
-# Create new prefix from PortProton's default_pfx template
+# Create or update prefix
 # ============================================================
-if $NEW_PREFIX; then
-    echo ""
-    DEFAULT_PFX="$PP_PLUGINS/default_pfx.tar.xz"
-    if [ -f "$DEFAULT_PFX" ]; then
-        info "Creating prefix from PortProton default template..."
-        mkdir -p "$PREFIX_DIR"
-        tar xf "$DEFAULT_PFX" -C "$PREFIX_DIR"
-        info "Template extracted"
-    else
-        warn "No default_pfx.tar.xz found — creating minimal prefix..."
-        mkdir -p "$PREFIX_DIR/drive_c/windows/system32"
-        mkdir -p "$PREFIX_DIR/drive_c/windows/syswow64"
-        mkdir -p "$PREFIX_DIR/drive_c/Program Files"
-        mkdir -p "$PREFIX_DIR/drive_c/Program Files (x86)"
-        mkdir -p "$PREFIX_DIR/drive_c/ProgramData"
-        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/AppData/Local/Temp"
-        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Desktop"
-        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Documents"
-        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Temp"
-    fi
-
-    # Create dosdevices
-    mkdir -p "$PREFIX_DIR/dosdevices"
-    ln -sfn "../drive_c" "$PREFIX_DIR/dosdevices/c:"
-    ln -sfn "/" "$PREFIX_DIR/dosdevices/z:"
-
-    # Clean up autostart entries from template (Epic Games, etc.)
-    if [ -f "$PREFIX_DIR/user.reg" ]; then
-        sed -i '/"EpicGamesLauncher"/d' "$PREFIX_DIR/user.reg"
-        sed -i '/"Steam"/d' "$PREFIX_DIR/user.reg"
-    fi
-fi
-
-# ============================================================
-# Update prefix configuration
+# Wine's deploy_builtin_dlls() automatically copies all real builtin
+# DLLs from dist to system32/syswow64 before wineboot runs.
+# No manual DLL copying needed — wineboot --init handles everything.
 # ============================================================
 echo ""
 
-# 1. Set wine version
+if $NEW_PREFIX; then
+    mkdir -p "$PREFIX_DIR"
+    info "Creating new prefix via wineboot --init..."
+    info "(Wine will deploy ~1500 real builtin DLLs automatically)"
+fi
+
+# Set wine version marker
 echo "$DIST_NAME" > "$PREFIX_DIR/.wine_ver"
 info "Set .wine_ver = $DIST_NAME"
 
-# 2. Sync critical system executables from dist
-#    Wine 11+ loads builtins from dist, but some exe are loaded from prefix
-WINE_SYS32="$PREFIX_DIR/drive_c/windows/system32"
-WINE_SYS64="$DIST_DST/lib/wine/x86_64-windows"
-WINE_SYS32_32="$PREFIX_DIR/drive_c/windows/syswow64"
-WINE_SYS32_SRC="$DIST_DST/lib/wine/i386-windows"
-
-# Wine loads builtins from dist, NOT from prefix system32.
-# Prefix system32 only needs fakedlls (from default_pfx template).
-# Only copy DLLs that must override template versions.
-if [ -d "$WINE_SYS32" ] && [ -d "$WINE_SYS64" ]; then
-    for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 \
-               cryptbase; do
-        [ -f "$WINE_SYS64/${dll}.dll" ] && cp -f "$WINE_SYS64/${dll}.dll" "$WINE_SYS32/${dll}.dll"
-    done
-    if [ -d "$WINE_SYS32_32" ] && [ -d "$WINE_SYS32_SRC" ]; then
-        for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 \
-                   cryptbase; do
-            [ -f "$WINE_SYS32_SRC/${dll}.dll" ] && cp -f "$WINE_SYS32_SRC/${dll}.dll" "$WINE_SYS32_32/${dll}.dll"
-        done
-    fi
-    info "Updated DLL overrides in prefix"
-fi
-
-# 3. Install mono into prefix
+# Install mono into prefix (before wineboot so it's available during init)
 MONO_SRC="$DIST_DST/share/wine/mono"
 MONO_VER=$(ls -1d "$MONO_SRC"/wine-mono-* 2>/dev/null | sort -V | tail -1 | xargs basename 2>/dev/null || true)
 if [ -n "$MONO_VER" ]; then
@@ -172,26 +122,49 @@ else
     warn "No mono found in distribution"
 fi
 
-# 4. Update prefix via wineboot
-# Use -r (restart) for template-based prefixes, -u (update) for existing ones.
-# Never use --init: it requires rundll32+setupapi which need fakedlls first.
+# Run wineboot to initialize/update prefix
+# deploy_builtin_dlls() in ntdll runs automatically before wineboot,
+# deploying all real builtin PEs to system32 and syswow64.
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 sleep 1
 export WINEPREFIX="$PREFIX_DIR"
 export WINEDEBUG=-all
-info "Initializing prefix..."
-"$DIST_DST/bin/wine" wineboot -r 2>/dev/null || true
+
+if $NEW_PREFIX; then
+    info "Running wineboot --init (builtin DLLs + registry + COM registration)..."
+    "$DIST_DST/bin/wine" wineboot --init 2>/dev/null || true
+else
+    info "Running wineboot -u (updating prefix)..."
+    "$DIST_DST/bin/wine" wineboot -u 2>/dev/null || true
+fi
 sleep 2
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 
-# 5. Verify prefix
+# Clean up autostart entries from template (Epic Games, etc.)
+if $NEW_PREFIX && [ -f "$PREFIX_DIR/user.reg" ]; then
+    sed -i '/"EpicGamesLauncher"/d' "$PREFIX_DIR/user.reg"
+    sed -i '/"Steam"/d' "$PREFIX_DIR/user.reg"
+fi
+
+# Verify prefix
+echo ""
 VERIFY_OK=true
 [ -d "$PREFIX_DIR/drive_c/windows/system32" ] || { warn "Missing system32"; VERIFY_OK=false; }
 [ -f "$PREFIX_DIR/system.reg" ] || { warn "Missing system.reg"; VERIFY_OK=false; }
 [ -f "$PREFIX_DIR/user.reg" ] || { warn "Missing user.reg"; VERIFY_OK=false; }
-$VERIFY_OK && info "Prefix verified OK"
 
-# 6. Update shared PortProton mono
+# Count real builtins (not fakedlls) in system32
+SYS32_COUNT=$(ls "$PREFIX_DIR/drive_c/windows/system32/"*.dll 2>/dev/null | wc -l)
+SYS64_COUNT=$(ls "$PREFIX_DIR/drive_c/windows/syswow64/"*.dll 2>/dev/null | wc -l)
+info "system32: $SYS32_COUNT DLLs, syswow64: $SYS64_COUNT DLLs"
+
+if $VERIFY_OK && [ "$SYS32_COUNT" -gt 100 ]; then
+    info "Prefix verified OK (real builtins deployed)"
+else
+    warn "Prefix may be incomplete — check system32 contents"
+fi
+
+# Update shared PortProton mono
 SHARED_MONO="$PP_TMP/mono/$MONO_VER"
 if [ -n "$MONO_VER" ] && [ -d "$SHARED_MONO" ] && [ -d "$MONO_SRC/$MONO_VER" ]; then
     info "Updating shared PortProton mono..."

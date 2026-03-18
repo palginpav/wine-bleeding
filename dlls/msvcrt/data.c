@@ -26,9 +26,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 
-/* Forward declaration for lazy-init in __p___argv/__p___wargv */
+/* Forward declarations for lazy-init in __p___argc/__p___argv/__p___wargv */
 int CDECL __wgetmainargs(int *argc, wchar_t** *wargv, wchar_t** *wenvp,
                           int expand_wildcards, int *new_mode);
+int CDECL __getmainargs(int *argc, char** *argv, char** *envp,
+                         int expand_wildcards, int *new_mode);
 
 static WCHAR **initial_wargv;
 static int initial_argc;
@@ -154,8 +156,26 @@ typedef int (CDECL *_INITTERM_E_FN)(void);
 
 /***********************************************************************
  *		__p___argc (MSVCRT.@)
+ *
+ * Lazy-initialize argc if deferred (ucrtbase).  CRT startup calls
+ * __p___argc() before __p___argv()/__p___wargv(), so this must also
+ * trigger init.  Initialize both narrow and wide argv to avoid the
+ * subsequent __p___argv() check seeing argc!=0 and skipping its init.
  */
-int* CDECL __p___argc(void) { return &MSVCRT___argc; }
+int* CDECL __p___argc(void)
+{
+    if (!MSVCRT___argc && !MSVCRT___argv && !MSVCRT___wargv)
+    {
+        int newmode = 0;
+        /* Use __getmainargs to initialize both __argc AND __argv (narrow).
+         * __wgetmainargs only sets __wargv, leaving __argv NULL — which
+         * causes crashes in programs using main() (not wmain()). */
+        __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
+        /* Also init wide argv for programs using wmain() */
+        MSVCRT___wargv = initial_wargv;
+    }
+    return &MSVCRT___argc;
+}
 
 /***********************************************************************
  *		__p__commode (MSVCRT.@)

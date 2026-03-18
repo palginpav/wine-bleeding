@@ -3141,11 +3141,9 @@ static NTSTATUS find_builtin_without_file( const WCHAR *name, UNICODE_STRING *ne
 
     if (contains_path( name )) return status;
 
-    if (!is_prefix_bootstrap)
-    {
-        /* 16-bit files can't be loaded from the prefix */
-        if (!name[1] || wcscmp( name + wcslen(name) - 2, L"16" )) return status;
-    }
+    /* allow builtin resolution at any time — real builtins are deployed to prefix,
+     * but this fallback ensures loading works even if a file is missing.
+     * 16-bit files are always searched in dist (they can't exist in prefix). */
 
     if (!get_env_var( L"WINEBUILDDIR", 20 + 2 * wcslen(name) + wcslen(pe_dir), new_name ))
     {
