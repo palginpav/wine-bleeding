@@ -164,21 +164,13 @@ typedef int (CDECL *_INITTERM_E_FN)(void);
  */
 int* CDECL __p___argc(void)
 {
-    if (!MSVCRT___argc)
+#if _MSVCR_VER < 140
+    if (!MSVCRT___argc && !MSVCRT___argv && !MSVCRT___wargv)
     {
-        if (initial_wargv)
-        {
-            MSVCRT___argc = initial_argc;
-            if (!MSVCRT___argv) MSVCRT___argv = build_argv( initial_wargv );
-            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
-        }
-        else if (!MSVCRT___argv && !MSVCRT___wargv)
-        {
-            int newmode = 0;
-            __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
-            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
-        }
+        int newmode = 0;
+        __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
     }
+#endif
     return &MSVCRT___argc;
 }
 
@@ -290,20 +282,18 @@ wchar_t** CDECL __p__wcmdln(void) { return &MSVCRT__wcmdln; }
  */
 char*** CDECL __p___argv(void)
 {
-    if (!MSVCRT___argv)
+#if _MSVCR_VER < 140
+    /* For older CRT: lazy-init if needed */
+    if (!MSVCRT___argv && !MSVCRT___argc)
     {
-        if (initial_wargv)
-        {
-            MSVCRT___argc = initial_argc;
-            MSVCRT___argv = build_argv( initial_wargv );
-            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
-        }
-        else if (!MSVCRT___argc)
-        {
-            int newmode = 0;
-            __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
-        }
+        int newmode = 0;
+        __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
     }
+#endif
+    /* For ucrtbase (_MSVCR_VER >= 140): return as-is.  __argv stays NULL
+     * until _configure_narrow_argv/_configure_wide_argv is called by the
+     * app's CRT startup.  DO NOT lazy-init here — Qt6 checks for NULL
+     * __argv and skips its argv validation if so. */
     return &MSVCRT___argv;
 }
 
@@ -312,11 +302,13 @@ char*** CDECL __p___argv(void)
  */
 wchar_t*** CDECL __p___wargv(void)
 {
+#if _MSVCR_VER < 140
     if (!MSVCRT___wargv && !MSVCRT___argc)
     {
         int newmode = 0;
         __wgetmainargs(&MSVCRT___argc, &MSVCRT___wargv, &MSVCRT___winitenv, 0, &newmode);
     }
+#endif
     return &MSVCRT___wargv;
 }
 
@@ -396,18 +388,11 @@ void msvcrt_init_args(void)
   MSVCRT__wcmdln = _wcsdup( GetCommandLineW() );
   initial_wargv  = cmdline_to_argv( GetCommandLineW(), &initial_argc );
 
-  /* On Windows, ucrtbase.dll does NOT initialize __argc/__argv during
-   * DLL_PROCESS_ATTACH.  They remain 0/NULL until the application's CRT
-   * startup (e.g., mainCRTStartup in VCRUNTIME140) explicitly calls
-   * __wgetmainargs.  Some applications (e.g., Qt6 in KOMPAS-3D) compare
-   * their own argc with CRT __argc — if they match, Qt6 iterates over
-   * the application's argv array using __argc as the count.  When the
-   * application's argv contains NULL entries, this crashes.
-   *
-   * For ucrtbase (_MSVCR_VER >= 140), defer __argc/__argv initialization
-   * to __wgetmainargs/__getmainargs, matching Windows behavior.  For
-   * older CRT versions (msvcrt, msvcr*.dll), keep eager initialization
-   * for backward compatibility. */
+  /* Match Windows ucrtbase behavior: during DLL_PROCESS_ATTACH, only
+   * parse the command line into initial_wargv/initial_argc (done above).
+   * Do NOT set __argc/__argv/__wargv here — they stay 0/NULL until the
+   * app's CRT startup calls _configure_narrow_argv or _configure_wide_argv.
+   * For older CRT versions (msvcrt, msvcr*.dll), keep eager init. */
 #if _MSVCR_VER < 140
   MSVCRT___argc  = initial_argc;
   MSVCRT___wargv = initial_wargv;
@@ -672,14 +657,18 @@ void CDECL __set_app_type(int app_type)
  */
 int CDECL _configure_narrow_argv(int mode)
 {
-  TRACE("(%d)\n", mode);
-  /* Eagerly initialize argv for native VCRUNTIME140 CRT startup.
-   * On Windows, this prepares the argv array; native CRT then reads
-   * it via __p___argc/__p___argv without calling __getmainargs. */
+  TRACE("(%d) initial_wargv=%p __argv=%p __argc=%d\n",
+        mode, initial_wargv, MSVCRT___argv, MSVCRT___argc);
+  /* On Windows, _configure_narrow_argv is called by each module's CRT
+   * startup (_DllMainCRTStartup / mainCRTStartup) to ensure __argv
+   * is initialized from the command line.  Only build once. */
   if (!MSVCRT___argv && initial_wargv)
   {
-      MSVCRT___argc = initial_argc;
       MSVCRT___argv = build_argv( initial_wargv );
+  }
+  if (initial_wargv)
+  {
+      MSVCRT___argc = initial_argc;
       MSVCRT___wargv = initial_wargv;
   }
   return 0;
@@ -709,12 +698,16 @@ char** CDECL _get_initial_narrow_environment(void)
  */
 int CDECL _configure_wide_argv(int mode)
 {
-  TRACE("(%d)\n", mode);
-  if (!MSVCRT___wargv && initial_wargv)
+  TRACE("(%d) initial_wargv=%p __wargv=%p __argc=%d\n",
+        mode, initial_wargv, MSVCRT___wargv, MSVCRT___argc);
+  /* Only set __wargv and __argc. Do NOT set __argv here — on Windows,
+   * _configure_wide_argv only initializes wide argv.  Narrow __argv
+   * is only set by _configure_narrow_argv.  Qt6 checks if __argv is
+   * NULL and skips its argv comparison in that case. */
+  if (initial_wargv)
   {
       MSVCRT___argc = initial_argc;
       MSVCRT___wargv = initial_wargv;
-      if (!MSVCRT___argv) MSVCRT___argv = build_argv( initial_wargv );
   }
   return 0;
 }
