@@ -40,7 +40,7 @@ if [ -n "${1:-}" ]; then
     DIST_DIR="$(cd "$1" && pwd)"
 else
     DIST_DIR=""
-    DIST_DIR="$(ls -d "$WINE_ROOT"/dist/WINE-BLEEDING-* 2>/dev/null | sort -V | tail -n1 || true)"
+    DIST_DIR="$(find "$WINE_ROOT"/dist -maxdepth 1 -type d -name 'WINE-BLEEDING-*' 2>/dev/null | sort -V | tail -n1 || true)"
     if [ -z "$DIST_DIR" ]; then
         echo "Error: dist not found (WINE-BLEEDING-*). Pass explicit path: $0 /path/to/dist" >&2
         exit 1
@@ -81,6 +81,11 @@ setup_fork_remote() {
 }
 
 echo "Syncing full submodule tree..."
+# Clean build artifacts from submodules before update (wpf generates files during build)
+for sub in mono wpf winforms; do
+    [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" checkout -- . 2>/dev/null
+    [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" clean -fd 2>/dev/null
+done
 GIT_TERMINAL_PROMPT=0 git submodule sync --recursive >/dev/null 2>&1 || true
 GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive
 

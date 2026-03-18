@@ -138,20 +138,21 @@ WINE_SYS64="$DIST_DST/lib/wine/x86_64-windows"
 WINE_SYS32_32="$PREFIX_DIR/drive_c/windows/syswow64"
 WINE_SYS32_SRC="$DIST_DST/lib/wine/i386-windows"
 
+# Wine loads builtins from dist, NOT from prefix system32.
+# Prefix system32 only needs fakedlls (from default_pfx template).
+# Only copy DLLs that must override template versions.
 if [ -d "$WINE_SYS32" ] && [ -d "$WINE_SYS64" ]; then
-    # Critical system executables
-    for exe in services.exe svchost.exe plugplay.exe wineboot.exe \
-               start.exe regsvr32.exe cmd.exe explorer.exe; do
-        [ -f "$WINE_SYS64/$exe" ] && cp -f "$WINE_SYS64/$exe" "$WINE_SYS32/$exe"
-    done
-
-    # Critical system DLLs
     for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 \
-               cryptbase rpcss ole32 oleaut32; do
+               cryptbase; do
         [ -f "$WINE_SYS64/${dll}.dll" ] && cp -f "$WINE_SYS64/${dll}.dll" "$WINE_SYS32/${dll}.dll"
     done
-
-    info "Synced system executables and DLLs"
+    if [ -d "$WINE_SYS32_32" ] && [ -d "$WINE_SYS32_SRC" ]; then
+        for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 \
+                   cryptbase; do
+            [ -f "$WINE_SYS32_SRC/${dll}.dll" ] && cp -f "$WINE_SYS32_SRC/${dll}.dll" "$WINE_SYS32_32/${dll}.dll"
+        done
+    fi
+    info "Updated DLL overrides in prefix"
 fi
 
 # 3. Install mono into prefix
@@ -171,17 +172,15 @@ else
     warn "No mono found in distribution"
 fi
 
-# 4. Initialize/update prefix via wineboot
+# 4. Update prefix via wineboot
+# Use -r (restart) for template-based prefixes, -u (update) for existing ones.
+# Never use --init: it requires rundll32+setupapi which need fakedlls first.
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 sleep 1
 export WINEPREFIX="$PREFIX_DIR"
 export WINEDEBUG=-all
 info "Initializing prefix..."
-if $NEW_PREFIX; then
-    "$DIST_DST/bin/wineboot" --init 2>/dev/null || true
-else
-    "$DIST_DST/bin/wineboot" -u 2>/dev/null || true
-fi
+"$DIST_DST/bin/wine" wineboot -r 2>/dev/null || true
 sleep 2
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 
