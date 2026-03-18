@@ -133,12 +133,9 @@ sleep 2
 SHARED_MONO="$(dirname "$PP_DATA")/data/tmp/mono/$MONO_VER"
 if [ -d "$SHARED_MONO" ] && [ -d "$MONO_SRC/$MONO_VER" ]; then
     info "Updating shared PortProton mono..."
-    cp -f "$MONO_SRC/$MONO_VER/lib/mono/4.5/mscorlib.dll" "$SHARED_MONO/lib/mono/4.5/mscorlib.dll" 2>/dev/null
-    for ndll in PresentationNative_cor3.dll wpfgfx_cor3.dll; do
-        [ -f "$MONO_SRC/$MONO_VER/lib/x86_64/$ndll" ] && \
-            cp -f "$MONO_SRC/$MONO_VER/lib/x86_64/$ndll" "$SHARED_MONO/lib/x86_64/$ndll" 2>/dev/null
-    done
-    info "Shared mono updated"
+    rsync -a --update "$MONO_SRC/$MONO_VER/" "$SHARED_MONO/" 2>/dev/null \
+        || cp -a "$MONO_SRC/$MONO_VER/"* "$SHARED_MONO/" 2>/dev/null
+    info "Shared mono fully synced"
 fi
 
 echo ""

@@ -1420,6 +1420,14 @@ static UINT execute_script( MSIPACKAGE *package, UINT script )
             rc = ACTION_PerformAction(package, package->script_actions[script][i]);
             if (rc != ERROR_SUCCESS)
             {
+                if (wcsstr( package->script_actions[script][i], L"ServiceConfig" ))
+                {
+                    WARN("Ignoring ServiceConfig failure (action %s returned %u) — "
+                         "SCM may be unavailable\n",
+                         debugstr_w(package->script_actions[script][i]), rc);
+                    rc = ERROR_SUCCESS;
+                    continue;
+                }
                 ERR("Execution of script %i halted; action %s returned %u\n",
                     script, debugstr_w(package->script_actions[script][i]), rc);
                 break;

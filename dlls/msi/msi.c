@@ -2283,7 +2283,7 @@ INSTALLUILEVEL WINAPI MsiSetInternalUI(INSTALLUILEVEL dwUILevel, HWND *phWnd)
     INSTALLUILEVEL old = gUILevel;
     HWND oldwnd = gUIhwnd;
 
-    TRACE("%08x %p\n", dwUILevel, phWnd);
+    TRACE("%08x %p, old level %d\n", dwUILevel, phWnd, gUILevel);
 
     if (dwUILevel & ~(INSTALLUILEVEL_MASK|INSTALLUILEVEL_HIDECANCEL|INSTALLUILEVEL_PROGRESSONLY|
                       INSTALLUILEVEL_ENDDIALOG|INSTALLUILEVEL_SOURCERESONLY))
