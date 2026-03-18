@@ -164,15 +164,20 @@ typedef int (CDECL *_INITTERM_E_FN)(void);
  */
 int* CDECL __p___argc(void)
 {
-    if (!MSVCRT___argc && !MSVCRT___argv && !MSVCRT___wargv)
+    if (!MSVCRT___argc)
     {
-        int newmode = 0;
-        /* Use __getmainargs to initialize both __argc AND __argv (narrow).
-         * __wgetmainargs only sets __wargv, leaving __argv NULL — which
-         * causes crashes in programs using main() (not wmain()). */
-        __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
-        /* Also init wide argv for programs using wmain() */
-        MSVCRT___wargv = initial_wargv;
+        if (initial_wargv)
+        {
+            MSVCRT___argc = initial_argc;
+            if (!MSVCRT___argv) MSVCRT___argv = build_argv( initial_wargv );
+            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
+        }
+        else if (!MSVCRT___argv && !MSVCRT___wargv)
+        {
+            int newmode = 0;
+            __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
+            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
+        }
     }
     return &MSVCRT___argc;
 }
@@ -285,10 +290,19 @@ wchar_t** CDECL __p__wcmdln(void) { return &MSVCRT__wcmdln; }
  */
 char*** CDECL __p___argv(void)
 {
-    if (!MSVCRT___argv && !MSVCRT___argc)
+    if (!MSVCRT___argv)
     {
-        int newmode = 0;
-        __wgetmainargs(&MSVCRT___argc, &MSVCRT___wargv, &MSVCRT___winitenv, 0, &newmode);
+        if (initial_wargv)
+        {
+            MSVCRT___argc = initial_argc;
+            MSVCRT___argv = build_argv( initial_wargv );
+            if (!MSVCRT___wargv) MSVCRT___wargv = initial_wargv;
+        }
+        else if (!MSVCRT___argc)
+        {
+            int newmode = 0;
+            __getmainargs(&MSVCRT___argc, &MSVCRT___argv, &MSVCRT__environ, 0, &newmode);
+        }
     }
     return &MSVCRT___argv;
 }
@@ -659,6 +673,15 @@ void CDECL __set_app_type(int app_type)
 int CDECL _configure_narrow_argv(int mode)
 {
   TRACE("(%d)\n", mode);
+  /* Eagerly initialize argv for native VCRUNTIME140 CRT startup.
+   * On Windows, this prepares the argv array; native CRT then reads
+   * it via __p___argc/__p___argv without calling __getmainargs. */
+  if (!MSVCRT___argv && initial_wargv)
+  {
+      MSVCRT___argc = initial_argc;
+      MSVCRT___argv = build_argv( initial_wargv );
+      MSVCRT___wargv = initial_wargv;
+  }
   return 0;
 }
 
@@ -686,7 +709,13 @@ char** CDECL _get_initial_narrow_environment(void)
  */
 int CDECL _configure_wide_argv(int mode)
 {
-  WARN("(%d) stub\n", mode);
+  TRACE("(%d)\n", mode);
+  if (!MSVCRT___wargv && initial_wargv)
+  {
+      MSVCRT___argc = initial_argc;
+      MSVCRT___wargv = initial_wargv;
+      if (!MSVCRT___argv) MSVCRT___argv = build_argv( initial_wargv );
+  }
   return 0;
 }
 
