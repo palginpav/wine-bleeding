@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Deploy wine-bleeding distribution to PortProton and configure a prefix.
-# Run from Wine source tree root:
+# Usage:
 #   ./tools/deploy-to-portproton.sh [dist-name]
+#
+# Creates proper prefixes using PortProton's default_pfx.tar.xz as base,
+# syncs system DLLs, mono, and shared mono.
 
 set -euo pipefail
 
@@ -10,9 +13,11 @@ PP_ROOT="${PORTPROTON_ROOT:-$HOME/PortProton}"
 PP_DATA="$PP_ROOT/data"
 PP_DIST="$PP_DATA/dist"
 PP_PREFIXES="$PP_DATA/prefixes"
+PP_PLUGINS="$PP_DATA/tmp/plugins_v20"
+PP_TMP="$PP_DATA/tmp"
 
 # Colors
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 die() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 info() { echo -e "${GREEN}$*${NC}"; }
@@ -22,7 +27,6 @@ warn() { echo -e "${YELLOW}$*${NC}"; }
 if [ -n "${1:-}" ]; then
     DIST_NAME="$1"
 else
-    # Auto-detect latest WINE-BLEEDING-* in dist/
     DIST_NAME=$(ls -1d "$WINE_ROOT/dist/WINE-BLEEDING-"* 2>/dev/null | sort | tail -1 | xargs basename 2>/dev/null || true)
 fi
 
@@ -57,7 +61,6 @@ declare -a PLIST=()
 for p in "$PP_PREFIXES"/*/; do
     [ -d "$p" ] || continue
     pname=$(basename "$p")
-    # Skip entries with newlines or symlink loops
     [[ "$pname" == *$'\n'* ]] && continue
     [ -L "$p" ] && [ ! -d "$p/drive_c" ] && continue
     pver=$(cat "$p/.wine_ver" 2>/dev/null || echo "unknown")
@@ -69,10 +72,11 @@ done
 echo ""
 read -rp "Select prefix [0-$((i-1))]: " choice
 
+NEW_PREFIX=false
 if [ "$choice" = "0" ]; then
     read -rp "New prefix name: " PREFIX_NAME
     [ -z "$PREFIX_NAME" ] && die "Empty prefix name"
-    mkdir -p "$PP_PREFIXES/$PREFIX_NAME"
+    NEW_PREFIX=true
 else
     idx=$((choice - 1))
     [ "$idx" -ge 0 ] && [ "$idx" -lt "${#PLIST[@]}" ] || die "Invalid choice"
@@ -82,16 +86,77 @@ fi
 PREFIX_DIR="$PP_PREFIXES/$PREFIX_NAME"
 info "Prefix: $PREFIX_NAME ($PREFIX_DIR)"
 
-# --- Update prefix ---
+# ============================================================
+# Create new prefix from PortProton's default_pfx template
+# ============================================================
+if $NEW_PREFIX; then
+    echo ""
+    DEFAULT_PFX="$PP_PLUGINS/default_pfx.tar.xz"
+    if [ -f "$DEFAULT_PFX" ]; then
+        info "Creating prefix from PortProton default template..."
+        mkdir -p "$PREFIX_DIR"
+        tar xf "$DEFAULT_PFX" -C "$PREFIX_DIR"
+        info "Template extracted"
+    else
+        warn "No default_pfx.tar.xz found — creating minimal prefix..."
+        mkdir -p "$PREFIX_DIR/drive_c/windows/system32"
+        mkdir -p "$PREFIX_DIR/drive_c/windows/syswow64"
+        mkdir -p "$PREFIX_DIR/drive_c/Program Files"
+        mkdir -p "$PREFIX_DIR/drive_c/Program Files (x86)"
+        mkdir -p "$PREFIX_DIR/drive_c/ProgramData"
+        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/AppData/Local/Temp"
+        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Desktop"
+        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Documents"
+        mkdir -p "$PREFIX_DIR/drive_c/users/steamuser/Temp"
+    fi
+
+    # Create dosdevices
+    mkdir -p "$PREFIX_DIR/dosdevices"
+    ln -sfn "../drive_c" "$PREFIX_DIR/dosdevices/c:"
+    ln -sfn "/" "$PREFIX_DIR/dosdevices/z:"
+
+    # Clean up autostart entries from template (Epic Games, etc.)
+    if [ -f "$PREFIX_DIR/user.reg" ]; then
+        sed -i '/"EpicGamesLauncher"/d' "$PREFIX_DIR/user.reg"
+        sed -i '/"Steam"/d' "$PREFIX_DIR/user.reg"
+    fi
+fi
+
+# ============================================================
+# Update prefix configuration
+# ============================================================
 echo ""
 
 # 1. Set wine version
 echo "$DIST_NAME" > "$PREFIX_DIR/.wine_ver"
 info "Set .wine_ver = $DIST_NAME"
 
-# 2. Install mono into prefix
+# 2. Sync critical system executables from dist
+#    Wine 11+ loads builtins from dist, but some exe are loaded from prefix
+WINE_SYS32="$PREFIX_DIR/drive_c/windows/system32"
+WINE_SYS64="$DIST_DST/lib/wine/x86_64-windows"
+WINE_SYS32_32="$PREFIX_DIR/drive_c/windows/syswow64"
+WINE_SYS32_SRC="$DIST_DST/lib/wine/i386-windows"
+
+if [ -d "$WINE_SYS32" ] && [ -d "$WINE_SYS64" ]; then
+    # Critical system executables
+    for exe in services.exe svchost.exe plugplay.exe wineboot.exe \
+               start.exe regsvr32.exe cmd.exe explorer.exe; do
+        [ -f "$WINE_SYS64/$exe" ] && cp -f "$WINE_SYS64/$exe" "$WINE_SYS32/$exe"
+    done
+
+    # Critical system DLLs
+    for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 \
+               cryptbase rpcss ole32 oleaut32; do
+        [ -f "$WINE_SYS64/${dll}.dll" ] && cp -f "$WINE_SYS64/${dll}.dll" "$WINE_SYS32/${dll}.dll"
+    done
+
+    info "Synced system executables and DLLs"
+fi
+
+# 3. Install mono into prefix
 MONO_SRC="$DIST_DST/share/wine/mono"
-MONO_VER=$(ls -1 "$MONO_SRC" 2>/dev/null | head -1)
+MONO_VER=$(ls -1d "$MONO_SRC"/wine-mono-* 2>/dev/null | sort -V | tail -1 | xargs basename 2>/dev/null || true)
 if [ -n "$MONO_VER" ]; then
     MONO_DST="$PREFIX_DIR/drive_c/windows/mono/mono-2.0"
     if [ -d "$MONO_DST" ]; then
@@ -106,32 +171,30 @@ else
     warn "No mono found in distribution"
 fi
 
-# 3. Copy override DLLs (vcomp builtins, etc.)
-WINE_SYS32="$PREFIX_DIR/drive_c/windows/system32"
-if [ -d "$WINE_SYS32" ]; then
-    # Copy Wine builtin vcomp DLLs to replace any native overrides
-    for dll in vcomp vcomp90 vcomp100 vcomp110 vcomp120 vcomp140 cryptbase; do
-        src="$DIST_DST/lib/wine/x86_64-windows/${dll}.dll"
-        if [ -f "$src" ]; then
-            cp -f "$src" "$WINE_SYS32/${dll}.dll"
-        fi
-    done
-    info "Updated builtin DLL overrides in system32"
-fi
-
-# 4. Initialize prefix (start services.exe via wineboot --init)
+# 4. Initialize/update prefix via wineboot
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 sleep 1
 export WINEPREFIX="$PREFIX_DIR"
 export WINEDEBUG=-all
-info "Initializing prefix (starting services.exe)..."
-"$DIST_DST/bin/wineboot" --init 2>/dev/null || true
+info "Initializing prefix..."
+if $NEW_PREFIX; then
+    "$DIST_DST/bin/wineboot" --init 2>/dev/null || true
+else
+    "$DIST_DST/bin/wineboot" -u 2>/dev/null || true
+fi
 sleep 2
 "$DIST_DST/bin/wineserver" -k 2>/dev/null || true
 
-# 5. Update shared mono if PortProton uses symlinked mono
-SHARED_MONO="$(dirname "$PP_DATA")/data/tmp/mono/$MONO_VER"
-if [ -d "$SHARED_MONO" ] && [ -d "$MONO_SRC/$MONO_VER" ]; then
+# 5. Verify prefix
+VERIFY_OK=true
+[ -d "$PREFIX_DIR/drive_c/windows/system32" ] || { warn "Missing system32"; VERIFY_OK=false; }
+[ -f "$PREFIX_DIR/system.reg" ] || { warn "Missing system.reg"; VERIFY_OK=false; }
+[ -f "$PREFIX_DIR/user.reg" ] || { warn "Missing user.reg"; VERIFY_OK=false; }
+$VERIFY_OK && info "Prefix verified OK"
+
+# 6. Update shared PortProton mono
+SHARED_MONO="$PP_TMP/mono/$MONO_VER"
+if [ -n "$MONO_VER" ] && [ -d "$SHARED_MONO" ] && [ -d "$MONO_SRC/$MONO_VER" ]; then
     info "Updating shared PortProton mono..."
     rsync -a --update "$MONO_SRC/$MONO_VER/" "$SHARED_MONO/" 2>/dev/null \
         || cp -a "$MONO_SRC/$MONO_VER/"* "$SHARED_MONO/" 2>/dev/null
