@@ -1385,8 +1385,10 @@ static void test_TCS_OWNERDRAWFIXED(void)
         BYTE lparam[sizeof(LPARAM)+1];
     } item;
     ULONG_PTR itemdata;
+    COLORREF color;
     HWND hTab;
     BOOL ret;
+    HDC hdc;
 
     hTab = createFilledTabControl(parent_wnd, TCS_FIXEDWIDTH|TCS_OWNERDRAWFIXED, TCIF_TEXT|TCIF_IMAGE, 4);
     ok(hTab != NULL, "Failed to create tab control\n");

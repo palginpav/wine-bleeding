@@ -40,6 +40,7 @@ extern void WINSPOOL_LoadSystemPrinters(void);
 struct printer_info
 {
     WCHAR *name;
+    WCHAR *driver_name;
     WCHAR *comment;
     WCHAR *location;
     BOOL is_default;

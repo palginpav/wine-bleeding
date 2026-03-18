@@ -237,7 +237,7 @@
 @ stub FsRtlFastUnlockSingle
 @ stub FsRtlFindInTunnelCache
 @ stub FsRtlFreeFileLock
-@ stdcall FsRtlGetFileSize(ptr ptr)
+@ stub FsRtlGetFileSize
 @ stub FsRtlGetNextFileLock
 @ stub FsRtlGetNextLargeMcbEntry
 @ stub FsRtlGetNextMcbEntry

@@ -22,6 +22,13 @@
 #pragma makedep testdll
 #endif
 
+/* ExAcquireFastMutex/ExReleaseFastMutex are not exported from ntoskrnl on i386
+ * (they are HAL inline functions with fastcall ABI). Skip this test driver. */
+#ifdef __i386__
+/* Minimal stub — ExAcquireFastMutex is not exported from ntoskrnl on i386. */
+int __stdcall DriverEntry(void *driver, void *path) { return (int)0xC0000002L; }
+#else
+
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -1201,3 +1208,5 @@ NTSTATUS WINAPI DriverEntry(DRIVER_OBJECT *driver, UNICODE_STRING *registry)
 
     return STATUS_SUCCESS;
 }
+
+#endif /* \!__i386__ */
