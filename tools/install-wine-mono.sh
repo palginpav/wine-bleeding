@@ -129,6 +129,10 @@ if [ "$NEED_BUILD" -eq 1 ]; then
         echo "Install libtool (e.g. apt install libtool / dnf install libtool)." >&2
         exit 1
     fi
+    # Clean stale build artifacts so make sees changed sources after submodule update.
+    # git checkout/submodule update don't update mtimes, so make may skip recompilation.
+    rm -rf "$MONO_SRC_DIR/image" "$MONO_SRC_DIR/wine-mono-${WINE_MONO_VERSION}-x86.tar.xz"
+    find "$MONO_SRC_DIR/mono" -name '*.c' -o -name '*.h' -o -name '*.cs' | xargs touch 2>/dev/null || true
     JOBS="$(nproc 2>/dev/null || echo 4)"
     echo "Building wine-mono tarball (MSI_VERSION=$WINE_MONO_VERSION, -j$JOBS)..."
     make -j"$JOBS" bin MSI_VERSION="$WINE_MONO_VERSION"
@@ -166,6 +170,23 @@ if ! find "$MONO_DIST_DIR/bin" -maxdepth 1 -type f -name 'libmono-2.0*.dll' | gr
     echo "Error: mono runtime DLL not found in $MONO_DIST_DIR/bin" >&2
     exit 1
 fi
+
+# Strip "Wine builtin DLL" marker from mono native DLLs.  Without this,
+# Wine's PE loader tries to find a matching .so backup and fails with
+# STATUS_BAD_IMAGE_FORMAT when loading via P/Invoke dllmap paths.
+for arch_dir in "$MONO_DIST_DIR/lib/x86" "$MONO_DIST_DIR/lib/x86_64"; do
+    [ -d "$arch_dir" ] || continue
+    for dll in "$arch_dir"/*.dll; do
+        [ -f "$dll" ] || continue
+        python3 -c "
+with open('$dll', 'r+b') as f:
+    f.seek(0x40)
+    if f.read(16) == b'Wine builtin DLL':
+        f.seek(0x40)
+        f.write(b'\x00' * 16)
+" 2>/dev/null || true
+    done
+done
 
 # Link native x86 DLLs into ALL GAC directories so mono P/Invoke can find
 # them.  Mono's $mono_libdir dllmap doesn't resolve on Wine for 32-bit
