@@ -164,6 +164,14 @@ deploy_gpu_dll() {
             [ -f "$dll" ] || continue
             local name=$(basename "$dll")
             cp -f "$dll" "$dst_dir/$name"
+            # Strip "Wine builtin DLL" marker so Wine loads as native
+            python3 -c "
+with open('$dst_dir/$name', 'r+b') as f:
+    f.seek(0x40)
+    if f.read(16) == b'Wine builtin DLL':
+        f.seek(0x40)
+        f.write(b'\x00' * 16)
+" 2>/dev/null || true
             ((count++))
         done
     fi

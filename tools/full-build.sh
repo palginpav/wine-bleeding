@@ -130,6 +130,30 @@ echo ""
 
 "$WINE_ROOT/tools/build-full-wine-deps.sh" "${PASSTHROUGH[@]}"
 
+# Strip "Wine builtin DLL" marker from DXVK/VKD3D/NVAPI DLLs so Wine loads
+# them as native (not builtin) when DLL overrides are set to native.
+DIST_NAME="${DIST_NAME:-WINE-BLEEDING-$(date +%d%m%Y)}"
+for gpu_dir in dxvk vkd3d-proton nvapi; do
+    for arch in x86_64-windows i386-windows; do
+        dpath="$WINE_ROOT/dist/$DIST_NAME/lib/wine/$gpu_dir/$arch"
+        [ -d "$dpath" ] || continue
+        for dll in "$dpath"/*.dll; do
+            [ -f "$dll" ] || continue
+            if python3 -c "
+with open('$dll', 'r+b') as f:
+    f.seek(0x40)
+    if f.read(16) == b'Wine builtin DLL':
+        f.seek(0x40)
+        f.write(b'\x00' * 16)
+        print('stripped')
+" 2>/dev/null | grep -q stripped; then
+                true  # silently stripped
+            fi
+        done
+    done
+done
+echo "  DXVK/VKD3D/NVAPI: stripped Wine builtin markers for native loading"
+
 echo ""
 echo "========== Готово =========="
 DIST_NAME="${DIST_NAME:-WINE-BLEEDING-$(date +%d%m%Y)}"
