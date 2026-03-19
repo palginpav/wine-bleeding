@@ -146,6 +146,94 @@ if $NEW_PREFIX && [ -f "$PREFIX_DIR/user.reg" ]; then
     sed -i '/"Steam"/d' "$PREFIX_DIR/user.reg"
 fi
 
+# ============================================================
+# Deploy DXVK / VKD3D-Proton / DXVK-NVAPI
+# ============================================================
+# These replace Wine's builtin d3d DLLs with Vulkan-based
+# implementations for better GPU performance.
+# ============================================================
+SYS32="$PREFIX_DIR/drive_c/windows/system32"
+SYS32_32="$PREFIX_DIR/drive_c/windows/syswow64"
+DLL_OVERRIDES=""
+
+deploy_gpu_dll() {
+    local src_dir="$1" arch_dir="$2" dst_dir="$3"
+    local count=0
+    if [ -d "$src_dir/$arch_dir" ]; then
+        for dll in "$src_dir/$arch_dir"/*.dll; do
+            [ -f "$dll" ] || continue
+            local name=$(basename "$dll")
+            cp -f "$dll" "$dst_dir/$name"
+            ((count++))
+        done
+    fi
+    echo "$count"
+}
+
+# DXVK: d3d8, d3d9, d3d10core, d3d11, dxgi → Vulkan
+DXVK_DIR="$DIST_DST/lib/wine/dxvk"
+if [ -d "$DXVK_DIR/x86_64-windows" ]; then
+    echo ""
+    n64=$(deploy_gpu_dll "$DXVK_DIR" "x86_64-windows" "$SYS32")
+    n32=0
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$DXVK_DIR" "i386-windows" "$SYS32_32")
+    DXVK_VER=$(cat "$DXVK_DIR/version" 2>/dev/null | head -1)
+    info "DXVK deployed: ${n64}x64 + ${n32}x32 DLLs (${DXVK_VER:-unknown})"
+    for dll in "$DXVK_DIR/x86_64-windows"/*.dll; do
+        [ -f "$dll" ] || continue
+        name=$(basename "$dll" .dll)
+        DLL_OVERRIDES="${DLL_OVERRIDES:+$DLL_OVERRIDES;}${name}=n"
+    done
+fi
+
+# VKD3D-Proton: d3d12, d3d12core → Vulkan
+VKD3D_DIR="$DIST_DST/lib/wine/vkd3d-proton"
+if [ -d "$VKD3D_DIR/x86_64-windows" ]; then
+    n64=$(deploy_gpu_dll "$VKD3D_DIR" "x86_64-windows" "$SYS32")
+    n32=0
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$VKD3D_DIR" "i386-windows" "$SYS32_32")
+    VKD3D_VER=$(cat "$VKD3D_DIR/version" 2>/dev/null | head -1)
+    info "VKD3D-Proton deployed: ${n64}x64 + ${n32}x32 DLLs (${VKD3D_VER:-unknown})"
+    for dll in "$VKD3D_DIR/x86_64-windows"/*.dll; do
+        [ -f "$dll" ] || continue
+        name=$(basename "$dll" .dll)
+        DLL_OVERRIDES="${DLL_OVERRIDES:+$DLL_OVERRIDES;}${name}=n"
+    done
+fi
+
+# DXVK-NVAPI: nvapi64, nvofapi64
+NVAPI_DIR="$DIST_DST/lib/wine/nvapi"
+if [ -d "$NVAPI_DIR/x86_64-windows" ]; then
+    n64=$(deploy_gpu_dll "$NVAPI_DIR" "x86_64-windows" "$SYS32")
+    n32=0
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$NVAPI_DIR" "i386-windows" "$SYS32_32")
+    NVAPI_VER=$(cat "$NVAPI_DIR/version" 2>/dev/null | head -1)
+    info "DXVK-NVAPI deployed: ${n64}x64 + ${n32}x32 DLLs (${NVAPI_VER:-unknown})"
+    for dll in "$NVAPI_DIR/x86_64-windows"/*.dll; do
+        [ -f "$dll" ] || continue
+        name=$(basename "$dll" .dll)
+        DLL_OVERRIDES="${DLL_OVERRIDES:+$DLL_OVERRIDES;}${name}=n"
+    done
+fi
+
+# Write DLL overrides to registry so Wine loads native (DXVK) instead of builtin
+if [ -n "$DLL_OVERRIDES" ] && [ -f "$PREFIX_DIR/user.reg" ]; then
+    # Ensure [Software\\Wine\\DllOverrides] section exists
+    if ! grep -q '^\[Software\\\\Wine\\\\DllOverrides\]' "$PREFIX_DIR/user.reg"; then
+        printf '\n[Software\\\\Wine\\\\DllOverrides]\n' >> "$PREFIX_DIR/user.reg"
+    fi
+    IFS=';' read -ra ENTRIES <<< "$DLL_OVERRIDES"
+    for entry in "${ENTRIES[@]}"; do
+        dll_name="${entry%%=*}"
+        dll_mode="${entry##*=}"
+        # Remove existing entry if present
+        sed -i "/^\"${dll_name}\"=/d" "$PREFIX_DIR/user.reg"
+        # Add after section header
+        sed -i "/^\[Software\\\\\\\\Wine\\\\\\\\DllOverrides\]/a \"${dll_name}\"=\"${dll_mode}\"" "$PREFIX_DIR/user.reg"
+    done
+    info "DLL overrides set: $DLL_OVERRIDES"
+fi
+
 # Verify prefix
 echo ""
 VERIFY_OK=true
