@@ -188,23 +188,28 @@ with open('$dll', 'r+b') as f:
     done
 done
 
-# Link native x86 DLLs into ALL GAC directories so mono P/Invoke can find
-# them.  Mono's $mono_libdir dllmap doesn't resolve on Wine for 32-bit
-# processes, causing DllNotFoundException for any native P/Invoke call.
-# 64-bit resolves $mono_libdir correctly so only x86 symlinks are needed.
+# Copy native DLLs so mono P/Invoke finds them without dllmap.
+# Mono's dllmap $mono_libdir doesn't resolve at runtime on Wine, and
+# Wine's Z:-drive doesn't follow relative Unix symlinks.
+# GAC gets x86_64 copies (mono runs .NET EXEs as 64-bit on 64-bit hosts).
+# lib/mono/4.5 gets x86 copies (WoW64 32-bit processes search there too).
 GAC_BASE="$MONO_DIST_DIR/lib/mono/gac"
-X86_DIR="$MONO_DIST_DIR/lib/x86"
-if [ -d "$X86_DIR" ]; then
-    for dll in "$X86_DIR"/*.dll; do
+MONO45_DIR="$MONO_DIST_DIR/lib/mono/4.5"
+find "$GAC_BASE" -maxdepth 3 -type l -name "*.dll" -delete 2>/dev/null || true
+# x86 → lib/mono/4.5 (for WoW64 32-bit processes)
+if [ -d "$MONO_DIST_DIR/lib/x86" ]; then
+    for dll in "$MONO_DIST_DIR/lib/x86"/*.dll; do
+        [ -f "$dll" ] || continue
+        cp -f "$dll" "$MONO45_DIR/$(basename "$dll")"
+    done
+fi
+# x86_64 → every GAC version dir (for 64-bit processes)
+if [ -d "$MONO_DIST_DIR/lib/x86_64" ]; then
+    for dll in "$MONO_DIST_DIR/lib/x86_64"/*.dll; do
         [ -f "$dll" ] || continue
         name=$(basename "$dll")
-        for gac_dir in "$GAC_BASE"/*/; do
-            [ -d "$gac_dir" ] || continue
-            # Link into each version subdirectory
-            for ver_dir in "$gac_dir"*/; do
-                [ -d "$ver_dir" ] || continue
-                ln -sf "$dll" "$ver_dir/$name"
-            done
+        find "$GAC_BASE" -mindepth 2 -maxdepth 2 -type d | while read ver_dir; do
+            cp -f "$dll" "$ver_dir/$name"
         done
     done
 fi
