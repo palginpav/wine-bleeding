@@ -167,5 +167,21 @@ if ! find "$MONO_DIST_DIR/bin" -maxdepth 1 -type f -name 'libmono-2.0*.dll' | gr
     exit 1
 fi
 
+# Link PresentationNative_cor3.dll into GAC directories so mono P/Invoke
+# can find it.  The .dll.config dllmap uses $mono_libdir which doesn't
+# always resolve correctly on Wine for 32-bit processes, causing WPF
+# apps (VS Installer, etc.) to crash with DllNotFoundException.
+# We link the x86 version since 64-bit processes resolve $mono_libdir fine.
+PN_X86="$MONO_DIST_DIR/lib/x86/PresentationNative_cor3.dll"
+if [ -f "$PN_X86" ]; then
+    for gac_dir in \
+        "$MONO_DIST_DIR/lib/mono/gac/WindowsBase/4.0.0.0__31bf3856ad364e35" \
+        "$MONO_DIST_DIR/lib/mono/gac/PresentationCore/4.0.0.0__31bf3856ad364e35" \
+        "$MONO_DIST_DIR/lib/mono/gac/PresentationFramework/4.0.0.0__31bf3856ad364e35"; do
+        [ -d "$gac_dir" ] || continue
+        ln -sf "$PN_X86" "$gac_dir/PresentationNative_cor3.dll"
+    done
+fi
+
 echo "Installed patched local wine-mono to:"
 echo "  $MONO_DIST_DIR"
