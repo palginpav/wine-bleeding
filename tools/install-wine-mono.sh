@@ -167,9 +167,9 @@ if ! find "$MONO_DIST_DIR/bin" -maxdepth 1 -type f -name 'libmono-2.0*.dll' | gr
     exit 1
 fi
 
-# Link native WPF DLLs into GAC directories so mono P/Invoke can find them.
-# Mono's $mono_libdir dllmap doesn't resolve on Wine for 32-bit processes,
-# causing all 32-bit WPF apps to crash with DllNotFoundException.
+# Link native x86 DLLs into ALL GAC directories so mono P/Invoke can find
+# them.  Mono's $mono_libdir dllmap doesn't resolve on Wine for 32-bit
+# processes, causing DllNotFoundException for any native P/Invoke call.
 # 64-bit resolves $mono_libdir correctly so only x86 symlinks are needed.
 GAC_BASE="$MONO_DIST_DIR/lib/mono/gac"
 X86_DIR="$MONO_DIST_DIR/lib/x86"
@@ -177,11 +177,13 @@ if [ -d "$X86_DIR" ]; then
     for dll in "$X86_DIR"/*.dll; do
         [ -f "$dll" ] || continue
         name=$(basename "$dll")
-        for gac_dir in "$GAC_BASE"/WindowsBase/4.0.0.0__* \
-                        "$GAC_BASE"/PresentationCore/4.0.0.0__* \
-                        "$GAC_BASE"/PresentationFramework/4.0.0.0__*; do
+        for gac_dir in "$GAC_BASE"/*/; do
             [ -d "$gac_dir" ] || continue
-            ln -sf "$dll" "$gac_dir/$name"
+            # Link into each version subdirectory
+            for ver_dir in "$gac_dir"*/; do
+                [ -d "$ver_dir" ] || continue
+                ln -sf "$dll" "$ver_dir/$name"
+            done
         done
     done
 fi
