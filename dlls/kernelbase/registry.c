@@ -3208,32 +3208,67 @@ cleanup:
 
 /******************************************************************************
  * RegLoadAppKeyA (kernelbase.@)
- *
  */
 LSTATUS WINAPI RegLoadAppKeyA(const char *file, HKEY *result, REGSAM sam, DWORD options, DWORD reserved)
 {
-    FIXME("%s %p %lu %lu %lu: stub\n", wine_dbgstr_a(file), result, sam, options, reserved);
+    WCHAR *fileW;
+    UNICODE_STRING fileU;
+    STRING fileA;
+    LSTATUS ret;
+
+    TRACE("%s %p %lu %lu %lu\n", wine_dbgstr_a(file), result, sam, options, reserved);
 
     if (!file || reserved)
         return ERROR_INVALID_PARAMETER;
 
-    *result = (HKEY)0xdeadbeef;
-    return ERROR_SUCCESS;
+    RtlInitAnsiString(&fileA, file);
+    if (RtlAnsiStringToUnicodeString(&fileU, &fileA, TRUE))
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    fileW = fileU.Buffer;
+    ret = RegLoadAppKeyW(fileW, result, sam, options, reserved);
+    RtlFreeUnicodeString(&fileU);
+    return ret;
 }
 
 /******************************************************************************
  * RegLoadAppKeyW (kernelbase.@)
  *
+ * Load an application hive from a file. On Windows this creates an isolated
+ * registry hive under \Registry\A\{hash}. We emulate this by returning
+ * a handle to HKCU root so that all writes (relative to the handle) land
+ * directly in the current user hive, where they can be read back without
+ * any registry detouring.
  */
 LSTATUS WINAPI RegLoadAppKeyW(const WCHAR *file, HKEY *result, REGSAM sam, DWORD options, DWORD reserved)
 {
-    FIXME("%s %p %lu %lu %lu: stub\n", wine_dbgstr_w(file), result, sam, options, reserved);
+    HKEY hkcu;
+    NTSTATUS status;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING nameW;
+
+    TRACE("%s %p %lu %lu %lu\n", wine_dbgstr_w(file), result, sam, options, reserved);
 
     if (!file || reserved)
         return ERROR_INVALID_PARAMETER;
+    if (!result)
+        return ERROR_INVALID_PARAMETER;
 
-    *result = (HKEY)0xdeadbeef;
-    return ERROR_SUCCESS;
+    *result = NULL;
+
+    if (!(hkcu = get_special_root_hkey(HKEY_LOCAL_MACHINE)))
+        return ERROR_INVALID_HANDLE;
+
+    /* Open a new handle to the HKLM root so that writes through the
+     * returned handle land in HKLM, where applications that normally
+     * rely on registry detouring can read them back without any hooks. */
+    RtlInitUnicodeString(&nameW, L"");
+    InitializeObjectAttributes(&attr, &nameW, OBJ_CASE_INSENSITIVE, hkcu, NULL);
+
+    if (!sam) sam = MAXIMUM_ALLOWED;
+    status = NtOpenKey((HANDLE *)result, sam, &attr);
+
+    return RtlNtStatusToDosError(status);
 }
 
 
