@@ -1917,8 +1917,11 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
 
     if (!stringname || !assemblyname) return NULL;
 
-    /* Check codeBase redirects from the config file first — they have
-     * highest priority since they specify an exact path. */
+    /* Check codeBase redirects from the config file — but only for assemblies
+     * that are NOT available in the Mono GAC.  Assemblies like WindowsBase,
+     * PresentationFramework etc. exist in both the GAC (wine-mono's compatible
+     * version) and in app-local directories (the real .NET Framework version
+     * which is incompatible with Mono).  Prefer the GAC version. */
     if (!list_empty(&global_codebase_entries))
     {
         codebase_entry *cb_entry;
@@ -1933,6 +1936,24 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
             {
                 if (_wcsicmp(cb_entry->name, stringnameW) == 0)
                 {
+                    /* Skip codeBase redirect if the assembly exists in wine-mono's
+                     * GAC — the GAC version is built for Mono and compatible,
+                     * while the app-local version may be the real .NET Framework
+                     * assembly which uses APIs Mono doesn't fully support (e.g.
+                     * the .NET 4.8 WPF assemblies from VS's AppLocalWPF). */
+                    {
+                        WCHAR gac_probe[MAX_PATH];
+                        if (get_mono_path(gac_probe, FALSE))
+                        {
+                            wcscat(gac_probe, L"\\lib\\mono\\gac\\");
+                            wcscat(gac_probe, stringnameW);
+                            if (GetFileAttributesW(gac_probe) != INVALID_FILE_ATTRIBUTES)
+                            {
+                                TRACE("skipping codeBase for %s (available in GAC)\n", debugstr_w(stringnameW));
+                                break; /* skip codeBase, fall through to GAC lookup */
+                            }
+                        }
+                    }
                     result = mono_assembly_try_load(cb_entry->href);
                     if (result)
                     {
