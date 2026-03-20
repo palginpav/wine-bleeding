@@ -443,11 +443,6 @@ static HRESULT CLRRuntimeInfo_GetRuntimeHost(CLRRuntimeInfo *This, RuntimeHost *
         return hr;
     }
 
-    if (GlobalCLRMetaHost.callback)
-    {
-        GlobalCLRMetaHost.callback(&This->ICLRRuntimeInfo_iface, thread_set_fn, thread_unset_fn);
-    }
-
     hr = load_mono(mono_path);
 
     if (SUCCEEDED(hr))
@@ -456,7 +451,15 @@ static HRESULT CLRRuntimeInfo_GetRuntimeHost(CLRRuntimeInfo *This, RuntimeHost *
     LeaveCriticalSection(&runtime_list_cs);
 
     if (SUCCEEDED(hr))
+    {
         *result = This->loaded_runtime;
+
+        /* Invoke the runtime-started callback after the runtime is fully
+         * initialized and loaded_runtime is set.  Calling it earlier causes
+         * infinite recursion when the callback re-enters GetInterface. */
+        if (GlobalCLRMetaHost.callback)
+            GlobalCLRMetaHost.callback(&This->ICLRRuntimeInfo_iface, thread_set_fn, thread_unset_fn);
+    }
 
     return hr;
 }
