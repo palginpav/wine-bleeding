@@ -513,6 +513,43 @@ static HRESULT RuntimeHost_GetDefaultDomain(RuntimeHost *This, const WCHAR *conf
     free(config_pathA);
     free(base_dirA);
 
+    /* Parse private probing paths from the application config file.
+     * _CorExeMain does this for managed executables, but native hosts
+     * that activate CLR via COM (e.g. Visual Studio) never call
+     * _CorExeMain, so the probing paths would remain empty. */
+    if (!private_path)
+    {
+        static const WCHAR scW[] = {';',0};
+        parsed_config_file parsed_config;
+
+        if (SUCCEEDED(parse_config_file(config_path, &parsed_config))
+            && parsed_config.private_path && parsed_config.private_path[0])
+        {
+            int i, number_of_private_paths = 0;
+            SIZE_T config_file_dir_size;
+            WCHAR *save, *temp, **priv_path;
+
+            for (i = 0; parsed_config.private_path[i] != 0; i++)
+                if (parsed_config.private_path[i] == ';') number_of_private_paths++;
+            if (parsed_config.private_path[wcslen(parsed_config.private_path) - 1] != ';') number_of_private_paths++;
+            config_file_dir_size = (wcsrchr(config_path, '\\') - config_path) + 1;
+            priv_path = malloc((number_of_private_paths + 1) * sizeof(WCHAR *));
+            temp = wcstok_s(parsed_config.private_path, scW, &save);
+            for (i = 0; i < number_of_private_paths; i++)
+            {
+                priv_path[i] = malloc((config_file_dir_size + wcslen(temp) + 1) * sizeof(WCHAR));
+                memcpy(priv_path[i], config_path, config_file_dir_size * sizeof(WCHAR));
+                wcscpy(priv_path[i] + config_file_dir_size, temp);
+                temp = wcstok_s(NULL, scW, &save);
+            }
+            priv_path[number_of_private_paths] = NULL;
+            if (InterlockedCompareExchangePointer((void **)&private_path, priv_path, NULL))
+                TRACE("private_path was already set by _CorExeMain\n");
+        }
+
+        free_parsed_config_file(&parsed_config);
+    }
+
 end:
 
     configured_domain = TRUE;
