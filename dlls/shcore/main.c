@@ -386,8 +386,12 @@ WCHAR** WINAPI CommandLineToArgvW(const WCHAR *cmdline, int *numargs)
                 qcount++;
                 s++;
             }
-            qcount = qcount % 3;
-            if (qcount == 2)
+            if (qcount % 3 == 0)
+                qcount = 1; /* 3n quotes: emit n-1 quotes, stay in quoted mode */
+            else if (qcount % 3 == 2)
+                qcount = 0; /* 3n+2 quotes: emit n quotes, close quoted mode */
+            /* 3n+1 quotes: emit n quotes, close quoted mode (qcount stays odd->0 check not needed) */
+            else
                 qcount = 0;
         }
         else
@@ -498,7 +502,7 @@ WCHAR** WINAPI CommandLineToArgvW(const WCHAR *cmdline, int *numargs)
                 if (++qcount == 3)
                 {
                     *d++ = '"';
-                    qcount = 0;
+                    qcount = 1; /* stay in quoted mode after emitting literal quote */
                 }
                 s++;
             }
