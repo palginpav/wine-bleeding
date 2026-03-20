@@ -2391,10 +2391,8 @@ static LONG try_open_vs_config_clsid(const WCHAR *clsid_path, HKEY *out_key)
         if (res != ERROR_SUCCESS)
             break;
 
-        /* Look for subkeys ending with _Config */
-        if (name_len < 7 || _wcsicmp(name + name_len - 7, L"_Config") != 0)
-            continue;
-
+        /* Try both _Config subkeys (old HKLM-root layout) and instance
+         * keys that may be symlinks to _Config (isolated hive layout). */
         swprintf(config_path, ARRAY_SIZE(config_path), L"%s\\%s", name, clsid_path);
         res = RegOpenKeyExW(vs_key, config_path, 0, KEY_READ, &sub_key);
         if (res == ERROR_SUCCESS)

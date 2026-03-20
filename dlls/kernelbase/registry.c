@@ -3234,18 +3234,23 @@ LSTATUS WINAPI RegLoadAppKeyA(const char *file, HKEY *result, REGSAM sam, DWORD 
 /******************************************************************************
  * RegLoadAppKeyW (kernelbase.@)
  *
- * Load an application hive from a file. On Windows this creates an isolated
- * registry hive under \Registry\A\{hash}. We emulate this by returning
- * a handle to HKCU root so that all writes (relative to the handle) land
- * directly in the current user hive, where they can be read back without
- * any registry detouring.
+ * Load an application hive from a file.  On Windows this creates an
+ * isolated registry hive under \Registry\A\{hash}.  We emulate this by
+ * creating a persistent subkey under HKLM\Software\WineAppHive\{hash}
+ * that acts as the hive root.  For Visual Studio we also set up a
+ * registry symlink so that HKLM reads for the VS instance key are
+ * transparently redirected to the _Config key inside the hive, which
+ * is what VS's own registry detouring would do on real Windows.
  */
 LSTATUS WINAPI RegLoadAppKeyW(const WCHAR *file, HKEY *result, REGSAM sam, DWORD options, DWORD reserved)
 {
-    HKEY hkcu;
+    HKEY hklm;
     NTSTATUS status;
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING nameW;
+    DWORD hash, disp;
+    WCHAR hive_path[256];
+    const WCHAR *p;
 
     TRACE("%s %p %lu %lu %lu\n", wine_dbgstr_w(file), result, sam, options, reserved);
 
@@ -3256,19 +3261,119 @@ LSTATUS WINAPI RegLoadAppKeyW(const WCHAR *file, HKEY *result, REGSAM sam, DWORD
 
     *result = NULL;
 
-    if (!(hkcu = get_special_root_hkey(HKEY_LOCAL_MACHINE)))
+    if (!(hklm = get_special_root_hkey(HKEY_LOCAL_MACHINE)))
         return ERROR_INVALID_HANDLE;
 
-    /* Open a new handle to the HKLM root so that writes through the
-     * returned handle land in HKLM, where applications that normally
-     * rely on registry detouring can read them back without any hooks. */
-    RtlInitUnicodeString(&nameW, L"");
-    InitializeObjectAttributes(&attr, &nameW, OBJ_CASE_INSENSITIVE, hkcu, NULL);
+    /* Compute a deterministic hash of the file path to get a unique hive name. */
+    hash = 5381;
+    for (p = file; *p; p++)
+        hash = hash * 33 + towlower(*p);
+
+    swprintf(hive_path, ARRAY_SIZE(hive_path), L"Software\\WineAppHive\\%08x", hash);
+
+    /* Create the parent key first (NtCreateKey doesn't create intermediates). */
+    {
+        HANDLE parent;
+        RtlInitUnicodeString(&nameW, L"Software\\WineAppHive");
+        InitializeObjectAttributes(&attr, &nameW, OBJ_CASE_INSENSITIVE, hklm, NULL);
+        status = NtCreateKey(&parent, KEY_CREATE_SUB_KEY, &attr, 0, NULL, 0, &disp);
+        if (status) return RtlNtStatusToDosError(status);
+        NtClose(parent);
+    }
+
+    /* Create/open the isolated hive key under HKLM. */
+    RtlInitUnicodeString(&nameW, hive_path);
+    InitializeObjectAttributes(&attr, &nameW, OBJ_CASE_INSENSITIVE, hklm, NULL);
 
     if (!sam) sam = MAXIMUM_ALLOWED;
-    status = NtOpenKey((HANDLE *)result, sam, &attr);
+    status = NtCreateKey((HANDLE *)result, sam, &attr, 0, NULL, 0, &disp);
+    if (status) return RtlNtStatusToDosError(status);
 
-    return RtlNtStatusToDosError(status);
+    /* For VS-style private hives, set up a symlink so that reads from
+     * HKLM\..\VisualStudio\<instance> resolve to the _Config key inside
+     * the hive.  This emulates VS's registry detouring which remaps
+     * HKLM reads with a _Config suffix.
+     *
+     * File path pattern: ...\VisualStudio\<instance>\privateregistry.bin
+     * Symlink target:    WineAppHive\{hash}\Software\...\<instance>_Config
+     *
+     * The symlink target need not exist yet — it will be created later
+     * by VS's pkgdef processing through the hive handle we return. */
+    {
+        static const WCHAR vs_marker[] = L"\\VisualStudio\\";
+        const WCHAR *vs_pos = wcsstr(file, vs_marker);
+        if (vs_pos)
+        {
+            const WCHAR *inst_start = vs_pos + wcslen(vs_marker);
+            const WCHAR *inst_end = wcschr(inst_start, '\\');
+            if (inst_end && inst_end > inst_start)
+            {
+                SIZE_T inst_len = inst_end - inst_start;
+                WCHAR instance[256], target[512];
+                UNICODE_STRING uname, uval;
+                HKEY vs_key;
+                HANDLE link_key, existing;
+
+                wcsncpy(instance, inst_start, inst_len);
+                instance[inst_len] = 0;
+
+                if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\VisualStudio",
+                                  0, KEY_CREATE_SUB_KEY, &vs_key) == ERROR_SUCCESS)
+                {
+                    /* Check if the instance key already exists as our symlink. */
+                    RtlInitUnicodeString(&uname, instance);
+                    InitializeObjectAttributes(&attr, &uname,
+                                               OBJ_CASE_INSENSITIVE | OBJ_OPENLINK, vs_key, NULL);
+                    status = NtOpenKey(&existing, KEY_READ | KEY_SET_VALUE | DELETE, &attr);
+                    if (!status)
+                    {
+                        DWORD type = 0, sz = 0;
+                        LSTATUS qr = RegQueryValueExW((HKEY)existing, L"SymbolicLinkValue",
+                                             NULL, &type, NULL, &sz);
+                        if (qr == ERROR_SUCCESS && type == REG_LINK)
+                        {
+                            /* Symlink exists — update its target to point to the
+                             * isolated hive (may need updating from a prior layout). */
+                            swprintf(target, ARRAY_SIZE(target),
+                                     L"\\Registry\\Machine\\%s\\Software\\Microsoft\\VisualStudio\\%s_Config",
+                                     hive_path, instance);
+                            RtlInitUnicodeString(&uval, L"SymbolicLinkValue");
+                            NtSetValueKey(existing, &uval, 0, REG_LINK,
+                                          target, wcslen(target) * sizeof(WCHAR));
+                            NtClose(existing);
+                            RegCloseKey(vs_key);
+                            TRACE("updated VS symlink -> %s\n", debugstr_w(target));
+                            return ERROR_SUCCESS;
+                        }
+                        /* Normal key — delete it to make room for the symlink. */
+                        NtDeleteKey(existing);
+                        NtClose(existing);
+                    }
+
+                    /* Create the persistent symlink. */
+                    InitializeObjectAttributes(&attr, &uname, OBJ_CASE_INSENSITIVE,
+                                               vs_key, NULL);
+                    status = NtCreateKey(&link_key, KEY_SET_VALUE | KEY_CREATE_LINK, &attr,
+                                     0, NULL, REG_OPTION_CREATE_LINK, &disp);
+                    if (!status)
+                    {
+                        swprintf(target, ARRAY_SIZE(target),
+                                 L"\\Registry\\Machine\\%s\\Software\\Microsoft\\VisualStudio\\%s_Config",
+                                 hive_path, instance);
+                        RtlInitUnicodeString(&uval, L"SymbolicLinkValue");
+                        NtSetValueKey(link_key, &uval, 0, REG_LINK,
+                                      target, wcslen(target) * sizeof(WCHAR));
+                        NtClose(link_key);
+                        TRACE("created VS symlink %s -> %s\n",
+                              debugstr_w(instance), debugstr_w(target));
+                    }
+                    RegCloseKey(vs_key);
+                }
+            }
+        }
+    }
+
+    return ERROR_SUCCESS;
 }
 
 
