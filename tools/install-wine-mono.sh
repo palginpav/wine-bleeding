@@ -16,6 +16,7 @@ FORK_WINE_MONO="https://github.com/palginpav/wine-mono.git"
 FORK_MONO="https://github.com/palginpav/mono.git"
 FORK_WPF="https://github.com/palginpav/wpf.git"
 FORK_WINFORMS="https://github.com/palginpav/winforms.git"
+FORK_COREFX="https://github.com/palginpav/corefx.git"
 FORK_BRANCH="wine-bleeding"
 
 for cmd in git make tar sed; do
@@ -86,6 +87,12 @@ for sub in mono wpf winforms; do
     [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" checkout -- . 2>/dev/null
     [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" clean -fd 2>/dev/null
 done
+# Also clean corefx (sub-submodule of mono)
+COREFX_DIR="$MONO_SRC_DIR/mono/external/corefx"
+if [ -d "$COREFX_DIR" ]; then
+    git -C "$COREFX_DIR" checkout -- . 2>/dev/null
+    git -C "$COREFX_DIR" clean -fd 2>/dev/null
+fi
 GIT_TERMINAL_PROMPT=0 git submodule sync --recursive >/dev/null 2>&1 || true
 GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive
 
@@ -106,13 +113,28 @@ for sub in mono wpf winforms; do
     fi
 done
 
+# Handle corefx fork (sub-submodule of mono)
+if [ -d "$COREFX_DIR" ]; then
+    setup_fork_remote "mono/external/corefx" "$FORK_COREFX"
+    cd "$COREFX_DIR"
+    git fetch origin "$FORK_BRANCH" 2>/dev/null || true
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(git rev-parse "origin/$FORK_BRANCH" 2>/dev/null || echo "")"
+    if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
+        echo "Updating corefx to origin/$FORK_BRANCH..."
+        git checkout -f "$FORK_BRANCH" 2>/dev/null || git checkout -f "origin/$FORK_BRANCH" 2>/dev/null || true
+    fi
+    cd "$MONO_SRC_DIR"
+fi
+
 # No patch application needed — patches are commits in fork branches
 
 SRC_REV="$(git rev-parse HEAD)"
 MONO_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/mono" rev-parse HEAD)"
 WPF_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/wpf" rev-parse HEAD)"
 WINFORMS_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/winforms" rev-parse HEAD)"
-BUILD_ID="${WINE_MONO_VERSION}|${SRC_REV}|${MONO_SUBMODULE_REV}|${WPF_SUBMODULE_REV}|${WINFORMS_SUBMODULE_REV}"
+COREFX_SUBMODULE_REV="$(git -C "$MONO_SRC_DIR/mono/external/corefx" rev-parse HEAD 2>/dev/null || echo "none")"
+BUILD_ID="${WINE_MONO_VERSION}|${SRC_REV}|${MONO_SUBMODULE_REV}|${WPF_SUBMODULE_REV}|${WINFORMS_SUBMODULE_REV}|${COREFX_SUBMODULE_REV}"
 BUILD_STAMP="$DEPS_DIR/.wine-mono-build-id"
 TARBALL="$MONO_SRC_DIR/wine-mono-${WINE_MONO_VERSION}-x86.tar.xz"
 
