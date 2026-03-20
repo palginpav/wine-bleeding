@@ -2296,6 +2296,50 @@ end:
 
 #define CHARS_IN_GUID 39
 
+/* Try to find a CLSID registration inside a VS-style private config subtree.
+ * Applications like Visual Studio store managed COM classes under
+ * HKLM\Software\Microsoft\VisualStudio\<instance>_Config\CLSID\{guid} and
+ * normally make them visible via registry detouring which does not work on
+ * Wine.  As a fallback we enumerate the config subtrees ourselves. */
+static LONG try_open_vs_config_clsid(const WCHAR *clsid_path, HKEY *out_key)
+{
+    static const WCHAR vs_root[] = L"Software\\Microsoft\\VisualStudio";
+    HKEY vs_key, sub_key;
+    WCHAR name[256], config_path[512];
+    DWORD i, name_len;
+    LONG res;
+
+    *out_key = NULL;
+
+    res = RegOpenKeyExW(HKEY_LOCAL_MACHINE, vs_root, 0, KEY_READ, &vs_key);
+    if (res != ERROR_SUCCESS)
+        return res;
+
+    for (i = 0; ; i++)
+    {
+        name_len = ARRAY_SIZE(name);
+        res = RegEnumKeyExW(vs_key, i, name, &name_len, NULL, NULL, NULL, NULL);
+        if (res != ERROR_SUCCESS)
+            break;
+
+        /* Look for subkeys ending with _Config */
+        if (name_len < 7 || _wcsicmp(name + name_len - 7, L"_Config") != 0)
+            continue;
+
+        swprintf(config_path, ARRAY_SIZE(config_path), L"%s\\%s", name, clsid_path);
+        res = RegOpenKeyExW(vs_key, config_path, 0, KEY_READ, &sub_key);
+        if (res == ERROR_SUCCESS)
+        {
+            RegCloseKey(vs_key);
+            *out_key = sub_key;
+            return ERROR_SUCCESS;
+        }
+    }
+
+    RegCloseKey(vs_key);
+    return ERROR_FILE_NOT_FOUND;
+}
+
 HRESULT create_monodata(REFCLSID clsid, LPVOID *ppObj)
 {
     static const WCHAR wszFileSlash[] = L"file:///";
@@ -2324,6 +2368,16 @@ HRESULT create_monodata(REFCLSID clsid, LPVOID *ppObj)
     TRACE("Registry key: %s\n", debugstr_w(path));
 
     res = RegOpenKeyExW(HKEY_CLASSES_ROOT, path, 0, KEY_READ, &key);
+    if (res == ERROR_FILE_NOT_FOUND)
+    {
+        /* Fallback: search in VS private config registry.  VS stores all
+         * values flat under the CLSID key (no InprocServer32 subkey), so
+         * search without the InprocServer32 suffix. */
+        WCHAR clsid_only[CHARS_IN_GUID + ARRAY_SIZE(wszCLSIDSlash)];
+        lstrcpyW(clsid_only, wszCLSIDSlash);
+        StringFromGUID2(clsid, clsid_only + lstrlenW(wszCLSIDSlash), CHARS_IN_GUID);
+        res = try_open_vs_config_clsid(clsid_only, &key);
+    }
     if (res != ERROR_FILE_NOT_FOUND)
     {
         res = RegOpenKeyExW( key, L"Server", 0, KEY_READ, &subkey );
