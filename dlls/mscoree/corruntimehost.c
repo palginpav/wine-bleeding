@@ -352,6 +352,7 @@ static CRITICAL_SECTION fixup_list_cs = { &fixup_list_cs_debug, -1, 0, 0, 0, 0 }
 static struct list dll_fixups;
 
 WCHAR **private_path = NULL;
+struct list global_codebase_entries = LIST_INIT(global_codebase_entries);
 
 #define MIN_MANAGED_ENTRY_STACK_RESERVE (8 * 1024 * 1024)
 
@@ -513,38 +514,69 @@ static HRESULT RuntimeHost_GetDefaultDomain(RuntimeHost *This, const WCHAR *conf
     free(config_pathA);
     free(base_dirA);
 
-    /* Parse private probing paths from the application config file.
+    /* Parse private probing paths and codeBase entries from the config file.
      * _CorExeMain does this for managed executables, but native hosts
      * that activate CLR via COM (e.g. Visual Studio) never call
-     * _CorExeMain, so the probing paths would remain empty. */
-    if (!private_path)
+     * _CorExeMain, so the probing paths and codeBase redirects would
+     * remain empty. */
+    if (!private_path || list_empty(&global_codebase_entries))
     {
         static const WCHAR scW[] = {';',0};
         parsed_config_file parsed_config;
 
-        if (SUCCEEDED(parse_config_file(config_path, &parsed_config))
-            && parsed_config.private_path && parsed_config.private_path[0])
+        if (SUCCEEDED(parse_config_file(config_path, &parsed_config)))
         {
-            int i, number_of_private_paths = 0;
-            SIZE_T config_file_dir_size;
-            WCHAR *save, *temp, **priv_path;
-
-            for (i = 0; parsed_config.private_path[i] != 0; i++)
-                if (parsed_config.private_path[i] == ';') number_of_private_paths++;
-            if (parsed_config.private_path[wcslen(parsed_config.private_path) - 1] != ';') number_of_private_paths++;
-            config_file_dir_size = (wcsrchr(config_path, '\\') - config_path) + 1;
-            priv_path = malloc((number_of_private_paths + 1) * sizeof(WCHAR *));
-            temp = wcstok_s(parsed_config.private_path, scW, &save);
-            for (i = 0; i < number_of_private_paths; i++)
+            /* Set up private probing paths */
+            if (!private_path && parsed_config.private_path && parsed_config.private_path[0])
             {
-                priv_path[i] = malloc((config_file_dir_size + wcslen(temp) + 1) * sizeof(WCHAR));
-                memcpy(priv_path[i], config_path, config_file_dir_size * sizeof(WCHAR));
-                wcscpy(priv_path[i] + config_file_dir_size, temp);
-                temp = wcstok_s(NULL, scW, &save);
+                int i, number_of_private_paths = 0;
+                SIZE_T config_file_dir_size;
+                WCHAR *save, *temp, **priv_path;
+
+                for (i = 0; parsed_config.private_path[i] != 0; i++)
+                    if (parsed_config.private_path[i] == ';') number_of_private_paths++;
+                if (parsed_config.private_path[wcslen(parsed_config.private_path) - 1] != ';') number_of_private_paths++;
+                config_file_dir_size = (wcsrchr(config_path, '\\') - config_path) + 1;
+                priv_path = malloc((number_of_private_paths + 1) * sizeof(WCHAR *));
+                temp = wcstok_s(parsed_config.private_path, scW, &save);
+                for (i = 0; i < number_of_private_paths; i++)
+                {
+                    priv_path[i] = malloc((config_file_dir_size + wcslen(temp) + 1) * sizeof(WCHAR));
+                    memcpy(priv_path[i], config_path, config_file_dir_size * sizeof(WCHAR));
+                    wcscpy(priv_path[i] + config_file_dir_size, temp);
+                    temp = wcstok_s(NULL, scW, &save);
+                }
+                priv_path[number_of_private_paths] = NULL;
+                if (InterlockedCompareExchangePointer((void **)&private_path, priv_path, NULL))
+                    TRACE("private_path was already set by _CorExeMain\n");
             }
-            priv_path[number_of_private_paths] = NULL;
-            if (InterlockedCompareExchangePointer((void **)&private_path, priv_path, NULL))
-                TRACE("private_path was already set by _CorExeMain\n");
+
+            /* Move codeBase entries to global list, resolving hrefs
+             * relative to the config file directory. */
+            if (list_empty(&global_codebase_entries) && !list_empty(&parsed_config.codebase_entries))
+            {
+                SIZE_T dir_size = (wcsrchr(config_path, '\\') - config_path) + 1;
+                codebase_entry *entry, *next;
+
+                LIST_FOR_EACH_ENTRY_SAFE(entry, next, &parsed_config.codebase_entries, codebase_entry, entry)
+                {
+                    /* Make href absolute by prepending the config file directory */
+                    if (entry->href[0] != '\\' && (wcslen(entry->href) < 2 || entry->href[1] != ':'))
+                    {
+                        WCHAR *abs = malloc((dir_size + wcslen(entry->href) + 1) * sizeof(WCHAR));
+                        if (abs)
+                        {
+                            memcpy(abs, config_path, dir_size * sizeof(WCHAR));
+                            wcscpy(abs + dir_size, entry->href);
+                            free(entry->href);
+                            entry->href = abs;
+                        }
+                    }
+                    TRACE("global codeBase: %s -> %s\n", debugstr_w(entry->name), debugstr_w(entry->href));
+                    list_remove(&entry->entry);
+                    list_add_tail(&global_codebase_entries, &entry->entry);
+                }
+            }
         }
 
         free_parsed_config_file(&parsed_config);

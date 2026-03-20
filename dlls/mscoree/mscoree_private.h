@@ -114,9 +114,17 @@ extern HRESULT ICLRRuntimeInfo_GetRuntimeHost(ICLRRuntimeInfo *iface, RuntimeHos
 
 extern HRESULT MetaDataDispenser_CreateInstance(IUnknown **ppUnk);
 
+typedef struct codebase_entry
+{
+    struct list entry;
+    LPWSTR name;        /* assembly simple name */
+    LPWSTR href;        /* relative or absolute path */
+} codebase_entry;
+
 typedef struct parsed_config_file
 {
     struct list supported_runtimes;
+    struct list codebase_entries;
     LPWSTR private_path;
     BOOL use_legacy_v2_runtime_activation_policy;
 } parsed_config_file;
@@ -128,6 +136,7 @@ typedef struct supported_runtime
 } supported_runtime;
 
 extern WCHAR **private_path;
+extern struct list global_codebase_entries;
 
 extern HRESULT parse_config_file(LPCWSTR filename, parsed_config_file *result);
 

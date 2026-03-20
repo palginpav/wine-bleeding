@@ -45,6 +45,7 @@ enum parse_state
     STATE_ASSEMBLY_BINDING,
     STATE_ROOT,
     STATE_CONFIGURATION,
+    STATE_DEPENDENT_ASSEMBLY,
     STATE_PROBING,
     STATE_RUNTIME,
     STATE_STARTUP,
@@ -59,6 +60,7 @@ typedef struct ConfigFileHandler
     enum parse_state states[16];
     int statenum;
     parsed_config_file *result;
+    WCHAR *current_assembly_name; /* name from <assemblyIdentity> inside <dependentAssembly> */
 } ConfigFileHandler;
 
 typedef struct
@@ -364,7 +366,10 @@ static ULONG WINAPI ConfigFileHandler_Release(ISAXContentHandler *iface)
     ULONG ref = InterlockedDecrement(&This->ref);
 
     if (ref == 0)
+    {
+        free(This->current_assembly_name);
         free(This);
+    }
 
     return ref;
 }
@@ -440,6 +445,72 @@ static HRESULT parse_probing(ConfigFileHandler *This, ISAXAttributes *pAttr)
     }
 
     return hr;
+}
+
+
+static HRESULT parse_assembly_identity(ConfigFileHandler *This, ISAXAttributes *pAttr)
+{
+    static const WCHAR nameW[] = {'n','a','m','e',0};
+    static const WCHAR empty[] = {0};
+    LPCWSTR value;
+    int value_size;
+    HRESULT hr;
+
+    free(This->current_assembly_name);
+    This->current_assembly_name = NULL;
+
+    hr = ISAXAttributes_getValueFromName(pAttr, empty, 0, nameW, lstrlenW(nameW), &value, &value_size);
+    if (SUCCEEDED(hr) && value_size > 0)
+    {
+        This->current_assembly_name = malloc((value_size + 1) * sizeof(WCHAR));
+        if (This->current_assembly_name)
+        {
+            memcpy(This->current_assembly_name, value, value_size * sizeof(WCHAR));
+            This->current_assembly_name[value_size] = 0;
+            TRACE("assemblyIdentity name=%s\n", debugstr_w(This->current_assembly_name));
+        }
+    }
+
+    return S_OK;
+}
+
+
+static HRESULT parse_code_base(ConfigFileHandler *This, ISAXAttributes *pAttr)
+{
+    static const WCHAR hrefW[] = {'h','r','e','f',0};
+    static const WCHAR empty[] = {0};
+    LPCWSTR value;
+    int value_size;
+    HRESULT hr;
+
+    if (!This->current_assembly_name)
+        return S_OK;
+
+    hr = ISAXAttributes_getValueFromName(pAttr, empty, 0, hrefW, lstrlenW(hrefW), &value, &value_size);
+    if (SUCCEEDED(hr) && value_size > 0)
+    {
+        codebase_entry *entry = malloc(sizeof(*entry));
+        if (entry)
+        {
+            entry->name = wcsdup(This->current_assembly_name);
+            entry->href = malloc((value_size + 1) * sizeof(WCHAR));
+            if (entry->name && entry->href)
+            {
+                memcpy(entry->href, value, value_size * sizeof(WCHAR));
+                entry->href[value_size] = 0;
+                list_add_tail(&This->result->codebase_entries, &entry->entry);
+                TRACE("codeBase name=%s href=%s\n", debugstr_w(entry->name), debugstr_w(entry->href));
+            }
+            else
+            {
+                free(entry->name);
+                free(entry->href);
+                free(entry);
+            }
+        }
+    }
+
+    return S_OK;
 }
 
 
@@ -549,6 +620,28 @@ static HRESULT WINAPI ConfigFileHandler_startElement(ISAXContentHandler *iface,
         {
             hr = parse_probing(This, pAttr);
             This->states[++This->statenum] = STATE_PROBING;
+            break;
+        }
+        else if (nLocalName == 17 && wcscmp(pLocalName, L"dependentAssembly") == 0)
+        {
+            free(This->current_assembly_name);
+            This->current_assembly_name = NULL;
+            This->states[++This->statenum] = STATE_DEPENDENT_ASSEMBLY;
+            break;
+        }
+        else
+            goto unknown;
+    case STATE_DEPENDENT_ASSEMBLY:
+        if (nLocalName == 16 && wcscmp(pLocalName, L"assemblyIdentity") == 0)
+        {
+            hr = parse_assembly_identity(This, pAttr);
+            This->states[++This->statenum] = STATE_UNKNOWN;
+            break;
+        }
+        else if (nLocalName == 8 && wcscmp(pLocalName, L"codeBase") == 0)
+        {
+            hr = parse_code_base(This, pAttr);
+            This->states[++This->statenum] = STATE_UNKNOWN;
             break;
         }
         else
@@ -698,6 +791,7 @@ static const struct ISAXErrorHandlerVtbl ConfigFileHandlerErrorVtbl =
 static void init_config(parsed_config_file *config)
 {
     list_init(&config->supported_runtimes);
+    list_init(&config->codebase_entries);
     config->private_path = NULL;
     config->use_legacy_v2_runtime_activation_policy = FALSE;
 }
@@ -718,6 +812,7 @@ static HRESULT parse_config(VARIANT input, parsed_config_file *result)
     handler->states[0] = STATE_ROOT;
     handler->statenum = 0;
     handler->result = result;
+    handler->current_assembly_name = NULL;
 
     hr = CoCreateInstance(&CLSID_SAXXMLReader, NULL, CLSCTX_INPROC_SERVER,
         &IID_ISAXXMLReader, (LPVOID*)&reader);
@@ -781,12 +876,21 @@ HRESULT parse_config_file(LPCWSTR filename, parsed_config_file *result)
 void free_parsed_config_file(parsed_config_file *file)
 {
     supported_runtime *cursor, *cursor2;
+    codebase_entry *cb_cursor, *cb_cursor2;
 
     LIST_FOR_EACH_ENTRY_SAFE(cursor, cursor2, &file->supported_runtimes, supported_runtime, entry)
     {
         free(cursor->version);
         list_remove(&cursor->entry);
         free(cursor);
+    }
+
+    LIST_FOR_EACH_ENTRY_SAFE(cb_cursor, cb_cursor2, &file->codebase_entries, codebase_entry, entry)
+    {
+        free(cb_cursor->name);
+        free(cb_cursor->href);
+        list_remove(&cb_cursor->entry);
+        free(cb_cursor);
     }
 
     free(file->private_path);

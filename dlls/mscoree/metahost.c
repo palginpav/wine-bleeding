@@ -1917,6 +1917,35 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
 
     if (!stringname || !assemblyname) return NULL;
 
+    /* Check codeBase redirects from the config file first — they have
+     * highest priority since they specify an exact path. */
+    if (!list_empty(&global_codebase_entries))
+    {
+        codebase_entry *cb_entry;
+
+        stringnameW_size = MultiByteToWideChar(CP_UTF8, 0, assemblyname, -1, NULL, 0);
+        stringnameW = malloc(stringnameW_size * sizeof(WCHAR));
+        if (stringnameW)
+        {
+            MultiByteToWideChar(CP_UTF8, 0, assemblyname, -1, stringnameW, stringnameW_size);
+
+            LIST_FOR_EACH_ENTRY(cb_entry, &global_codebase_entries, codebase_entry, entry)
+            {
+                if (_wcsicmp(cb_entry->name, stringnameW) == 0)
+                {
+                    result = mono_assembly_try_load(cb_entry->href);
+                    if (result)
+                    {
+                        TRACE("found codeBase assembly %s -> %s\n", debugstr_w(stringnameW), debugstr_w(cb_entry->href));
+                        free(stringnameW);
+                        goto done;
+                    }
+                }
+            }
+            free(stringnameW);
+        }
+    }
+
     search_flags = get_assembly_search_flags(aname);
     if (private_path && (search_flags & ASSEMBLY_SEARCH_PRIVATEPATH) != 0)
     {
