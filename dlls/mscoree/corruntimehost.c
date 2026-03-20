@@ -440,8 +440,8 @@ static DWORD WINAPI cor_exe_thread_main(void *param)
 
     prev_domain = domain_attach(args->domain);
     args->exit_code = mono_jit_exec(args->domain, args->assembly, args->argc, args->argv);
-    mono_thread_manage();
-    mono_runtime_quit();
+    /* Skip mono_thread_manage/quit — ExitProcess will clean up.
+     * mono_thread_manage waits for foreground threads indefinitely. */
     domain_restore(prev_domain);
     return 0;
 }
@@ -2086,12 +2086,10 @@ __int32 WINAPI _CorExeMain(void)
 
     free(argv);
 
-    if (domain)
-    {
-        mono_thread_manage();
-        mono_runtime_quit();
-    }
-
+    /* .NET Framework on Windows calls ExitProcess() immediately after
+     * Main() returns, killing all threads.  mono_thread_manage() and
+     * mono_runtime_quit() wait for foreground threads which can hang
+     * indefinitely.  Skip them and exit directly. */
     ExitProcess(exit_code);
 
     return exit_code;
