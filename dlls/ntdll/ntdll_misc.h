@@ -64,7 +64,11 @@ extern void WINAPI process_breakpoint(void);
 static inline BOOL is_valid_frame( ULONG_PTR frame )
 {
     if (frame & (sizeof(void*) - 1)) return FALSE;
-    return ((void *)frame >= NtCurrentTeb()->Tib.StackLimit &&
+    /* Accept frames slightly below StackLimit — after stack overflow recovery
+     * (e.g. mono/CLR guard page handling), SEH frames registered before the
+     * overflow may be below the current StackLimit but are still valid. */
+    void *limit = (char *)NtCurrentTeb()->Tib.StackLimit - 0x10000; /* 64KB grace */
+    return ((void *)frame >= limit &&
             (void *)frame <= NtCurrentTeb()->Tib.StackBase);
 }
 
