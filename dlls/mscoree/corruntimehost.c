@@ -511,6 +511,12 @@ static HRESULT RuntimeHost_GetDefaultDomain(RuntimeHost *This, const WCHAR *conf
     TRACE("setting base_dir: %s, config_path: %s\n", base_dirA, config_pathA);
     mono_domain_set_config(*result, base_dirA, config_pathA);
 
+    /* Parse app.config for runtime settings (legacyUnhandledExceptionPolicy, etc.).
+     * mono_domain_set_config only sets the config file path but doesn't parse
+     * <runtime> elements. mono_config_parse handles legacyUnhandledExceptionPolicy
+     * and other runtime configuration from the XML file. */
+    mono_config_parse(config_pathA);
+
     free(config_pathA);
     free(base_dirA);
 

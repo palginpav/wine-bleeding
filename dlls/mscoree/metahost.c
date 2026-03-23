@@ -94,7 +94,7 @@ void (CDECL *mono_callspec_set_assembly)(MonoAssembly *assembly);
 MonoClass* (CDECL *mono_class_from_mono_type)(MonoType *type);
 MonoClass* (CDECL *mono_class_from_name)(MonoImage *image, const char* name_space, const char *name);
 MonoMethod* (CDECL *mono_class_get_method_from_name)(MonoClass *klass, const char *name, int param_count);
-static void (CDECL *mono_config_parse)(const char *filename);
+void (CDECL *mono_config_parse)(const char *filename);
 MonoDomain* (CDECL *mono_domain_get)(void);
 MonoDomain* (CDECL *mono_domain_get_by_id)(int id);
 BOOL (CDECL *mono_domain_set)(MonoDomain *domain,BOOL force);
@@ -1949,8 +1949,27 @@ static MonoAssembly* CDECL wine_mono_assembly_preload_hook_v2_fn(MonoAssemblyNam
                             wcscat(gac_probe, stringnameW);
                             if (GetFileAttributesW(gac_probe) != INVALID_FILE_ATTRIBUTES)
                             {
-                                TRACE("skipping codeBase for %s (available in GAC)\n", debugstr_w(stringnameW));
-                                break; /* skip codeBase, fall through to GAC lookup */
+                                TRACE("skipping codeBase for %s (available in GAC), loading from Mono GAC directly\n", debugstr_w(stringnameW));
+                                /* Load directly from Mono GAC — don't just break and
+                                 * fall through, because the app's binding redirect may
+                                 * have changed the version to one that doesn't exist in
+                                 * the GAC (e.g. VS redirects PresentationUI 4.0.0.0 →
+                                 * 8.0.0.0, but the GAC only has 4.0.0.0). Loading via
+                                 * wine_mono_assembly_load_from_gac applies the framework
+                                 * version remap internally. */
+                                if (wine_mono_assembly_load_from_gac)
+                                {
+                                    MonoImageOpenStatus gac_stat;
+                                    result = wine_mono_assembly_load_from_gac(aname, &gac_stat, FALSE);
+                                    if (result)
+                                    {
+                                        TRACE("loaded GAC assembly %s\n", debugstr_w(stringnameW));
+                                        *flags |= WINE_PRELOAD_SET_GAC;
+                                        free(stringnameW);
+                                        goto done;
+                                    }
+                                }
+                                break; /* fall through to other search paths */
                             }
                         }
                     }

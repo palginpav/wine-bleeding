@@ -247,3 +247,4 @@ extern void CDECL mono_print_handler_fn(const char *string, INT is_stdout);
 extern void CDECL mono_log_handler_fn(const char *log_domain, const char *log_level, const char *message, INT fatal, void *user_data);
 
 #endif   /* __MSCOREE_PRIVATE__ */
+extern void (CDECL *mono_config_parse)(const char *filename);
