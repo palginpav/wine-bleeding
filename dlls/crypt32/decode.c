@@ -7054,10 +7054,20 @@ BOOL WINAPI CryptDecodeObjectEx(DWORD dwCertEncodingType, LPCSTR lpszStructType,
         CryptDecodeObjectFunc pCryptDecodeObject =
          CRYPT_LoadDecoderFunc(dwCertEncodingType, lpszStructType, &hFunc);
 
+        if (!pCryptDecodeObject)
+        {
+            /* No decoder found at all — set appropriate error code.
+             * On Windows this returns ERROR_FILE_NOT_FOUND. */
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            if (hFunc)
+                CryptFreeOIDFunctionAddress(hFunc, 0);
+            TRACE_(crypt)("returning %d\n", ret);
+            return FALSE;
+        }
+
         /* Try CryptDecodeObject function.  Don't call CryptDecodeObject
          * directly, as that could cause an infinite loop.
          */
-        if (pCryptDecodeObject)
         {
             if (dwFlags & CRYPT_DECODE_ALLOC_FLAG)
             {

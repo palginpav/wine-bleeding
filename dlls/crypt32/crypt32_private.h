@@ -127,6 +127,8 @@ typedef struct _CRYPT_SIGNED_INFO
     DWORD                 cSignerInfo;
     PCMSG_CMS_SIGNER_INFO rgSignerInfo;
     PDWORD                signerKeySpec;
+    DWORD                 cAttrCertEncoded;
+    PCERT_BLOB            rgAttrCertEncoded;
 } CRYPT_SIGNED_INFO;
 
 BOOL CRYPT_AsnEncodeCMSSignedInfo(CRYPT_SIGNED_INFO *, void *pvData,

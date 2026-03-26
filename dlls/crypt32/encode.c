@@ -4357,11 +4357,37 @@ BOOL CRYPT_AsnEncodeCMSSignedInfo(CRYPT_SIGNED_INFO *signedInfo, void *pvData,
     struct DERSetDescriptor certSet = { 0 }, crlSet = { 0 }, signerSet = { 0 };
     struct AsnEncodeTagSwappedItem swapped[2] = { { 0 } };
     DWORD cItem = 3, cSwapped = 0;
+    CERT_BLOB *mergedCerts = NULL;
 
-    if (signedInfo->cCertEncoded)
+    if (signedInfo->cCertEncoded || signedInfo->cAttrCertEncoded)
     {
-        certSet.cItems = signedInfo->cCertEncoded;
-        certSet.items = signedInfo->rgCertEncoded;
+        /* Merge regular certificates and attribute certificates into a single
+         * CertificateSet for the [0] IMPLICIT encoding.  In CMS SignedData,
+         * attribute certificates are alternative entries within the same
+         * CertificateSet as regular X.509 certificates.
+         */
+        DWORD totalCerts = signedInfo->cCertEncoded + signedInfo->cAttrCertEncoded;
+
+        certSet.cItems = totalCerts;
+        if (signedInfo->cAttrCertEncoded && signedInfo->cCertEncoded)
+        {
+            mergedCerts = CryptMemAlloc(totalCerts * sizeof(CERT_BLOB));
+            if (mergedCerts)
+            {
+                memcpy(mergedCerts, signedInfo->rgCertEncoded,
+                 signedInfo->cCertEncoded * sizeof(CERT_BLOB));
+                memcpy(mergedCerts + signedInfo->cCertEncoded,
+                 signedInfo->rgAttrCertEncoded,
+                 signedInfo->cAttrCertEncoded * sizeof(CERT_BLOB));
+                certSet.items = mergedCerts;
+            }
+            else
+                certSet.items = signedInfo->rgCertEncoded;
+        }
+        else if (signedInfo->cCertEncoded)
+            certSet.items = signedInfo->rgCertEncoded;
+        else
+            certSet.items = signedInfo->rgAttrCertEncoded;
         certSet.itemSize = sizeof(CERT_BLOB);
         certSet.itemOffset = 0;
         certSet.encode = CRYPT_CopyEncodedBlob;
@@ -4397,8 +4423,12 @@ BOOL CRYPT_AsnEncodeCMSSignedInfo(CRYPT_SIGNED_INFO *signedInfo, void *pvData,
     items[cItem].encodeFunc = CRYPT_DEREncodeItemsAsSet;
     cItem++;
 
-    return CRYPT_AsnEncodeSequence(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-     items, cItem, 0, NULL, pvData, pcbData);
+    {
+        BOOL ret = CRYPT_AsnEncodeSequence(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+         items, cItem, 0, NULL, pvData, pcbData);
+        CryptMemFree(mergedCerts);
+        return ret;
+    }
 }
 
 static BOOL WINAPI CRYPT_AsnEncodeRecipientInfo(DWORD dwCertEncodingType,

@@ -367,12 +367,75 @@ PCCERT_CONTEXT WINAPI CertCreateCertificateContext(DWORD dwCertEncodingType,
     return &cert->ctx;
 }
 
+/* Check if a CERT_CONTEXT pointer was created by Wine (has valid context_t header).
+ * Foreign pointers (e.g. from mono's BoringSSL) will have garbage in the vtbl field.
+ */
+static BOOL is_wine_cert_context(PCCERT_CONTEXT pCertContext)
+{
+    cert_t *cert = cert_from_ptr(pCertContext);
+
+    /* Validate that the context_t header prepended by Wine is legitimate.
+     * Foreign pointers (e.g. from mono BoringSSL) will have garbage in the
+     * vtbl/ref/properties fields.  We use structured exception handling on
+     * Windows / IsBadReadPtr guard on Wine to avoid crashing on invalid memory.
+     */
+    if ((ULONG_PTR)cert & 0x7)
+        return FALSE;
+
+    /* Guard against unmapped memory before the cert context */
+    if (IsBadReadPtr(cert, sizeof(context_t)))
+        return FALSE;
+
+    if (cert->base.vtbl != &cert_vtbl)
+        return FALSE;
+    if (cert->base.ref <= 0 || cert->base.ref > 0x100000)
+        return FALSE;
+    /* Properties pointer must be NULL or aligned */
+    if (cert->base.properties && ((ULONG_PTR)cert->base.properties & 0x7))
+        return FALSE;
+
+    return TRUE;
+}
+
+/* Convert a foreign CERT_CONTEXT pointer to a Wine-managed one by
+ * re-creating it via CertCreateCertificateContext from the raw DER data.
+ */
+static PCCERT_CONTEXT adopt_foreign_cert_context(PCCERT_CONTEXT pCertContext)
+{
+    PCCERT_CONTEXT newContext;
+
+    /* Validate that the CERT_CONTEXT fields are readable */
+    if (IsBadReadPtr(pCertContext, sizeof(CERT_CONTEXT)))
+        return NULL;
+    if (!pCertContext->pbCertEncoded || !pCertContext->cbCertEncoded)
+        return NULL;
+    if (pCertContext->cbCertEncoded > 0x100000) /* sanity: max 1MB cert */
+        return NULL;
+    if (IsBadReadPtr(pCertContext->pbCertEncoded, pCertContext->cbCertEncoded))
+        return NULL;
+
+    TRACE("adopting foreign cert context %p (cbCertEncoded=%lu)\n",
+     pCertContext, pCertContext->cbCertEncoded);
+
+    newContext = CertCreateCertificateContext(
+        pCertContext->dwCertEncodingType ? pCertContext->dwCertEncodingType :
+         (X509_ASN_ENCODING | PKCS_7_ASN_ENCODING),
+        pCertContext->pbCertEncoded, pCertContext->cbCertEncoded);
+    return newContext;
+}
+
 PCCERT_CONTEXT WINAPI CertDuplicateCertificateContext(PCCERT_CONTEXT pCertContext)
 {
     TRACE("(%p)\n", pCertContext);
 
     if (!pCertContext)
         return NULL;
+
+    if (!is_wine_cert_context(pCertContext))
+    {
+        TRACE("foreign cert context detected at %p, adopting\n", pCertContext);
+        return adopt_foreign_cert_context(pCertContext);
+    }
 
     Context_AddRef(&cert_from_ptr(pCertContext)->base);
     return pCertContext;
@@ -383,7 +446,14 @@ BOOL WINAPI CertFreeCertificateContext(PCCERT_CONTEXT pCertContext)
     TRACE("(%p)\n", pCertContext);
 
     if (pCertContext)
+    {
+        if (!is_wine_cert_context(pCertContext))
+        {
+            TRACE("ignoring free of foreign cert context %p\n", pCertContext);
+            return TRUE;
+        }
         Context_Release(&cert_from_ptr(pCertContext)->base);
+    }
     return TRUE;
 }
 
@@ -627,10 +697,32 @@ static BOOL CertContext_GetProperty(cert_t *cert, DWORD dwPropId,
 BOOL WINAPI CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext,
  DWORD dwPropId, void *pvData, DWORD *pcbData)
 {
-    cert_t *cert = cert_from_ptr(pCertContext);
+    cert_t *cert;
     BOOL ret;
 
     TRACE("(%p, %ld, %p, %p)\n", pCertContext, dwPropId, pvData, pcbData);
+
+    if (!pCertContext)
+    {
+        SetLastError(E_INVALIDARG);
+        return FALSE;
+    }
+
+    if (!is_wine_cert_context(pCertContext))
+    {
+        /* Foreign cert context — adopt it first, query property, then free */
+        PCCERT_CONTEXT adopted = adopt_foreign_cert_context(pCertContext);
+        if (!adopted)
+        {
+            SetLastError(E_INVALIDARG);
+            return FALSE;
+        }
+        ret = CertGetCertificateContextProperty(adopted, dwPropId, pvData, pcbData);
+        CertFreeCertificateContext(adopted);
+        return ret;
+    }
+
+    cert = cert_from_ptr(pCertContext);
 
     switch (dwPropId)
     {
