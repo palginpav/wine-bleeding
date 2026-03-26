@@ -165,6 +165,57 @@ static void CDECL set_log_handler_dummy (MonoLogCallback callback, void *user_da
 {
 }
 
+static void ensure_wpf_install_path(LPCWSTR mono_path)
+{
+    /* Windows .NET Framework DLLs (e.g. WindowsBase.dll) look up the WPF native
+     * library directory from HKLM\Software\Microsoft\Net Framework Setup\NDP\v4\Client\InstallPath.
+     * WpfLibraryLoader appends "\WPF" to this path and calls LoadLibrary on DLLs there.
+     *
+     * wine-mono stores native WPF DLLs (PresentationNative_cor3.dll etc.) in
+     * mono_path\lib\{x86_64|x86}\.  We set InstallPath to mono_path\lib\x86_64
+     * (or x86 for 32-bit) so that InstallPath + "\WPF\PresentationNative_v0400.dll"
+     * resolves.  install-wine-mono.sh creates the v0400 -> cor3 symlinks and the
+     * WPF subdirectory.  */
+
+    static const WCHAR ndp_client_key[] = {
+        'S','o','f','t','w','a','r','e','\\','M','i','c','r','o','s','o','f','t','\\',
+        'N','e','t',' ','F','r','a','m','e','w','o','r','k',' ','S','e','t','u','p','\\',
+        'N','D','P','\\','v','4','\\','C','l','i','e','n','t',0 };
+    static const WCHAR install_path_value[] = { 'I','n','s','t','a','l','l','P','a','t','h',0 };
+    static const WCHAR lib_suffix[] = { '\\','l','i','b','\\',0 };
+    WCHAR path[MAX_PATH];
+    HKEY key;
+    DWORD existing_len = 0;
+    BOOL is_wow64 = FALSE;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, ndp_client_key, 0, KEY_READ | KEY_WRITE, &key))
+        return;
+
+    /* Don't overwrite if already set */
+    if (RegQueryValueExW(key, install_path_value, NULL, NULL, NULL, &existing_len) == ERROR_SUCCESS
+        && existing_len > sizeof(WCHAR))
+    {
+        RegCloseKey(key);
+        return;
+    }
+
+    /* Build path: mono_path\lib\x86_64\ or mono_path\lib\x86\ */
+    lstrcpynW(path, mono_path, MAX_PATH - 20);
+    lstrcatW(path, lib_suffix);
+
+    IsWow64Process(GetCurrentProcess(), &is_wow64);
+    if (is_wow64 || sizeof(void*) == 4)
+        lstrcatW(path, (const WCHAR[]){'x','8','6','\\',0});
+    else
+        lstrcatW(path, (const WCHAR[]){'x','8','6','_','6','4','\\',0});
+
+    RegSetValueExW(key, install_path_value, 0, REG_SZ,
+                   (const BYTE*)path, (lstrlenW(path) + 1) * sizeof(WCHAR));
+    RegCloseKey(key);
+
+    TRACE("Set .NET Framework InstallPath to %s\n", debugstr_w(path));
+}
+
 static HRESULT load_mono(LPCWSTR mono_path)
 {
     static const WCHAR lib[] = {'\\','l','i','b',0};
@@ -302,6 +353,8 @@ static HRESULT load_mono(LPCWSTR mono_path)
         mono_set_dirs(mono_lib_path_a, mono_etc_path_a);
 
         mono_config_parse(NULL);
+
+        ensure_wpf_install_path(mono_path);
 
         if (wine_mono_install_assembly_preload_hook_v2)
             wine_mono_install_assembly_preload_hook_v2(wine_mono_assembly_preload_hook_v2_fn, NULL);

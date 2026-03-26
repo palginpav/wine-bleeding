@@ -257,5 +257,29 @@ if [ -d "$MONO_DIST_DIR/lib/x86_64" ]; then
     done
 fi
 
+# Create PresentationNative_v0400.dll symlinks for Windows .NET 4.x DLL compat.
+# Windows WindowsBase.dll P/Invokes PresentationNative_v0400.dll via WpfLibraryLoader.
+# WpfLibraryLoader reads InstallPath from registry and appends "\WPF\".
+# mscoree sets InstallPath = mono_path\lib\{arch}\ so we create WPF\ subdirs there.
+# wine-mono's PresentationNative_cor3.dll exports the same symbols as v0400.
+for arch_dir in "$MONO_DIST_DIR/lib/x86" "$MONO_DIST_DIR/lib/x86_64"; do
+    [ -d "$arch_dir" ] || continue
+    # Direct symlink (for mono's own P/Invoke)
+    if [ -f "$arch_dir/PresentationNative_cor3.dll" ] && [ ! -e "$arch_dir/PresentationNative_v0400.dll" ]; then
+        ln -sf PresentationNative_cor3.dll "$arch_dir/PresentationNative_v0400.dll"
+    fi
+    # WPF subdirectory (for WpfLibraryLoader: InstallPath\WPF\PresentationNative_v0400.dll)
+    mkdir -p "$arch_dir/WPF"
+    if [ -f "$arch_dir/PresentationNative_cor3.dll" ]; then
+        ln -sf ../PresentationNative_cor3.dll "$arch_dir/WPF/PresentationNative_v0400.dll"
+    fi
+done
+# Also copy v0400 symlinks to GAC and 4.5 directories (same as cor3)
+for target_dir in "$MONO45_DIR" $(find "$GAC_BASE" -mindepth 2 -maxdepth 2 -type d 2>/dev/null); do
+    if [ -f "$target_dir/PresentationNative_cor3.dll" ] && [ ! -e "$target_dir/PresentationNative_v0400.dll" ]; then
+        ln -sf PresentationNative_cor3.dll "$target_dir/PresentationNative_v0400.dll"
+    fi
+done
+
 echo "Installed patched local wine-mono to:"
 echo "  $MONO_DIST_DIR"
