@@ -70,7 +70,13 @@ git checkout -f "$FORK_BRANCH" >/dev/null 2>&1 || {
     git fetch origin "$FORK_BRANCH"
     git checkout -f "$FORK_BRANCH" >/dev/null
 }
-git reset --hard "origin/$FORK_BRANCH" 2>/dev/null || true
+# Only reset to origin if no local commits ahead
+LOCAL_AHEAD=$(git rev-list --count "origin/$FORK_BRANCH"..HEAD 2>/dev/null || echo "0")
+if [ "$LOCAL_AHEAD" = "0" ]; then
+    git reset --hard "origin/$FORK_BRANCH" 2>/dev/null || true
+else
+    echo "Keeping $LOCAL_AHEAD local commit(s) ahead of origin/$FORK_BRANCH"
+fi
 
 # Point submodules to our forks
 setup_fork_remote() {
@@ -83,9 +89,18 @@ setup_fork_remote() {
 
 echo "Syncing full submodule tree..."
 # Clean build artifacts from submodules before update (wpf generates files during build)
+# But preserve local commits that haven't been pushed yet.
 for sub in mono wpf winforms; do
-    [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" checkout -- . 2>/dev/null
-    [ -d "$MONO_SRC_DIR/$sub" ] && git -C "$MONO_SRC_DIR/$sub" clean -fd 2>/dev/null
+    if [ -d "$MONO_SRC_DIR/$sub" ]; then
+        SUB_AHEAD=$(git -C "$MONO_SRC_DIR/$sub" rev-list --count "origin/$FORK_BRANCH"..HEAD 2>/dev/null || echo "0")
+        if [ "$SUB_AHEAD" = "0" ]; then
+            git -C "$MONO_SRC_DIR/$sub" checkout -- . 2>/dev/null
+            git -C "$MONO_SRC_DIR/$sub" clean -fd 2>/dev/null
+        else
+            echo "  $sub: keeping $SUB_AHEAD local commit(s), cleaning only untracked files"
+            git -C "$MONO_SRC_DIR/$sub" clean -fd 2>/dev/null
+        fi
+    fi
 done
 # Also clean corefx (sub-submodule of mono)
 COREFX_DIR="$MONO_SRC_DIR/mono/external/corefx"
@@ -102,12 +117,18 @@ for sub in mono wpf winforms; do
         cd "$MONO_SRC_DIR/$sub"
         # Fetch wine-bleeding from fork
         git fetch origin "$FORK_BRANCH" 2>/dev/null || true
-        # Check if current HEAD matches origin/wine-bleeding
-        local_head="$(git rev-parse HEAD)"
-        remote_head="$(git rev-parse "origin/$FORK_BRANCH" 2>/dev/null || echo "")"
-        if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
-            echo "Updating $sub to origin/$FORK_BRANCH..."
-            git checkout -f "$FORK_BRANCH" 2>/dev/null || git checkout -f "origin/$FORK_BRANCH" 2>/dev/null || true
+        # Check for local commits ahead of origin
+        SUB_AHEAD=$(git rev-list --count "origin/$FORK_BRANCH"..HEAD 2>/dev/null || echo "0")
+        if [ "$SUB_AHEAD" != "0" ]; then
+            echo "  $sub: keeping $SUB_AHEAD local commit(s) ahead of origin/$FORK_BRANCH"
+        else
+            # Check if current HEAD matches origin/wine-bleeding
+            local_head="$(git rev-parse HEAD)"
+            remote_head="$(git rev-parse "origin/$FORK_BRANCH" 2>/dev/null || echo "")"
+            if [ -n "$remote_head" ] && [ "$local_head" != "$remote_head" ]; then
+                echo "Updating $sub to origin/$FORK_BRANCH..."
+                git checkout -f "$FORK_BRANCH" 2>/dev/null || git checkout -f "origin/$FORK_BRANCH" 2>/dev/null || true
+            fi
         fi
         cd "$MONO_SRC_DIR"
     fi
