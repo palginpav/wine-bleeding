@@ -287,5 +287,20 @@ for basename in $V0400_MAPPINGS; do
     done
 done
 
+# Create Config/machine.config for Windows .NET Framework DLL compatibility.
+# Windows System.Configuration.dll reads machine.config from
+# RuntimeDirectory/Config/machine.config (not etc/mono/4.5/).
+# The etc version has mono-specific section declarations that Windows rejects.
+# Create a Windows-compatible version by stripping built-in section declarations.
+CONFIG_DIR="$MONO45_DIR/Config"
+ETC_MACHINE_CONFIG="$MONO_DIST_DIR/etc/mono/4.5/machine.config"
+if [ -f "$ETC_MACHINE_CONFIG" ]; then
+    mkdir -p "$CONFIG_DIR"
+    sed \
+        -e '/<section name="configProtectedData"/d' \
+        -e '/<section name="System.Windows.Forms.ApplicationConfigurationSection"/d' \
+        "$ETC_MACHINE_CONFIG" > "$CONFIG_DIR/machine.config"
+fi
+
 echo "Installed patched local wine-mono to:"
 echo "  $MONO_DIST_DIR"
