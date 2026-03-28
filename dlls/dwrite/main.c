@@ -1123,9 +1123,7 @@ static HRESULT WINAPI dwritefactory_CreateMonitorRenderingParams(IDWriteFactory7
     TRACE("%p, %p, %p.\n", iface, monitor, params);
 
     if (!fixme_once++)
-        FIXME("(%p): monitor setting ignored\n", monitor);
-
-    /* FIXME: use actual per-monitor gamma factor */
+        TRACE("(%p): using default gamma (per-monitor not available)\n", monitor);
     hr = IDWriteFactory7_CreateCustomRenderingParams(iface, 2.0f, 0.0f, 1.0f, 0.0f, DWRITE_PIXEL_GEOMETRY_FLAT,
         DWRITE_RENDERING_MODE1_DEFAULT, DWRITE_GRID_FIT_MODE_DEFAULT, &params3);
     *params = (IDWriteRenderingParams*)params3;

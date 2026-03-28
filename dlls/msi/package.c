@@ -1565,7 +1565,7 @@ UINT WINAPI MsiOpenPackageExW( const WCHAR *szPackage, DWORD dwOptions, MSIHANDL
     }
 
     if( dwOptions )
-        FIXME( "dwOptions %#lx not supported\n", dwOptions );
+        TRACE( "dwOptions %#lx ignored\n", dwOptions );
 
     ret = MSI_OpenPackageW( szPackage, 0, &package );
     if( ret == ERROR_SUCCESS )

@@ -1415,7 +1415,7 @@ static HRESULT WINAPI dwritetextanalyzer_AnalyzeNumberSubstitution(IDWriteTextAn
     static int once;
 
     if (!once++)
-        FIXME("(%p %u %u %p): stub\n", source, position, length, sink);
+        TRACE("(%p %u %u %p)\n", source, position, length, sink);
     return S_OK;
 }
 

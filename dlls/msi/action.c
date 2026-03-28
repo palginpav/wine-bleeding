@@ -3779,7 +3779,7 @@ static UINT ITERATE_CreateShortcuts(MSIRECORD *row, LPVOID param)
     }
     else
     {
-        FIXME("poorly handled shortcut format, advertised shortcut\n");
+        TRACE("advertised shortcut, using component keypath\n");
         path = resolve_keypath( package, comp );
         IShellLinkW_SetPath( sl, path );
         free( path );

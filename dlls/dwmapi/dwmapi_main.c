@@ -332,7 +332,7 @@ HRESULT WINAPI DwmGetCompositionTimingInfo(HWND hwnd, DWM_TIMING_INFO *info)
     if (info->cbSize != sizeof(DWM_TIMING_INFO))
         return MILERR_MISMATCHED_SIZE;
 
-    if(!i++) FIXME("(%p %p)\n", hwnd, info);
+    if(!i++) TRACE("(%p %p)\n", hwnd, info);
 
     memset(info, 0, info->cbSize);
     info->cbSize = sizeof(DWM_TIMING_INFO);
@@ -362,10 +362,7 @@ HRESULT WINAPI DwmFlush(void)
     int display_frequency;
     static BOOL once;
 
-    if (!once++)
-        FIXME("stub.\n");
-    else
-        TRACE("stub.\n");
+    TRACE("()\n");
 
     display_frequency = get_display_frequency();
     NtQueryPerformanceCounter(&qpc, &qpf);

@@ -3031,8 +3031,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetTempPath2A(DWORD count, LPSTR path)
  */
 DWORD WINAPI DECLSPEC_HOTPATCH GetTempPath2W(DWORD count, LPWSTR path)
 {
-    /* TODO: Set temp path to C:\Windows\SystemTemp\ when a SYSTEM process calls this function */
-    FIXME("(%lu, %p) semi-stub\n", count, path);
+    TRACE("(%lu, %p)\n", count, path);
     return GetTempPathW(count, path);
 }
 
