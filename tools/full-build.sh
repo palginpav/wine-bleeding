@@ -92,16 +92,29 @@ echo ""
 echo "[3/6] Конфигурация Wine..."
 
 NEED_CONFIGURE=0
+COMPILER_CHANGED=0
 if [ ! -f "$WINE_ROOT/Makefile" ]; then
     NEED_CONFIGURE=1
 elif grep -q 'i386_CC = clang' "$WINE_ROOT/Makefile" 2>/dev/null; then
     echo "  Makefile настроен на clang; переконфигурируем с MinGW."
     NEED_CONFIGURE=1
+    COMPILER_CHANGED=1
+elif grep -q 'x86_64_CC = clang' "$WINE_ROOT/Makefile" 2>/dev/null; then
+    echo "  Makefile использует clang для x86_64; переконфигурируем с MinGW."
+    NEED_CONFIGURE=1
+    COMPILER_CHANGED=1
 elif command -v i686-w64-mingw32-gcc &>/dev/null && ! grep -Eq '^PE_ARCHS = .*i386' "$WINE_ROOT/Makefile" 2>/dev/null; then
     echo "  Makefile настроен без WoW64 PE-архитектуры; переконфигурируем с i386 + x86_64."
     NEED_CONFIGURE=1
 fi
 if [ "$NEED_CONFIGURE" -eq 1 ]; then
+    if [ "$COMPILER_CHANGED" -eq 1 ]; then
+        echo "  Смена PE-компилятора: очистка stale объектных файлов (libs, dlls)..."
+        find "$WINE_ROOT/libs" -path "*/x86_64-windows/*.o" -delete 2>/dev/null
+        find "$WINE_ROOT/libs" -path "*/x86_64-windows/*.a" -delete 2>/dev/null
+        find "$WINE_ROOT/libs" -path "*/i386-windows/*.o" -delete 2>/dev/null
+        find "$WINE_ROOT/libs" -path "*/i386-windows/*.a" -delete 2>/dev/null
+    fi
     (cd "$WINE_ROOT" && ./tools/configure-wine-full.sh) || { echo "Ошибка конфигурации Wine." >&2; exit 1; }
 else
     echo "  Makefile уже есть и использует MinGW — пропуск."

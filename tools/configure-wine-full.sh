@@ -51,6 +51,30 @@ else
     exit 1
 fi
 
+# Очистка stale объектных файлов при смене PE-компилятора (clang↔gcc):
+# clang использует MSVC name mangling для C++, gcc — Itanium.
+# Если не очистить, линковка c++/c++abi/icu падает с undefined references.
+if [ -f "$WINE_ROOT/Makefile" ]; then
+    OLD_CC=$(grep '^x86_64_CC = ' "$WINE_ROOT/Makefile" 2>/dev/null | sed 's/x86_64_CC = //')
+    if [ -n "$OLD_CC" ]; then
+        NEW_CC="x86_64-w64-mingw32-gcc"
+        command -v "$NEW_CC" &>/dev/null || NEW_CC="clang"
+        case "$OLD_CC" in
+            *clang*) OLD_ABI=msvc ;;
+            *)       OLD_ABI=itanium ;;
+        esac
+        case "$NEW_CC" in
+            *clang*) NEW_ABI=msvc ;;
+            *)       NEW_ABI=itanium ;;
+        esac
+        if [ "$OLD_ABI" != "$NEW_ABI" ]; then
+            echo "Смена PE-компилятора ($OLD_CC → $NEW_CC): очистка stale C++ объектов..."
+            find "$WINE_ROOT/libs" -path "*-windows/*.o" -delete 2>/dev/null
+            find "$WINE_ROOT/libs" -path "*-windows/*.a" -delete 2>/dev/null
+        fi
+    fi
+fi
+
 # Максимум фич: не отключаем ничего (--without-* не передаём).
 # --with-x — явно запрашиваем X.
 # --enable-build-id — полезно для отладки.
