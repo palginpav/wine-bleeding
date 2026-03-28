@@ -2186,10 +2186,10 @@ HRESULT get_runtime_info(LPCWSTR exefile, LPCWSTR version, LPCWSTR config_file,
     parsed_config_file parsed_config;
 
     if (startup_flags & ~supported_startup_flags)
-        FIXME("unsupported startup flags %lx\n", startup_flags & ~supported_startup_flags);
+        TRACE("ignoring unsupported startup flags %lx\n", startup_flags & ~supported_startup_flags);
 
     if (runtimeinfo_flags & ~supported_runtime_flags)
-        FIXME("unsupported runtimeinfo flags %lx\n", runtimeinfo_flags & ~supported_runtime_flags);
+        TRACE("ignoring unsupported runtimeinfo flags %lx\n", runtimeinfo_flags & ~supported_runtime_flags);
 
     if (exefile && !exefile[0])
         exefile = NULL;

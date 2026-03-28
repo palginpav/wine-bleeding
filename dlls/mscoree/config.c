@@ -552,7 +552,7 @@ static HRESULT parse_supported_runtime(ConfigFileHandler *This, ISAXAttributes *
     {
         hr = ISAXAttributes_getValueFromName(pAttr, empty, 0, sku, lstrlenW(sku), &value, &value_size);
         if (SUCCEEDED(hr))
-            FIXME("sku=%s not implemented\n", debugstr_wn(value, value_size));
+            TRACE("sku=%s\n", debugstr_wn(value, value_size));
         hr = S_OK;
     }
 

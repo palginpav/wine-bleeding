@@ -3960,7 +3960,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         len = sizeof(*leap);
         if (size >= len)
         {
-            FIXME( "SystemLeapSecondInformation - stub\n" );
+            TRACE( "SystemLeapSecondInformation\n" );
             leap->Enabled = TRUE;
             leap->Flags   = 0;
         }

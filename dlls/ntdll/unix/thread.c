@@ -2271,7 +2271,7 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
     }
 
     case ThreadIsIoPending:
-        FIXME( "ThreadIsIoPending info class not supported yet\n" );
+        TRACE( "ThreadIsIoPending\n" );
         if (length != sizeof(BOOL)) return STATUS_INFO_LENGTH_MISMATCH;
         if (!data) return STATUS_ACCESS_DENIED;
         *(BOOL*)data = FALSE;
@@ -2384,7 +2384,7 @@ NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
     {
         PROCESSOR_NUMBER *number = data;
 
-        FIXME( "ThreadIdealProcessorEx info class - stub\n" );
+        TRACE( "ThreadIdealProcessorEx\n" );
         if (length != sizeof(*number)) return STATUS_INFO_LENGTH_MISMATCH;
         memset( number, 0, sizeof(*number) );
         if (ret_len) *ret_len = sizeof(*number);

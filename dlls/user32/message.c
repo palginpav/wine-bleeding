@@ -1245,7 +1245,7 @@ BOOL WINAPI IsHungAppWindow( HWND hWnd )
  */
 BOOL WINAPI ChangeWindowMessageFilter( UINT message, DWORD flag )
 {
-    FIXME( "%x %08lx\n", message, flag );
+    TRACE( "%x %08lx\n", message, flag );
     return TRUE;
 }
 
@@ -1254,6 +1254,6 @@ BOOL WINAPI ChangeWindowMessageFilter( UINT message, DWORD flag )
  */
 BOOL WINAPI ChangeWindowMessageFilterEx( HWND hwnd, UINT message, DWORD action, CHANGEFILTERSTRUCT *changefilter )
 {
-    FIXME( "%p %x %ld %p\n", hwnd, message, action, changefilter );
+    TRACE( "%p %x %ld %p\n", hwnd, message, action, changefilter );
     return TRUE;
 }
