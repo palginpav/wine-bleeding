@@ -33,6 +33,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
+static LONG buffered_paint_refcount;
+
 struct paintbuffer
 {
     HDC targetdc;
@@ -40,6 +42,8 @@ struct paintbuffer
     HBITMAP bitmap;
     RECT rect;
     void *bits;
+    int width;   /* width in pixels */
+    int height;  /* height in pixels (always positive) */
 };
 
 static void free_paintbuffer(struct paintbuffer *buffer)
@@ -59,7 +63,8 @@ static struct paintbuffer *get_buffer_obj(HPAINTBUFFER handle)
  */
 HRESULT WINAPI BufferedPaintInit(VOID)
 {
-    FIXME("Stub ()\n");
+    TRACE("() refcount %ld\n", buffered_paint_refcount);
+    InterlockedIncrement(&buffered_paint_refcount);
     return S_OK;
 }
 
@@ -68,7 +73,8 @@ HRESULT WINAPI BufferedPaintInit(VOID)
  */
 HRESULT WINAPI BufferedPaintUnInit(VOID)
 {
-    FIXME("Stub ()\n");
+    TRACE("() refcount %ld\n", buffered_paint_refcount);
+    InterlockedDecrement(&buffered_paint_refcount);
     return S_OK;
 }
 
@@ -97,6 +103,8 @@ HPAINTBUFFER WINAPI BeginBufferedPaint(HDC targetdc, const RECT *rect,
     buffer = malloc(sizeof(*buffer));
     buffer->targetdc = targetdc;
     buffer->rect = *rect;
+    buffer->width = rect->right - rect->left;
+    buffer->height = rect->bottom - rect->top;
     buffer->memorydc = CreateCompatibleDC(targetdc);
 
     switch (format)
@@ -173,8 +181,39 @@ HRESULT WINAPI EndBufferedPaint(HPAINTBUFFER bufferhandle, BOOL update)
  */
 HRESULT WINAPI BufferedPaintClear(HPAINTBUFFER hBufferedPaint, const RECT *prc)
 {
-    FIXME("Stub (%p %p)\n", hBufferedPaint, prc);
-    return E_NOTIMPL;
+    struct paintbuffer *buffer = get_buffer_obj(hBufferedPaint);
+    int left, top, right, bottom, row, stride;
+    BYTE *bits;
+
+    TRACE("(%p %s)\n", hBufferedPaint, wine_dbgstr_rect(prc));
+
+    if (!buffer) return E_INVALIDARG;
+    if (!buffer->bits) return E_FAIL;
+
+    if (prc)
+    {
+        left = max(prc->left - buffer->rect.left, 0);
+        top = max(prc->top - buffer->rect.top, 0);
+        right = min(prc->right - buffer->rect.left, buffer->width);
+        bottom = min(prc->bottom - buffer->rect.top, buffer->height);
+    }
+    else
+    {
+        left = 0;
+        top = 0;
+        right = buffer->width;
+        bottom = buffer->height;
+    }
+
+    if (left >= right || top >= bottom) return S_OK;
+
+    stride = buffer->width * 4;
+    bits = buffer->bits;
+
+    for (row = top; row < bottom; row++)
+        memset(bits + row * stride + left * 4, 0, (right - left) * 4);
+
+    return S_OK;
 }
 
 /***********************************************************************
@@ -182,8 +221,44 @@ HRESULT WINAPI BufferedPaintClear(HPAINTBUFFER hBufferedPaint, const RECT *prc)
  */
 HRESULT WINAPI BufferedPaintSetAlpha(HPAINTBUFFER hBufferedPaint, const RECT *prc, BYTE alpha)
 {
-    FIXME("Stub (%p %p %u)\n", hBufferedPaint, prc, alpha);
-    return E_NOTIMPL;
+    struct paintbuffer *buffer = get_buffer_obj(hBufferedPaint);
+    int left, top, right, bottom, row, col, stride;
+    BYTE *bits;
+
+    TRACE("(%p %s %u)\n", hBufferedPaint, wine_dbgstr_rect(prc), alpha);
+
+    if (!buffer) return E_INVALIDARG;
+    if (!buffer->bits) return E_FAIL;
+
+    if (prc)
+    {
+        left = max(prc->left - buffer->rect.left, 0);
+        top = max(prc->top - buffer->rect.top, 0);
+        right = min(prc->right - buffer->rect.left, buffer->width);
+        bottom = min(prc->bottom - buffer->rect.top, buffer->height);
+    }
+    else
+    {
+        left = 0;
+        top = 0;
+        right = buffer->width;
+        bottom = buffer->height;
+    }
+
+    if (left >= right || top >= bottom) return S_OK;
+
+    stride = buffer->width * 4;
+    bits = buffer->bits;
+
+    /* Set alpha byte of each BGRA pixel */
+    for (row = top; row < bottom; row++)
+    {
+        BYTE *pixel = bits + row * stride + left * 4 + 3;
+        for (col = left; col < right; col++, pixel += 4)
+            *pixel = alpha;
+    }
+
+    return S_OK;
 }
 
 /***********************************************************************

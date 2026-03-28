@@ -29,6 +29,8 @@ extern "C" {
 #define CH_RM_MAX_SVC_NAME 63
 #define RM_INVALID_TS_SESSION -1
 #define RM_INVALID_PROCESS -1
+#define RmForceShutdown 0x1
+#define RmShutdownOnlyRegistered 0x10
 
 typedef enum  {
     RmUnknownApp = 0,
