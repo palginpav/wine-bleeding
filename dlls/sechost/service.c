@@ -1237,10 +1237,11 @@ BOOL WINAPI EnumDependentServicesW( SC_HANDLE hService, DWORD dwServiceState,
                                     LPENUM_SERVICE_STATUSW lpServices, DWORD cbBufSize,
                                     LPDWORD pcbBytesNeeded, LPDWORD lpServicesReturned )
 {
-    FIXME("%p 0x%08lx %p 0x%08lx %p %p - stub\n", hService, dwServiceState,
+    TRACE("%p 0x%08lx %p 0x%08lx %p %p\n", hService, dwServiceState,
           lpServices, cbBufSize, pcbBytesNeeded, lpServicesReturned);
 
-    *lpServicesReturned = 0;
+    if (pcbBytesNeeded) *pcbBytesNeeded = 0;
+    if (lpServicesReturned) *lpServicesReturned = 0;
     return TRUE;
 }
 
