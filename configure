@@ -1048,6 +1048,7 @@ enable_comctl32_v6
 enable_comdlg32
 enable_coml2
 enable_compstui
+enable_comadmin
 enable_comsvcs
 enable_concrt140
 enable_connect
@@ -23758,6 +23759,7 @@ wine_fn_config_makefile dlls/commdlg.dll16 enable_win16
 wine_fn_config_makefile dlls/compobj.dll16 enable_win16
 wine_fn_config_makefile dlls/compstui enable_compstui
 wine_fn_config_makefile dlls/compstui/tests enable_tests
+wine_fn_config_makefile dlls/comadmin enable_comadmin
 wine_fn_config_makefile dlls/comsvcs enable_comsvcs
 wine_fn_config_makefile dlls/comsvcs/tests enable_tests
 wine_fn_config_makefile dlls/concrt140 enable_concrt140
@@ -24185,6 +24187,7 @@ wine_fn_config_makefile dlls/mstask enable_mstask
 wine_fn_config_makefile dlls/mstask/tests enable_tests
 wine_fn_config_makefile dlls/msttsengine enable_msttsengine
 wine_fn_config_makefile dlls/msv1_0 enable_msv1_0
+wine_fn_config_makefile dlls/msv1_0/tests enable_tests
 wine_fn_config_makefile dlls/msvcirt enable_msvcirt
 wine_fn_config_makefile dlls/msvcirt/tests enable_tests
 wine_fn_config_makefile dlls/msvcm80 enable_msvcm80
