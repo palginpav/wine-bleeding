@@ -5956,9 +5956,94 @@ BOOL WINAPI /* DECLSPEC_HOTPATCH */ GetFileMUIPath( DWORD flags, const WCHAR *fi
                                                     WCHAR *muipath, ULONG *muipathlen,
                                                     ULONGLONG *enumerator )
 {
-    FIXME( "stub: 0x%lx, %s, %s, %p, %p, %p, %p\n", flags, debugstr_w(filepath),
+    WCHAR lang[LOCALE_NAME_MAX_LENGTH];
+    WCHAR dir[MAX_PATH], name[MAX_PATH], candidate[MAX_PATH];
+    const WCHAR *p;
+    ULONG lang_len, path_len;
+
+    TRACE( "0x%lx, %s, %s, %p, %p, %p, %p\n", flags, debugstr_w(filepath),
            debugstr_w(language), languagelen, muipath, muipathlen, enumerator );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+
+    if (!filepath || !languagelen || !muipathlen)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+
+    /* Get the UI language to use */
+    if (language && *language)
+        lstrcpynW( lang, language, LOCALE_NAME_MAX_LENGTH );
+    else
+        GetUserDefaultLocaleName( lang, LOCALE_NAME_MAX_LENGTH );
+
+    /* Split filepath into directory and filename */
+    p = wcsrchr( filepath, '\\' );
+    if (p)
+    {
+        memcpy( dir, filepath, (p - filepath + 1) * sizeof(WCHAR) );
+        dir[p - filepath + 1] = 0;
+        lstrcpynW( name, p + 1, MAX_PATH );
+    }
+    else
+    {
+        dir[0] = 0;
+        lstrcpynW( name, filepath, MAX_PATH );
+    }
+
+    /* Build MUI path: <dir>\<lang>\<filename>.mui */
+    swprintf( candidate, MAX_PATH, L"%s%s\\%s.mui", dir, lang, name );
+
+    if (GetFileAttributesW( candidate ) != INVALID_FILE_ATTRIBUTES)
+    {
+        path_len = lstrlenW( candidate ) + 1;
+        lang_len = lstrlenW( lang ) + 1;
+
+        if (*muipathlen < path_len || *languagelen < lang_len)
+        {
+            *muipathlen = path_len;
+            *languagelen = lang_len;
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+
+        if (muipath) lstrcpyW( muipath, candidate );
+        *muipathlen = path_len;
+        if (language) lstrcpyW( language, lang );
+        *languagelen = lang_len;
+        return TRUE;
+    }
+
+    /* Try with just the primary language (e.g., "en" from "en-US") */
+    p = wcschr( lang, '-' );
+    if (p)
+    {
+        WCHAR primary[LOCALE_NAME_MAX_LENGTH];
+        memcpy( primary, lang, (p - lang) * sizeof(WCHAR) );
+        primary[p - lang] = 0;
+
+        swprintf( candidate, MAX_PATH, L"%s%s\\%s.mui", dir, primary, name );
+        if (GetFileAttributesW( candidate ) != INVALID_FILE_ATTRIBUTES)
+        {
+            path_len = lstrlenW( candidate ) + 1;
+            lang_len = lstrlenW( primary ) + 1;
+
+            if (*muipathlen < path_len || *languagelen < lang_len)
+            {
+                *muipathlen = path_len;
+                *languagelen = lang_len;
+                SetLastError( ERROR_INSUFFICIENT_BUFFER );
+                return FALSE;
+            }
+
+            if (muipath) lstrcpyW( muipath, candidate );
+            *muipathlen = path_len;
+            if (language) lstrcpyW( language, primary );
+            *languagelen = lang_len;
+            return TRUE;
+        }
+    }
+
+    SetLastError( ERROR_FILE_NOT_FOUND );
     return FALSE;
 }
 

@@ -143,14 +143,14 @@ static HRESULT WINAPI automatic_updates_DetectNow(
 static HRESULT WINAPI automatic_updates_Pause(
     IAutomaticUpdates *This )
 {
-    FIXME("\n");
+    TRACE("\n");
     return S_OK;
 }
 
 static HRESULT WINAPI automatic_updates_Resume(
     IAutomaticUpdates *This )
 {
-    FIXME("\n");
+    TRACE("\n");
     return S_OK;
 }
 

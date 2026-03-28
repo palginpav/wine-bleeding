@@ -1581,7 +1581,7 @@ BOOL WINAPI SetProcessDefaultCpuSets(HANDLE process, const ULONG *cpu_set_ids, U
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetNumaHighestNodeNumber( ULONG *node )
 {
-    FIXME( "semi-stub: %p\n", node );
+    TRACE( "%p\n", node );
     *node = 0;
     return TRUE;
 }

@@ -132,14 +132,22 @@ BOOL WINAPI SfpVerifyFile(LPCSTR filename, LPSTR error, DWORD size)
 
 BOOL WINAPI SRSetRestorePointA(RESTOREPOINTINFOA *restorepoint, STATEMGRSTATUS *status)
 {
-    FIXME("%p %p\n", restorepoint, status);
-    status->nStatus = ERROR_SUCCESS;
-    return FALSE;
+    TRACE("%p %p\n", restorepoint, status);
+    if (status)
+    {
+        status->nStatus = ERROR_SUCCESS;
+        status->llSequenceNumber = 1;
+    }
+    return TRUE;
 }
 
 BOOL WINAPI SRSetRestorePointW(RESTOREPOINTINFOW *restorepoint, STATEMGRSTATUS *status)
 {
-    FIXME("%p %p\n", restorepoint, status);
-    status->nStatus = ERROR_SUCCESS;
-    return FALSE;
+    TRACE("%p %p\n", restorepoint, status);
+    if (status)
+    {
+        status->nStatus = ERROR_SUCCESS;
+        status->llSequenceNumber = 1;
+    }
+    return TRUE;
 }

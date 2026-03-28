@@ -195,7 +195,7 @@ ULONG WINAPI FlushTraceW ( TRACEHANDLE hSession, LPCWSTR SessionName, PEVENT_TRA
  */
 BOOL WINAPI DeregisterEventSource( HANDLE hEventLog )
 {
-    FIXME("(%p) stub\n", hEventLog);
+    TRACE("(%p)\n", hEventLog);
     return TRUE;
 }
 
@@ -549,7 +549,7 @@ HANDLE WINAPI RegisterEventSourceA( LPCSTR lpUNCServerName, LPCSTR lpSourceName 
     UNICODE_STRING lpSourceNameW;
     HANDLE ret;
 
-    FIXME("(%s,%s): stub\n", debugstr_a(lpUNCServerName), debugstr_a(lpSourceName));
+    TRACE("(%s,%s)\n", debugstr_a(lpUNCServerName), debugstr_a(lpSourceName));
 
     RtlCreateUnicodeStringFromAsciiz(&lpUNCServerNameW, lpUNCServerName);
     RtlCreateUnicodeStringFromAsciiz(&lpSourceNameW, lpSourceName);
@@ -566,7 +566,7 @@ HANDLE WINAPI RegisterEventSourceA( LPCSTR lpUNCServerName, LPCSTR lpSourceName 
  */
 HANDLE WINAPI RegisterEventSourceW( LPCWSTR lpUNCServerName, LPCWSTR lpSourceName )
 {
-    FIXME("(%s,%s): stub\n", debugstr_w(lpUNCServerName), debugstr_w(lpSourceName));
+    TRACE("(%s,%s)\n", debugstr_w(lpUNCServerName), debugstr_w(lpSourceName));
     return (HANDLE)0xcafe4242;
 }
 
@@ -603,7 +603,7 @@ BOOL WINAPI ReportEventA ( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD d
     UINT i;
     BOOL ret;
 
-    FIXME("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p): stub\n", hEventLog,
+    TRACE("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p)\n", hEventLog,
           wType, wCategory, dwEventID, lpUserSid, wNumStrings, dwDataSize, lpStrings, lpRawData);
 
     if (wNumStrings == 0) return TRUE;
@@ -636,10 +636,8 @@ BOOL WINAPI ReportEventW( HANDLE hEventLog, WORD wType, WORD wCategory, DWORD dw
 {
     UINT i;
 
-    FIXME("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p): stub\n", hEventLog,
+    TRACE("(%p,0x%04x,0x%04x,0x%08lx,%p,0x%04x,0x%08lx,%p,%p)\n", hEventLog,
           wType, wCategory, dwEventID, lpUserSid, wNumStrings, dwDataSize, lpStrings, lpRawData);
-
-    /* partial stub */
 
     if (wNumStrings == 0) return TRUE;
     if (!lpStrings) return TRUE;

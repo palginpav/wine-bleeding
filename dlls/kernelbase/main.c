@@ -99,7 +99,7 @@ LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE token, AppPolicyMedia
  */
 LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, AppPolicyProcessTerminationMethod *policy)
 {
-    FIXME("%p, %p\n", token, policy);
+    TRACE("%p, %p\n", token, policy);
 
     if(policy)
         *policy = AppPolicyProcessTerminationMethod_ExitProcess;

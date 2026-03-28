@@ -962,11 +962,45 @@ DWORD __cdecl svcctl_ChangeServiceConfig2W( SC_RPC_HANDLE hService, SC_RPC_CONFI
         }
         break;
     case SERVICE_CONFIG_FAILURE_ACTIONS:
-        WINE_FIXME( "SERVICE_CONFIG_FAILURE_ACTIONS not implemented: period %lu msg %s cmd %s\n",
-                    config.actions->dwResetPeriod,
-                    wine_dbgstr_w(config.actions->lpRebootMsg),
-                    wine_dbgstr_w(config.actions->lpCommand) );
+    {
+        SERVICE_FAILURE_ACTIONSW *actions = config.actions;
+
+        WINE_TRACE( "SERVICE_CONFIG_FAILURE_ACTIONS: period %lu msg %s cmd %s actions %lu\n",
+                    actions->dwResetPeriod,
+                    wine_dbgstr_w(actions->lpRebootMsg),
+                    wine_dbgstr_w(actions->lpCommand),
+                    actions->cActions );
+
+        service_lock( service->service_entry );
+        service->service_entry->failure_reset_period = actions->dwResetPeriod;
+
+        free( service->service_entry->failure_reboot_msg );
+        service->service_entry->failure_reboot_msg = actions->lpRebootMsg ?
+            wcsdup( actions->lpRebootMsg ) : NULL;
+
+        free( service->service_entry->failure_command );
+        service->service_entry->failure_command = actions->lpCommand ?
+            wcsdup( actions->lpCommand ) : NULL;
+
+        free( service->service_entry->failure_actions );
+        if (actions->cActions && actions->lpsaActions)
+        {
+            service->service_entry->failure_actions_count = actions->cActions;
+            service->service_entry->failure_actions = malloc( actions->cActions * sizeof(SC_ACTION) );
+            if (service->service_entry->failure_actions)
+                memcpy( service->service_entry->failure_actions, actions->lpsaActions,
+                        actions->cActions * sizeof(SC_ACTION) );
+        }
+        else
+        {
+            service->service_entry->failure_actions_count = 0;
+            service->service_entry->failure_actions = NULL;
+        }
+
+        save_service_config( service->service_entry );
+        service_unlock( service->service_entry );
         break;
+    }
     case SERVICE_CONFIG_PRESHUTDOWN_INFO:
         WINE_TRACE( "changing service %p preshutdown timeout to %ld\n",
                 service, config.preshutdown->dwPreshutdownTimeout );

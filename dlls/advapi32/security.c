@@ -2984,7 +2984,7 @@ DWORD WINAPI GetNamedSecurityInfoExA( LPCSTR object, SE_OBJECT_TYPE type,
  */
 BOOL WINAPI DecryptFileW(LPCWSTR lpFileName, DWORD dwReserved)
 {
-    FIXME("(%s, %08lx): stub\n", debugstr_w(lpFileName), dwReserved);
+    TRACE("(%s, %08lx)\n", debugstr_w(lpFileName), dwReserved);
     return TRUE;
 }
 
@@ -2993,7 +2993,7 @@ BOOL WINAPI DecryptFileW(LPCWSTR lpFileName, DWORD dwReserved)
  */
 BOOL WINAPI DecryptFileA(LPCSTR lpFileName, DWORD dwReserved)
 {
-    FIXME("(%s, %08lx): stub\n", debugstr_a(lpFileName), dwReserved);
+    TRACE("(%s, %08lx)\n", debugstr_a(lpFileName), dwReserved);
     return TRUE;
 }
 

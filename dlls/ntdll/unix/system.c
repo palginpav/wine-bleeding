@@ -3304,7 +3304,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         }
         else ret = STATUS_INFO_LENGTH_MISMATCH;
         if(!fixme_written) {
-            FIXME("info_class SYSTEM_PERFORMANCE_INFORMATION\n");
+            TRACE("info_class SYSTEM_PERFORMANCE_INFORMATION\n");
             fixme_written = TRUE;
         }
         break;

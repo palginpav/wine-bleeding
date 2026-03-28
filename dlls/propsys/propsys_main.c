@@ -267,7 +267,7 @@ HRESULT WINAPI PSGetPropertySystem(REFIID riid, void **obj)
 
 HRESULT WINAPI PSRegisterPropertySchema(PCWSTR path)
 {
-    FIXME("%s stub\n", debugstr_w(path));
+    TRACE("%s\n", debugstr_w(path));
 
     return S_OK;
 }
