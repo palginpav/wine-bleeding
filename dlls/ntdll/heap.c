@@ -1118,6 +1118,11 @@ static struct block *find_free_block( struct heap *heap, ULONG flags, SIZE_T blo
 
     while ((ptr = list_next( &heap->free_lists[0].entry, ptr )))
     {
+        if (!ptr->next || !ptr->prev || (ULONG_PTR)ptr->next < 0x10000 || (ULONG_PTR)ptr->prev < 0x10000)
+        {
+            ERR( "heap %p: corrupted free list entry %p (next=%p prev=%p)\n", heap, ptr, ptr->next, ptr->prev );
+            break;
+        }
         entry = LIST_ENTRY( ptr, struct entry, entry );
         block = &entry->block;
         if (block_get_flags( block ) == BLOCK_FLAG_FREE_LINK) continue;
@@ -1580,7 +1585,15 @@ HANDLE WINAPI RtlCreateHeap( ULONG flags, void *addr, SIZE_T total_size, SIZE_T 
             RtlInitializeSListHead( &heap->bins[i].groups );
             /* offset affinity_group_base to interleave the bin affinity group pointers */
             heap->bins[i].affinity_group_base = (struct group **)(heap->bins + BLOCK_SIZE_BIN_COUNT) + i;
+            /* Pre-enable all LFH bins immediately. Windows LFH stores free block
+             * metadata in out-of-band bitmaps, so use-after-free on freed blocks
+             * is harmless. Wine's traditional free list stores prev/next pointers
+             * in the freed block's data area, which gets corrupted by UAF writes.
+             * Enabling LFH from the start routes all small-block (<32KB) frees
+             * through the bitmap path, avoiding inline metadata corruption. */
+            heap->bins[i].enabled = TRUE;
         }
+        if (heap->bins) InterlockedExchange( &heap->compat_info, HEAP_LFH );
     }
 
     /* link it into the per-process heap list */
@@ -1883,14 +1896,14 @@ static NTSTATUS heap_release_bin_group( struct heap *heap, ULONG flags, struct b
     if (!InterlockedCompareExchangePointer( (void *)bin_get_affinity_group( bin, affinity ), group, NULL ))
         return STATUS_SUCCESS;
 
-    /* try re-using the block group instead of releasing it */
-    if (RtlQueryDepthSList( &bin->groups ) <= ARRAY_SIZE(affinity_mapping))
-    {
-        RtlInterlockedPushEntrySList( &bin->groups, &group->entry );
-        return STATUS_SUCCESS;
-    }
-
-    return group_release( heap, flags, bin, group );
+    /* Always keep fully freed groups in the bin for reuse instead of
+     * releasing them to the traditional free list. Windows LFH retains
+     * freed groups to avoid returning memory to the subheap where it
+     * would get inline free list metadata written into the data area.
+     * Applications with UAF bugs rely on freed block memory staying
+     * accessible without heap metadata corruption. */
+    RtlInterlockedPushEntrySList( &bin->groups, &group->entry );
+    return STATUS_SUCCESS;
 }
 
 static struct block *find_free_bin_block( struct heap *heap, ULONG flags, SIZE_T block_size, struct bin *bin )
@@ -1976,15 +1989,10 @@ static NTSTATUS heap_free_block_lfh( struct heap *heap, ULONG flags, struct bloc
 
 static void bin_try_enable( struct heap *heap, struct bin *bin )
 {
-    ULONG alloc = ReadNoFence( &bin->count_alloc ), freed = ReadNoFence( &bin->count_freed );
-    SIZE_T block_size = BLOCK_BIN_SIZE( bin - heap->bins );
-    BOOL enable = FALSE;
-
-    if (bin == heap->bins && alloc > 0x10) enable = TRUE;
-    else if (bin - heap->bins < 0x30 && alloc > 0x800) enable = TRUE;
-    else if (bin - heap->bins < 0x30 && alloc - freed > 0x10) enable = TRUE;
-    else if (alloc - freed > 0x400000 / block_size) enable = TRUE;
-    if (!enable) return;
+    /* Bins are pre-enabled at heap creation for UAF resilience.
+     * This function is kept as a fallback for any edge case where
+     * a bin was not pre-enabled (e.g. HEAP_NO_SERIALIZE heaps). */
+    if (ReadNoFence( &bin->enabled )) return;
 
     if (ReadNoFence( &heap->compat_info ) != HEAP_LFH)
     {
@@ -1992,14 +2000,7 @@ static void bin_try_enable( struct heap *heap, struct bin *bin )
         RtlSetHeapInformation( heap, HeapCompatibilityInformation, &info, sizeof(info) );
     }
 
-    /* paired with ReadAcquire in heap_allocate_block_lfh.
-     *
-     * The acq/rel barrier on the enabled flag is protecting compat_info
-     * (i.e. compat_info := LFH happens-before enabled := TRUE), so that
-     * a caller that observes LFH block allocation (alloc request
-     * succeeds without heap lock) will never observe HEAP_STD when it
-     * queries the heap.
-     */
+    /* paired with ReadAcquire in heap_allocate_block_lfh. */
     WriteRelease( &bin->enabled, TRUE );
 }
 
@@ -2615,7 +2616,12 @@ NTSTATUS WINAPI RtlSetHeapInformation( HANDLE handle, HEAP_INFORMATION_CLASS inf
             return STATUS_UNSUCCESSFUL;
         }
         if (InterlockedCompareExchange( &heap->compat_info, compat_info, HEAP_STD ) != HEAP_STD)
+        {
+            /* Allow setting LFH on already-LFH heap (bins may be pre-enabled) */
+            if (compat_info == HEAP_LFH && ReadNoFence( &heap->compat_info ) == HEAP_LFH)
+                return STATUS_SUCCESS;
             return STATUS_UNSUCCESSFUL;
+        }
         return STATUS_SUCCESS;
     }
 
