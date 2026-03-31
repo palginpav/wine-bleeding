@@ -385,6 +385,41 @@ else
     echo "DXVK-NVAPI уже собран (без изменений), пропуск."
 fi
 
+# --- vkd3d (WineHQ) native shared libraries ---
+# Builds libvkd3d.so, libvkd3d-shader.so, libvkd3d-utils.so from source.
+# These are needed by Wine's builtin wined3d D3D12 backend and by apps
+# that use vkd3d-shader for HLSL/DXBC/SPIRV shader compilation.
+VKD3D_INSTALL="$DEPS_DIR/vkd3d-install"
+if [ ! -d vkd3d ]; then
+    echo "Клонирование vkd3d (WineHQ)..."
+    git clone --depth 1 https://gitlab.winehq.org/wine/vkd3d.git
+fi
+vkd3d_libs=( "$VKD3D_INSTALL/lib/libvkd3d-shader.so" )
+if need_deps_build "$DEPS_DIR/.vkd3d-native-rev" "$DEPS_DIR/vkd3d" "${vkd3d_libs[@]}"; then
+    cd vkd3d
+    git fetch --depth 1 origin 2>/dev/null || true
+    git reset --hard refs/remotes/origin/HEAD 2>/dev/null || git pull --depth 1 2>/dev/null || true
+    echo "Сборка vkd3d native (libvkd3d-shader.so)..."
+    if [ ! -f configure ]; then
+        autoreconf -fiv 2>/dev/null || ./autogen.sh 2>/dev/null || true
+    fi
+    if [ -f configure ]; then
+        mkdir -p "$BUILD_DIR/vkd3d-native"
+        (cd "$BUILD_DIR/vkd3d-native" && \
+         "$DEPS_DIR/vkd3d/configure" --prefix="$VKD3D_INSTALL" \
+            --disable-tests --disable-demos --without-spirv-tools \
+            CFLAGS="-O2" 2>&1 | tail -3 && \
+         make -j"$(nproc)" 2>&1 | tail -3 && \
+         make install 2>&1 | tail -3) || echo "Предупреждение: сборка vkd3d native не удалась, будут использованы системные библиотеки." >&2
+    else
+        echo "Предупреждение: vkd3d/configure не найден, пропуск сборки нативных vkd3d." >&2
+    fi
+    save_deps_rev "$DEPS_DIR/.vkd3d-native-rev" "$DEPS_DIR/vkd3d"
+    cd "$DEPS_DIR"
+else
+    echo "vkd3d native уже собран (без изменений), пропуск."
+fi
+
 echo ""
 echo "Готово. Результат в: $DIST_DIR"
 echo "  x64: $DIST_DIR/x64/ → \$WINEPREFIX/drive_c/windows/system32/"
@@ -433,7 +468,7 @@ fi
 mkdir -p "$OUT_DIST/lib/wine/dxvk/x86_64-windows" "$OUT_DIST/lib/wine/dxvk/i386-windows"
 mkdir -p "$OUT_DIST/lib/wine/vkd3d-proton/x86_64-windows" "$OUT_DIST/lib/wine/vkd3d-proton/i386-windows"
 mkdir -p "$OUT_DIST/lib/wine/nvapi/x86_64-windows" "$OUT_DIST/lib/wine/nvapi/i386-windows"
-# lib/vkd3d/ не создаём: мы собираем только VKD3D-Proton (d3d12/d3d12core); libvkd3d-1.dll — из отдельного проекта vkd3d (WineHQ), его нет в сборке
+# vkd3d native libs (libvkd3d-shader.so etc.) go into lib/<arch>-linux-gnu/ (see vkd3d overlay below)
 
 # Копируем только .dll (без .a). cp -n не перезаписывает; || true чтобы не падать при set -e.
 for f in "$DIST_DIR/x64"/d3d8.dll "$DIST_DIR/x64"/d3d9.dll "$DIST_DIR/x64"/d3d10core.dll "$DIST_DIR/x64"/d3d11.dll "$DIST_DIR/x64"/dxgi.dll; do
@@ -476,7 +511,9 @@ elif [ "$BUNDLE_SYSTEM_LIBS" -eq 1 ]; then
     SYS_NATIVE="$OUT_DIST/lib/$ARCH_LIB"
     mkdir -p "$SYS_NATIVE"
     # Список библиотек, нужных для Wine/медиа (ищем в ldconfig, копируем из системы)
-    SYSTEM_LIBS="libvulkan libgstreamer-1.0 libgstbase-1.0 libgstapp-1.0 libgstaudio-1.0 libgstvideo-1.0 libgstpbutils-1.0 libavcodec libavformat libavutil libavfilter libdav1d libxkbcommon libgraphene-1.0 libglib-2.0 libgobject-2.0 libffi"
+    SYSTEM_LIBS="libvulkan libvkd3d libvkd3d-shader libvkd3d-utils libgstreamer-1.0 libgstbase-1.0 libgstapp-1.0 libgstaudio-1.0 libgstvideo-1.0 libgstpbutils-1.0 libavcodec libavformat libavutil libavfilter libdav1d libxkbcommon libgraphene-1.0 libglib-2.0 libgobject-2.0 libffi"
+    # Note: vkd3d libs are also built from source above; the locally-built versions
+    # are overlaid after this loop, overwriting the system versions with fresher ones.
     echo "Копирование нативных lib с системы в $SYS_NATIVE..."
     for lib in $SYSTEM_LIBS; do
         path=""
@@ -494,6 +531,18 @@ elif [ "$BUNDLE_SYSTEM_LIBS" -eq 1 ]; then
     for gstdir in /usr/lib/"$ARCH_LIB"/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
         [ -d "$gstdir" ] && { cp -an "$gstdir" "$SYS_NATIVE/" 2>/dev/null && break; } || true
     done
+fi
+
+# Overlay locally-built vkd3d native libs over system ones (fresher version)
+VKD3D_INSTALL="${VKD3D_INSTALL:-$DEPS_DIR/vkd3d-install}"
+if [ -d "$VKD3D_INSTALL/lib" ]; then
+    VKD3D_NATIVE="$OUT_DIST/lib/$(uname -m)-linux-gnu"
+    mkdir -p "$VKD3D_NATIVE"
+    for f in "$VKD3D_INSTALL/lib"/libvkd3d*.so*; do
+        [ -e "$f" ] && cp -af "$f" "$VKD3D_NATIVE/" 2>/dev/null
+    done
+    vkd3d_n=$(ls "$VKD3D_NATIVE"/libvkd3d*.so* 2>/dev/null | wc -l)
+    [ "$vkd3d_n" -gt 0 ] && echo "  vkd3d native: $vkd3d_n файлов из локальной сборки" || true
 fi
 
 echo ""
