@@ -157,13 +157,13 @@ SYS32_32="$PREFIX_DIR/drive_c/windows/syswow64"
 DLL_OVERRIDES=""
 
 deploy_gpu_dll() {
-    local src_dir="$1" arch_dir="$2" dst_dir="$3"
+    local src_dir="$1" arch_dir="$2" dst_dir="$3" wine_lib_dir="$4"
     local count=0
     if [ -d "$src_dir/$arch_dir" ]; then
         for dll in "$src_dir/$arch_dir"/*.dll; do
             [ -f "$dll" ] || continue
             local name=$(basename "$dll")
-            cp -f "$dll" "$dst_dir/$name"
+            cp -f "$dll" "$dst_dir/$name" || die "Failed to copy $dll → $dst_dir/$name"
             # Strip "Wine builtin DLL" marker so Wine loads as native
             python3 -c "
 with open('$dst_dir/$name', 'r+b') as f:
@@ -172,6 +172,12 @@ with open('$dst_dir/$name', 'r+b') as f:
         f.seek(0x40)
         f.write(b'\x00' * 16)
 " 2>/dev/null || true
+            # Mirror into dist's Wine builtin dir so deploy_builtin_dlls() sees
+            # matching size+mtime and skips overwriting the prefix copy on game launch.
+            if [ -d "$wine_lib_dir" ] && [ -f "$wine_lib_dir/$name" ]; then
+                cp -f "$dst_dir/$name" "$wine_lib_dir/$name" || die "Failed to mirror $name → $wine_lib_dir/$name"
+                touch -r "$dst_dir/$name" "$wine_lib_dir/$name"
+            fi
             ((count++))
         done
     fi
@@ -182,9 +188,9 @@ with open('$dst_dir/$name', 'r+b') as f:
 DXVK_DIR="$DIST_DST/lib/wine/dxvk"
 if [ -d "$DXVK_DIR/x86_64-windows" ]; then
     echo ""
-    n64=$(deploy_gpu_dll "$DXVK_DIR" "x86_64-windows" "$SYS32")
+    n64=$(deploy_gpu_dll "$DXVK_DIR" "x86_64-windows" "$SYS32" "$DIST_DST/lib/wine/x86_64-windows")
     n32=0
-    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$DXVK_DIR" "i386-windows" "$SYS32_32")
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$DXVK_DIR" "i386-windows" "$SYS32_32" "$DIST_DST/lib/wine/i386-windows")
     DXVK_VER=$(cat "$DXVK_DIR/version" 2>/dev/null | head -1)
     info "DXVK deployed: ${n64}x64 + ${n32}x32 DLLs (${DXVK_VER:-unknown})"
     for dll in "$DXVK_DIR/x86_64-windows"/*.dll; do
@@ -197,9 +203,9 @@ fi
 # VKD3D-Proton: d3d12, d3d12core → Vulkan
 VKD3D_DIR="$DIST_DST/lib/wine/vkd3d-proton"
 if [ -d "$VKD3D_DIR/x86_64-windows" ]; then
-    n64=$(deploy_gpu_dll "$VKD3D_DIR" "x86_64-windows" "$SYS32")
+    n64=$(deploy_gpu_dll "$VKD3D_DIR" "x86_64-windows" "$SYS32" "$DIST_DST/lib/wine/x86_64-windows")
     n32=0
-    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$VKD3D_DIR" "i386-windows" "$SYS32_32")
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$VKD3D_DIR" "i386-windows" "$SYS32_32" "$DIST_DST/lib/wine/i386-windows")
     VKD3D_VER=$(cat "$VKD3D_DIR/version" 2>/dev/null | head -1)
     info "VKD3D-Proton deployed: ${n64}x64 + ${n32}x32 DLLs (${VKD3D_VER:-unknown})"
     for dll in "$VKD3D_DIR/x86_64-windows"/*.dll; do
@@ -212,9 +218,9 @@ fi
 # DXVK-NVAPI: nvapi64, nvofapi64
 NVAPI_DIR="$DIST_DST/lib/wine/nvapi"
 if [ -d "$NVAPI_DIR/x86_64-windows" ]; then
-    n64=$(deploy_gpu_dll "$NVAPI_DIR" "x86_64-windows" "$SYS32")
+    n64=$(deploy_gpu_dll "$NVAPI_DIR" "x86_64-windows" "$SYS32" "$DIST_DST/lib/wine/x86_64-windows")
     n32=0
-    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$NVAPI_DIR" "i386-windows" "$SYS32_32")
+    [ -d "$SYS32_32" ] && n32=$(deploy_gpu_dll "$NVAPI_DIR" "i386-windows" "$SYS32_32" "$DIST_DST/lib/wine/i386-windows")
     NVAPI_VER=$(cat "$NVAPI_DIR/version" 2>/dev/null | head -1)
     info "DXVK-NVAPI deployed: ${n64}x64 + ${n32}x32 DLLs (${NVAPI_VER:-unknown})"
     for dll in "$NVAPI_DIR/x86_64-windows"/*.dll; do
