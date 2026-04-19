@@ -26,7 +26,7 @@ wb_prefix_init() {
   _WB_INIT_PREFIX_EXISTED="${prefix_existed}"
   export _WB_INIT_PREFIX_PATH _WB_INIT_PREFIX_EXISTED
 
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2329,SC2317  # invoked via trap EXIT
   _wb_wineboot_cleanup() {
     local _ec=$?
     wb_release_lock "${_WB_INIT_PREFIX_PATH}" 2>/dev/null || true

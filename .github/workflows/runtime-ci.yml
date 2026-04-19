@@ -32,15 +32,15 @@ jobs:
     container:
       image: bash:${{ matrix.bash-version }}
     steps:
+      - name: Install runtime deps (before checkout so git is available)
+        run: apk add --no-cache bash ncurses jq grep coreutils findutils tar gzip sed python3 wget ca-certificates
+
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install bats-core dependencies
-        run: apk add --no-cache bash ncurses
-
-      - name: Initialise bats-core submodule (if not already via checkout)
-        run: git submodule update --init --recursive || true
+      - name: Install bats-core from release tarball
+        run: |
+          wget -qO- https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz | tar xz
+          ./bats-core-1.11.1/install.sh /usr/local
 
       - name: Run bats tests
         run: make -C runtime test

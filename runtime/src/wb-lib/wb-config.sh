@@ -65,6 +65,7 @@ _wb_config_load_layer() {
   done < <(comm -12 <(echo "${before_vars}") <(echo "${after_vars}") || true)
 }
 
+# shellcheck disable=SC2120  # prefix_conf is optional; callers without a prefix pass no args.
 wb_config_load() {
   local prefix_conf="${1:-}"
 
