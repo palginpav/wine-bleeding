@@ -85,7 +85,8 @@ or prints a skip message and exits 0 so CI is not broken.
 | M2 | done | Dist manifest, runtime install/activate/prune/list/info |
 | M3 | done | Prefix lifecycle: classify, adopt (coexist/take-over), list, info, import |
 | M4 | done | Component deploy, fresh prefix create + wineboot, .wb.ppdb reader/importer |
-| M5+ | planned | Wine dispatch (wb run), hook system, multi-build switching |
+| M5 | done | `wb run` launch dispatcher: env composition, hooks chain, exec |
+| M6+ | planned | Multi-build switching, pressure-vessel, gamescope/gamemode wrappers |
 
 ## Prefix subcommands (M3)
 
@@ -107,6 +108,68 @@ Classifications emitted by `wb prefix classify`:
 - `broken` — any other state (diagnostic only; repair is M8)
 
 See `.orchestray/kb/artifacts/runtime-layer-roadmap.md` for the full milestone plan.
+
+## M5 — `wb run` launch dispatcher
+
+### New subcommands
+
+```
+wb run <exe> [--prefix NAME] [--runtime NAME] [--wait] [args...]
+    Launch an executable via Wine. Full §5.2 call graph:
+      1. Load config (5-layer jailed config system)
+      2. Resolve runtime (dist path) and prefix
+      3. Acquire prefix lock
+      4. Run pre-reconcile, pre-materialize hooks; idempotent component reconcile; post-materialize hooks
+      5. Run pre-exec hook (failure aborts launch)
+      6. Compose Wine environment (WINEDEBUG, WINEDLLOVERRIDES, DXVK_*, VKD3D_*, etc.)
+      7. Release lock, then exec wine (no trap fires after exec)
+      --wait: fork+wait instead of exec; enables post-exec hook with $WB_EXIT
+
+wb exec <exe> [args...]
+    Launch via Wine, skipping reconcile entirely (debugging only).
+    Prints WARN and execs without hooks or lock.
+```
+
+### Hooks directory layout
+
+Hooks live in `$WB_HOME/plugins/hooks.d/` and are sourced in sorted order per phase:
+
+| Phase suffix | When |
+|---|---|
+| `.pre-reconcile.sh` | Before prefix state check |
+| `.pre-materialize.sh` | Before component deploy |
+| `.post-materialize.sh` | After component deploy |
+| `.pre-exec.sh` | After env compose, before exec. Failure aborts launch. |
+| `.post-exec.sh` | After wine exits (only with `--wait`). Gets `$WB_EXIT`. |
+
+Files ending in `.example` are never loaded. Invalid filenames are silently skipped.
+Symlinks pointing outside `$WB_HOME/plugins/hooks.d/` are skipped with a WARN.
+
+An example hook is installed at `runtime/plugins/hooks.d/00-example.pre-exec.sh.example`.
+
+### exec/trap caveat
+
+`wb run` replaces itself with wine via `exec`. Bash trap handlers registered in hooks
+DO NOT fire after exec replaces the shell. Use `--wait` mode if you need the `post-exec`
+hook to observe the wine exit code.
+
+### Environment composition
+
+`wb_env_compose` translates `WB_*` variables to Wine env vars:
+
+| WB var | Wine var | Rule |
+|---|---|---|
+| `WB_DEBUG_WINE` (default `-all`) | `WINEDEBUG` | verbatim |
+| `WB_ESYNC=1` | `WINEESYNC=1` | only if =1 |
+| `WB_FSYNC=1` | `WINEFSYNC=1` | only if =1 |
+| `WB_NTSYNC=1` | `WINENTSYNC=1` | only if =1 |
+| `WB_DXVK=1` | `WINEDLLOVERRIDES` | DXVK dll names with `=n` |
+| `WB_VKD3D=1` | `WINEDLLOVERRIDES` | VKD3D dll names with `=n` |
+| `WB_NVAPI=1\|auto` | `WINEDLLOVERRIDES` | NVAPI dll names with `=n` |
+| `WB_EXTRA_DLLOVERRIDES` | `WINEDLLOVERRIDES` | appended verbatim; validated |
+
+`WINEDLLOVERRIDES` is validated with a strict regex before exec. Malformed
+`WB_EXTRA_DLLOVERRIDES` (e.g., shell injection attempts) cause exit 1.
 
 ## M4 — Component deploy + fresh prefix create + .wb.ppdb reader
 

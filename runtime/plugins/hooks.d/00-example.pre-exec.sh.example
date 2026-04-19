@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# 00-example.pre-exec.sh.example
+#
+# Example pre-exec hook for wb-runtime.
+#
+# PHASE: pre-exec
+#   Called after env composition, immediately before Wine is exec'd.
+#   The full Wine env (WINEPREFIX, WINELOADER, WINEDLLOVERRIDES, etc.)
+#   is available and can be overridden via 'export'.
+#
+# TO ACTIVATE: copy this file to the same directory WITHOUT the .example suffix:
+#   cp 00-example.pre-exec.sh.example 00-example.pre-exec.sh
+#
+# NAMING: hooks must match:
+#   ^[A-Za-z0-9_.-]+\.(pre-reconcile|pre-materialize|post-materialize|pre-exec|post-exec)\.sh$
+#   Files ending in .example are NEVER loaded by wb_hooks_run.
+#
+# ORDERING: hooks are sourced in sorted (lexicographic) order. Prefix with a
+#   two-digit number (00-, 10-, 50-) to control execution order.
+#
+# EXPORTED VARIABLES: any 'export VAR=value' in this hook will be visible
+#   to subsequent hooks in the same phase and to later phases. Variables do
+#   NOT persist past Wine exec (exec replaces the process).
+#
+# FAILURE SEMANTICS: if a hook returns non-zero, the entire launch is aborted.
+#   Use 'return 0' explicitly at the end if your hook may reach a non-zero
+#   exit path you want to ignore.
+#
+# NOTE: wb run replaces itself with wine via exec. If you need to observe the
+#   Wine process exit code, run wb with the --wait flag to enable post-exec hooks.
+# ---------------------------------------------------------------------------
+
+# Example: enable debug logging for this launch
+export WB_DEBUG=1
+
+wb_log_info "example pre-exec hook fired (phase=pre-exec, prefix=${WINEPREFIX:-<unset>})"

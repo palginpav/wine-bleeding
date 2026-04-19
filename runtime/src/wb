@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M4"
+WB_VERSION="0.1.0-M5"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -46,6 +46,14 @@ _wb_load_ppdb_lib() {
   source "${_WB_LIB_DIR}/wb-ppdb.sh"
 }
 
+_wb_load_run_lib() {
+  _wb_load_wineboot_lib
+  # shellcheck source=wb-lib/wb-env.sh
+  source "${_WB_LIB_DIR}/wb-env.sh"
+  # shellcheck source=wb-lib/wb-hooks.sh
+  source "${_WB_LIB_DIR}/wb-hooks.sh"
+}
+
 usage() {
   echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)" >&2
 }
@@ -59,6 +67,11 @@ cmd_help() {
 wb ${WB_VERSION} -- wine-bleeding runtime dispatcher
 
 Subcommands:
+  run <exe> [args...]       Launch an executable via Wine (full §5.2 call graph)
+                            [--prefix NAME]  use named prefix (default: WB_PREFIX or DEFAULT)
+                            [--runtime NAME] use named dist (default: WINE-BLEEDING alias)
+                            [--wait]         fork+wait instead of exec (enables post-exec hook)
+  exec <exe> [args...]      Launch via Wine, skipping reconcile (debug mode)
   config show               Print effective config as JSON (all 5 layers merged)
   config path [KEY]         Print which file supplied each config key (or only KEY)
   log tail [N]              Print last N JSON log entries (default 50)
@@ -84,7 +97,8 @@ Subcommands:
   help                      Show this help
   --version                 Print version string
 
-Future commands: run
+NOTE: wb run replaces itself with wine via exec. Bash trap handlers registered
+in hooks DO NOT fire after exec. Use --wait if you need the post-exec hook.
 EOF
 }
 
@@ -735,6 +749,362 @@ cmd_import_ppdb() {
   echo "imported to: ${output_path}"
 }
 
+# ---------------------------------------------------------------------------
+# cmd_run: wb run <exe> [--prefix NAME] [--runtime NAME] [--wait] [args...]
+# Implements the full §5.2 call graph.
+# ---------------------------------------------------------------------------
+cmd_run() {
+  local exe=""
+  local prefix_name=""
+  local runtime_name=""
+  local do_wait=0
+  local -a extra_args=()
+
+  # Parse arguments: --prefix, --runtime, --wait are options recognized anywhere
+  # before `--`; the first non-option positional is the exe; everything after
+  # the exe (or after `--`) is forwarded verbatim to wine.
+  local saw_exe=0
+  local past_separator=0
+  while [[ $# -gt 0 ]]; do
+    if [[ "${past_separator}" -eq 1 ]]; then
+      extra_args+=("$1")
+      shift
+      continue
+    fi
+    if [[ "${saw_exe}" -eq 1 ]]; then
+      # After we have the exe, still scan for wb-own flags; rest goes to wine.
+      case "$1" in
+        --prefix)
+          prefix_name="${2:-}"
+          shift 2
+          ;;
+        --prefix=*)
+          prefix_name="${1#--prefix=}"
+          shift
+          ;;
+        --runtime)
+          runtime_name="${2:-}"
+          shift 2
+          ;;
+        --runtime=*)
+          runtime_name="${1#--runtime=}"
+          shift
+          ;;
+        --wait)
+          do_wait=1
+          shift
+          ;;
+        --)
+          past_separator=1
+          shift
+          ;;
+        *)
+          extra_args+=("$1")
+          shift
+          ;;
+      esac
+    else
+      case "$1" in
+        --prefix)
+          prefix_name="${2:-}"
+          shift 2
+          ;;
+        --prefix=*)
+          prefix_name="${1#--prefix=}"
+          shift
+          ;;
+        --runtime)
+          runtime_name="${2:-}"
+          shift 2
+          ;;
+        --runtime=*)
+          runtime_name="${1#--runtime=}"
+          shift
+          ;;
+        --wait)
+          do_wait=1
+          shift
+          ;;
+        --)
+          past_separator=1
+          shift
+          ;;
+        -*)
+          echo "wb run: unknown option '$1'" >&2
+          exit 1
+          ;;
+        *)
+          exe="$1"
+          saw_exe=1
+          shift
+          ;;
+      esac
+    fi
+  done
+
+  if [[ -z "${exe}" ]]; then
+    echo "wb run: <exe> required" >&2
+    exit 1
+  fi
+
+  _wb_load_run_lib
+
+  # Step 1: Validate exe argument (path traversal check)
+  _wb_validate_path_arg "run" "${exe}"
+
+  # Step 2: Load config (5-layer config system)
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  wb_config_load
+
+  # Step 3: Resolve runtime (dist path)
+  local dist_path
+  if [[ -n "${runtime_name}" ]]; then
+    # Explicit --runtime NAME: look up in dist/
+    _wb_validate_path_arg "run --runtime" "${runtime_name}"
+    dist_path="${wb_home}/dist/${runtime_name}"
+    if [[ ! -d "${dist_path}" ]]; then
+      echo "wb run: runtime '${runtime_name}' not found in ${wb_home}/dist/" >&2
+      exit 1
+    fi
+  elif [[ -n "${WB_RUNTIME:-}" && "${WB_RUNTIME}" != "WINE-BLEEDING" ]]; then
+    dist_path="${wb_home}/dist/${WB_RUNTIME}"
+    if [[ ! -d "${dist_path}" ]]; then
+      echo "wb run: WB_RUNTIME '${WB_RUNTIME}' not found in ${wb_home}/dist/" >&2
+      exit 1
+    fi
+  else
+    # Resolve WINE-BLEEDING alias
+    dist_path="$(wb_dist_resolve_alias)"
+    if [[ -z "${dist_path}" || ! -d "${dist_path}" ]]; then
+      echo "wb run: WINE-BLEEDING alias not set or missing; run 'wb runtime activate <NAME>'" >&2
+      exit 1
+    fi
+  fi
+
+  # Step 4: Resolve prefix
+  local resolved_prefix_name
+  if [[ -n "${prefix_name}" ]]; then
+    resolved_prefix_name="${prefix_name}"
+  elif [[ -n "${WB_PREFIX:-}" ]]; then
+    resolved_prefix_name="${WB_PREFIX}"
+  else
+    resolved_prefix_name="DEFAULT"
+  fi
+
+  local prefix_path
+  prefix_path="$(wb_prefix_resolve "${resolved_prefix_name}")"
+
+  # Load per-prefix wb.conf if it exists (config layer 4)
+  local prefix_conf="${prefix_path}/wb.conf"
+  if [[ -f "${prefix_conf}" ]]; then
+    wb_config_load "${prefix_conf}"
+  fi
+
+  # Precondition check BEFORE lock acquisition so a failed run doesn't leave
+  # an empty prefix directory on disk (wb_acquire_lock would mkdir -p).
+  local prefix_class
+  prefix_class="$(wb_prefix_classify "${prefix_path}")"
+
+  if [[ "${prefix_class}" == "absent" ]]; then
+    echo "wb run: prefix '${resolved_prefix_name}' does not exist (path: ${prefix_path})" >&2
+    echo "wb run: run 'wb prefix init ${resolved_prefix_name}' first" >&2
+    exit 1
+  fi
+
+  if [[ "${prefix_class}" == "broken" ]]; then
+    echo "wb run: prefix '${resolved_prefix_name}' is classified as broken (path: ${prefix_path})" >&2
+    echo "wb run: run 'wb prefix init ${resolved_prefix_name}' to re-initialize" >&2
+    exit 1
+  fi
+
+  if [[ "${prefix_class}" == "pp-owned-untouched" ]]; then
+    echo "wb run: prefix '${resolved_prefix_name}' is PortProton-owned and has not been adopted" >&2
+    echo "wb run: run 'wb prefix adopt ${prefix_path}' first (coexist mode leaves PP state intact)" >&2
+    exit 1
+  fi
+
+  # Step 5: Acquire lock (released explicitly before exec; trap handles non-exec exits)
+  if ! wb_acquire_lock "${prefix_path}"; then
+    echo "wb run: could not acquire lock on ${prefix_path}" >&2
+    exit 1
+  fi
+
+  # Trap to release lock on non-exec exit paths
+  trap 'wb_release_lock "${prefix_path}" 2>/dev/null || true' EXIT
+
+  # SECURITY: pin the hooks directory at entry so subsequent hook phases cannot
+  # be redirected by an earlier hook that exports WB_HOME to a rogue path.
+  _WB_HOOKS_DIR_PIN="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/plugins/hooks.d"
+  export _WB_HOOKS_DIR_PIN
+
+  # Step 6: pre-reconcile hook
+  if ! wb_hooks_run "pre-reconcile"; then
+    echo "wb run: pre-reconcile hook failed; aborting" >&2
+    exit 1
+  fi
+
+  # Step 8: pre-materialize hook → reconcile if needed → post-materialize hook
+  if ! wb_hooks_run "pre-materialize"; then
+    echo "wb run: pre-materialize hook failed; aborting" >&2
+    exit 1
+  fi
+
+  # Cheap idempotent reconcile check: if .wb_components is drifted, re-deploy.
+  local drift_output
+  drift_output="$(wb_components_diff "${prefix_path}")"
+  if [[ -n "${drift_output}" ]]; then
+    wb_log_info "wb run: components drifted (${drift_output}); reconciling..."
+    wb_prefix_reconcile "${prefix_path}"
+  fi
+
+  if ! wb_hooks_run "post-materialize"; then
+    echo "wb run: post-materialize hook failed; aborting" >&2
+    exit 1
+  fi
+
+  # Step 9: pre-exec hook — failure aborts launch
+  if ! wb_hooks_run "pre-exec"; then
+    echo "wb run: pre-exec hook failed; aborting launch" >&2
+    exit 1
+  fi
+
+  # Step 10: Compose environment
+  local env_lines
+  env_lines="$(wb_env_compose "${prefix_path}" "${dist_path}")"
+
+  # Build env KEY=VALUE array for exec env
+  local -a env_pairs=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    env_pairs+=("${line}")
+  done <<< "${env_lines}"
+
+  # Extract WINELOADER from composed env for the exec call
+  local wineloader="${dist_path}/bin/wine"
+  local ev
+  for ev in "${env_pairs[@]}"; do
+    if [[ "${ev}" == WINELOADER=* ]]; then
+      wineloader="${ev#WINELOADER=}"
+      break
+    fi
+  done
+
+  # Step 11: Release lock BEFORE exec (M5-R3).
+  # The exec'd Wine process doesn't need our flock; releasing here ensures
+  # that the trap (which fires on exec-replace too) doesn't double-release.
+  wb_release_lock "${prefix_path}" 2>/dev/null || true
+  trap - EXIT
+
+  # Step 12 / 13: exec (or fork+wait if --wait was passed)
+  if [[ "${do_wait}" -eq 1 ]]; then
+    # Fork-and-wait: run Wine in a child process, capture exit, run post-exec hook.
+    local child_pid child_exit
+    (
+      exec env "${env_pairs[@]}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}"
+    ) &
+    child_pid=$!
+    wait "${child_pid}" && child_exit=0 || child_exit=$?
+    export WB_EXIT="${child_exit}"
+    wb_hooks_run "post-exec" || true
+    exit "${child_exit}"
+  else
+    # Direct exec: replaces this shell with Wine. No post-exec hook fires.
+    exec env "${env_pairs[@]}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# cmd_exec: wb exec <exe> [args...]
+# Skips reconcile entirely (debugging only). Loads config, resolves
+# runtime/prefix, composes env, execs wine. No hooks run.
+# ---------------------------------------------------------------------------
+cmd_exec() {
+  local exe=""
+  local -a extra_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "wb exec: unknown option '$1'" >&2
+        exit 1
+        ;;
+      *)
+        if [[ -z "${exe}" ]]; then
+          exe="$1"
+        else
+          extra_args+=("$1")
+        fi
+        shift
+        ;;
+    esac
+  done
+  # remaining args after --
+  while [[ $# -gt 0 ]]; do
+    extra_args+=("$1")
+    shift
+  done
+
+  if [[ -z "${exe}" ]]; then
+    echo "wb exec: <exe> required" >&2
+    exit 1
+  fi
+
+  _wb_load_run_lib
+
+  _wb_validate_path_arg "exec" "${exe}"
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  wb_config_load
+
+  # Resolve runtime
+  local dist_path
+  if [[ -n "${WB_RUNTIME:-}" && "${WB_RUNTIME}" != "WINE-BLEEDING" ]]; then
+    dist_path="${wb_home}/dist/${WB_RUNTIME}"
+  else
+    dist_path="$(wb_dist_resolve_alias)"
+  fi
+
+  if [[ -z "${dist_path}" || ! -d "${dist_path}" ]]; then
+    echo "wb exec: WINE-BLEEDING alias not set or missing; run 'wb runtime activate <NAME>'" >&2
+    exit 1
+  fi
+
+  # Resolve prefix
+  local resolved_prefix_name="${WB_PREFIX:-DEFAULT}"
+  local prefix_path
+  prefix_path="$(wb_prefix_resolve "${resolved_prefix_name}")"
+
+  wb_log_warn "wb exec: reconcile skipped (debugging only)"
+
+  local env_lines
+  env_lines="$(wb_env_compose "${prefix_path}" "${dist_path}")"
+
+  local -a env_pairs=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    env_pairs+=("${line}")
+  done <<< "${env_lines}"
+
+  local wineloader="${dist_path}/bin/wine"
+  local ev
+  for ev in "${env_pairs[@]}"; do
+    if [[ "${ev}" == WINELOADER=* ]]; then
+      wineloader="${ev#WINELOADER=}"
+      break
+    fi
+  done
+
+  exec env "${env_pairs[@]}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}"
+}
+
 cmd_log_tail() {
   local n="${1:-50}"
   [[ "${n}" =~ ^[0-9]+$ ]] || n=50
@@ -756,6 +1126,14 @@ main() {
       ;;
     help)
       cmd_help
+      ;;
+    run)
+      shift
+      cmd_run "$@"
+      ;;
+    exec)
+      shift
+      cmd_exec "$@"
       ;;
     config)
       local action="${2:-}"

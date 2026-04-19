@@ -29,6 +29,8 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-reg.sh \
   $(SRC_DIR)/wb-lib/wb-wineboot.sh \
   $(SRC_DIR)/wb-lib/wb-ppdb.sh \
+  $(SRC_DIR)/wb-lib/wb-env.sh \
+  $(SRC_DIR)/wb-lib/wb-hooks.sh \
   $(RUNTIME_DIR)install.sh
 
 .PHONY: test lint install schema-check

@@ -7,7 +7,20 @@ if [[ -z "${WINEPREFIX:-}" ]]; then
 fi
 
 _log() {
+  mkdir -p "${WINEPREFIX}" 2>/dev/null || true
   echo "[fake-wine] $*" >> "${WINEPREFIX}/.fake_wine.log"
+}
+
+_log_env() {
+  # Log every WINE* and WB_* and DXVK_* env var for exec-line assertions
+  local var val
+  while IFS='=' read -r var val; do
+    case "${var}" in
+      WINE*|WB_*|DXVK_*|VKD3D_*|STAGING_*)
+        echo "env:${var}=${val}" >> "${WINEPREFIX}/.fake_wine.log"
+        ;;
+    esac
+  done < <(env | sort)
 }
 
 case "${1:-}" in
@@ -49,7 +62,10 @@ REGEOF
     esac
     ;;
   *)
-    _log "wine ${*}: unrecognised, no-op"
+    # Any other invocation: log the full argv and env for test assertions
+    mkdir -p "${WINEPREFIX}" 2>/dev/null || true
+    echo "exec:$*" >> "${WINEPREFIX}/.fake_wine.log"
+    _log_env
     ;;
 esac
 
