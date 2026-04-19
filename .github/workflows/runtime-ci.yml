@@ -33,7 +33,7 @@ jobs:
       image: bash:${{ matrix.bash-version }}
     steps:
       - name: Install runtime deps (before checkout so git is available)
-        run: apk add --no-cache bash ncurses jq grep coreutils findutils tar gzip sed python3 wget ca-certificates
+        run: apk add --no-cache bash ncurses jq grep coreutils findutils tar gzip sed python3 wget ca-certificates make git flock
 
       - uses: actions/checkout@v4
 
