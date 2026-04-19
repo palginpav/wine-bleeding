@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="1.0.0-MVP"
+WB_VERSION="1.1.0-dev"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -52,8 +52,16 @@ _wb_load_pp_lib() {
   source "${_WB_LIB_DIR}/wb-pp-installer.sh"
 }
 
+_wb_load_multibuild_lib() {
+  _wb_load_wineboot_lib
+  # shellcheck source=wb-lib/wb-multibuild.sh
+  source "${_WB_LIB_DIR}/wb-multibuild.sh"
+}
+
 _wb_load_run_lib() {
   _wb_load_wineboot_lib
+  # shellcheck source=wb-lib/wb-multibuild.sh
+  source "${_WB_LIB_DIR}/wb-multibuild.sh"
   # shellcheck source=wb-lib/wb-env.sh
   source "${_WB_LIB_DIR}/wb-env.sh"
   # shellcheck source=wb-lib/wb-hooks.sh
@@ -82,12 +90,16 @@ Subcommands:
   run <exe> [args...]       Launch an executable via Wine (full §5.2 call graph)
                             [--prefix NAME]  use named prefix (default: WB_PREFIX or DEFAULT)
                             [--runtime NAME] use named dist (default: WINE-BLEEDING alias)
+                            [--yes-wineboot] consent to wineboot on major-version switch
                             [--wait]         fork+wait instead of exec (enables post-exec hook)
   exec <exe> [args...]      Launch via Wine, skipping reconcile (debug mode)
   config show               Print effective config as JSON (all 5 layers merged)
   config path [KEY]         Print which file supplied each config key (or only KEY)
+  config enable-multibuild  Enable multi-build mode (sets WB_MULTIBUILD=1)
+  config disable-multibuild Disable multi-build mode (unsets WB_MULTIBUILD)
   log tail [N]              Print last N JSON log entries (default 50)
   runtime list              List installed Wine dists (name, active, size, build date)
+                            [--multi] show MULTI column (whether dist is non-aliased)
   runtime info <NAME>       Print .wb_dist_meta JSON for a dist
   runtime install <TARBALL> Extract tarball into dist/, write manifest
                             [--activate] also point WINE-BLEEDING alias at it
@@ -95,6 +107,7 @@ Subcommands:
   runtime prune [--keep N]  Remove oldest dists beyond N most recent (default 3)
                             [--yes] skip confirmation prompt
   prefix list               List known prefixes with classification and last-adopted time
+  prefix history <NAME>     Print runtime-switch history for a prefix (M9 multi-build)
   prefix info <NAME>        Print classification and .wb_runtime JSON for a prefix
   prefix adopt <PATH>       Adopt an existing (PP) prefix in coexist mode
                             [--take-over] claim full ownership (rewrites .wine_ver)
@@ -144,15 +157,112 @@ cmd_config_path() {
   wb_config_path_for "${key}"
 }
 
-cmd_runtime_list() {
-  _wb_load_dist_lib
-  local dist_dir
-  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
-  local alias_target
-  alias_target="$(wb_dist_resolve_alias)"
+# ---------------------------------------------------------------------------
+# cmd_config_enable_multibuild / cmd_config_disable_multibuild
+# Writes/updates WB_MULTIBUILD in $WB_HOME/etc/runtime.conf.
+# ---------------------------------------------------------------------------
+_wb_conf_set_key() {
+  local conf_file="$1"
+  local key="$2"
+  local value="$3"
 
-  printf '%-28s %-6s %-8s %s\n' "NAME" "ACTIVE" "SIZE" "BUILD_DATE"
+  mkdir -p "$(dirname "${conf_file}")"
+
+  if [[ ! -f "${conf_file}" ]]; then
+    printf '%s=%s\n' "${key}" "${value}" > "${conf_file}"
+    return 0
+  fi
+
+  # Update if key exists, else append
+  if grep -qP "^${key}=" "${conf_file}" 2>/dev/null; then
+    # Use a temp file to avoid in-place sed portability issues
+    local tmp
+    tmp="$(mktemp "$(dirname "${conf_file}")/.wb_conf_XXXXXX")"
+    grep -vP "^${key}=" "${conf_file}" > "${tmp}" || true
+    printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+    mv -T "${tmp}" "${conf_file}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> "${conf_file}"
+  fi
+}
+
+_wb_conf_unset_key() {
+  local conf_file="$1"
+  local key="$2"
+
+  [[ -f "${conf_file}" ]] || return 0
+
+  local tmp
+  tmp="$(mktemp "$(dirname "${conf_file}")/.wb_conf_XXXXXX")"
+  grep -vP "^${key}=" "${conf_file}" > "${tmp}" || true
+  mv -T "${tmp}" "${conf_file}"
+}
+
+cmd_config_enable_multibuild() {
+  _wb_load_libs
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local conf="${wb_home}/etc/runtime.conf"
+  _wb_conf_set_key "${conf}" "WB_MULTIBUILD" "1"
+  echo "multi-build mode enabled; 'wb runtime list --multi' now shows all dists and 'wb run --runtime NAME' is available"
+}
+
+cmd_config_disable_multibuild() {
+  _wb_load_libs
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local conf="${wb_home}/etc/runtime.conf"
+  _wb_conf_unset_key "${conf}" "WB_MULTIBUILD"
+  echo "multi-build mode disabled"
+}
+
+cmd_runtime_list() {
+  local show_multi=0
+  local -a leftover_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --multi) show_multi=1 ;;
+      *) leftover_args+=("$1") ;;
+    esac
+    shift
+  done
+
+  _wb_load_dist_lib
+  wb_config_load
+
+  # --multi flag OR WB_MULTIBUILD=1 enables the MULTI column
+  if [[ "${WB_MULTIBUILD:-0}" == "1" ]]; then
+    show_multi=1
+  fi
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local dist_dir="${wb_home}/dist"
+  local alias_target
+  alias_target="$(wb_dist_resolve_alias 2>/dev/null || true)"
+
+  if [[ "${show_multi}" -eq 1 ]]; then
+    printf '%-28s %-6s %-6s %-8s %s\n' "NAME" "ACTIVE" "MULTI" "SIZE" "BUILD_DATE"
+  else
+    printf '%-28s %-6s %-8s %s\n' "NAME" "ACTIVE" "SIZE" "BUILD_DATE"
+  fi
+
   local name entry active size build_date
+  # In --multi mode, also list alias-only dirs (symlinks) that are non-native dirs
+  _wb_runtime_list_all() {
+    # Emit both real dirs and the alias if --multi
+    if [[ "${show_multi}" -eq 1 ]]; then
+      local e n
+      for e in "${dist_dir}"/*/; do
+        [[ -d "${e}" ]] || continue
+        n="$(basename "${e}")"
+        echo "${n}"
+      done | sort -u
+    else
+      wb_dist_list
+    fi
+  }
+
   while IFS= read -r name; do
     entry="${dist_dir}/${name}"
     if [[ "${entry}" == "${alias_target}" ]]; then
@@ -165,8 +275,17 @@ cmd_runtime_list() {
     if [[ -z "${build_date}" ]]; then
       build_date="$(stat -c '%y' "${entry}" 2>/dev/null | cut -d' ' -f1 || echo "?")"
     fi
-    printf '%-28s %-6s %-8s %s\n' "${name}" "${active}" "${size}" "${build_date}"
-  done < <(wb_dist_list)
+    if [[ "${show_multi}" -eq 1 ]]; then
+      # MULTI column: "y" if this is a non-aliased real dist dir
+      local multi_col="n"
+      if [[ ! -L "${dist_dir}/${name}" ]]; then
+        multi_col="y"
+      fi
+      printf '%-28s %-6s %-6s %-8s %s\n' "${name}" "${active}" "${multi_col}" "${size}" "${build_date}"
+    else
+      printf '%-28s %-6s %-8s %s\n' "${name}" "${active}" "${size}" "${build_date}"
+    fi
+  done < <(_wb_runtime_list_all)
 }
 
 cmd_runtime_info() {
@@ -759,6 +878,31 @@ cmd_prefix_reconcile() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# cmd_prefix_history: wb prefix history <NAME>
+# ---------------------------------------------------------------------------
+cmd_prefix_history() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix history: NAME required" >&2
+    exit 1
+  fi
+  _wb_validate_path_arg "prefix history" "${prefix_name}"
+  _wb_load_multibuild_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  wb_prefix_history_print "${prefix_path}"
+}
+
 cmd_pp_install() {
   _wb_load_pp_lib
   local pp_root
@@ -1182,11 +1326,12 @@ cmd_run() {
   local prefix_name=""
   local runtime_name=""
   local do_wait=0
+  local yes_wineboot=0
   local -a extra_args=()
 
-  # Parse arguments: --prefix, --runtime, --wait are options recognized anywhere
-  # before `--`; the first non-option positional is the exe; everything after
-  # the exe (or after `--`) is forwarded verbatim to wine.
+  # Parse arguments: --prefix, --runtime, --wait, --yes-wineboot are options
+  # recognized anywhere before `--`; the first non-option positional is the exe;
+  # everything after the exe (or after `--`) is forwarded verbatim to wine.
   local saw_exe=0
   local past_separator=0
   while [[ $# -gt 0 ]]; do
@@ -1212,6 +1357,10 @@ cmd_run() {
           ;;
         --runtime=*)
           runtime_name="${1#--runtime=}"
+          shift
+          ;;
+        --yes-wineboot)
+          yes_wineboot=1
           shift
           ;;
         --wait)
@@ -1243,6 +1392,10 @@ cmd_run() {
           ;;
         --runtime=*)
           runtime_name="${1#--runtime=}"
+          shift
+          ;;
+        --yes-wineboot)
+          yes_wineboot=1
           shift
           ;;
         --wait)
@@ -1283,9 +1436,23 @@ cmd_run() {
 
   # Step 3: Resolve runtime (dist path)
   local dist_path
+
+  # M9: if --runtime NAME given, check multi-build gating first
   if [[ -n "${runtime_name}" ]]; then
-    # Explicit --runtime NAME: look up in dist/
     _wb_validate_path_arg "run --runtime" "${runtime_name}"
+    # Check if multi-build is enabled; if not, and the requested runtime differs
+    # from the alias, refuse.
+    if ! wb_multibuild_enabled; then
+      # Resolve the WINE-BLEEDING alias target name for comparison
+      local alias_real
+      alias_real="$(readlink -f "${wb_home}/dist/WINE-BLEEDING" 2>/dev/null || true)"
+      local alias_name
+      alias_name="$(basename "${alias_real}" 2>/dev/null || true)"
+      if [[ "${runtime_name}" != "WINE-BLEEDING" && "${runtime_name}" != "${alias_name}" ]]; then
+        echo "wb run: multi-build not enabled; run 'wb config enable-multibuild' first" >&2
+        exit 1
+      fi
+    fi
     dist_path="${wb_home}/dist/${runtime_name}"
     if [[ ! -d "${dist_path}" ]]; then
       echo "wb run: runtime '${runtime_name}' not found in ${wb_home}/dist/" >&2
@@ -1366,6 +1533,26 @@ cmd_run() {
   if ! wb_hooks_run "pre-reconcile"; then
     echo "wb run: pre-reconcile hook failed; aborting" >&2
     exit 1
+  fi
+
+  # M9: Multi-build runtime switch (BEFORE component reconcile).
+  # Only fires when multi-build is enabled AND --runtime was explicitly requested.
+  if wb_multibuild_enabled && [[ -n "${runtime_name}" ]]; then
+    # Scope the consent flag to just this call — do NOT leak WB_YES_WINEBOOT
+    # into the wine child's environment (L4 fix).
+    local switch_rc=0
+    if [[ "${yes_wineboot}" -eq 1 ]]; then
+      WB_YES_WINEBOOT=1 wb_multibuild_reconcile_switch "${prefix_path}" "${dist_path}" || switch_rc=$?
+    else
+      wb_multibuild_reconcile_switch "${prefix_path}" "${dist_path}" || switch_rc=$?
+    fi
+    if [[ "${switch_rc}" -eq 42 ]]; then
+      echo "wb run: re-run with --yes-wineboot to consent to wineboot, or set WB_AUTO_WINEBOOT_ON_MAJOR_CHANGE=1" >&2
+      exit 42
+    elif [[ "${switch_rc}" -ne 0 ]]; then
+      echo "wb run: multi-build runtime switch failed (exit ${switch_rc})" >&2
+      exit 1
+    fi
   fi
 
   # Step 8: pre-materialize hook → reconcile if needed → post-materialize hook
@@ -1568,9 +1755,15 @@ main() {
         path)
           cmd_config_path "${3:-}"
           ;;
+        enable-multibuild)
+          cmd_config_enable_multibuild
+          ;;
+        disable-multibuild)
+          cmd_config_disable_multibuild
+          ;;
         *)
           echo "wb config: unknown action '${action}'" >&2
-          echo "Valid actions: show, path" >&2
+          echo "Valid actions: show, path, enable-multibuild, disable-multibuild" >&2
           exit 1
           ;;
       esac
@@ -1592,7 +1785,8 @@ main() {
       local action="${2:-}"
       case "${action}" in
         list)
-          cmd_runtime_list
+          shift 2
+          cmd_runtime_list "$@"
           ;;
         info)
           cmd_runtime_info "${3:-}"
@@ -1641,6 +1835,9 @@ main() {
         reconcile)
           cmd_prefix_reconcile "${3:-}"
           ;;
+        history)
+          cmd_prefix_history "${3:-}"
+          ;;
         snapshot)
           cmd_prefix_snapshot "${3:-}"
           ;;
@@ -1661,7 +1858,7 @@ main() {
           ;;
         *)
           echo "wb prefix: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, adopt, import, init, components, reconcile, snapshot, snapshots, repair, migrate, export" >&2
+          echo "Valid actions: list, info, adopt, import, init, components, reconcile, history, snapshot, snapshots, repair, migrate, export" >&2
           exit 1
           ;;
       esac

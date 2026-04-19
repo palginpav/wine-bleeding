@@ -1,5 +1,36 @@
 # wine-bleeding Runtime Layer Changelog
 
+## [Unreleased] — v1.1.0-dev
+
+### M9 — Multi-build / distro-switching (opt-in)
+
+- **`wb config enable-multibuild`** / **`wb config disable-multibuild`** — flip
+  `WB_MULTIBUILD=1` in `$WB_HOME/etc/runtime.conf`.
+- **`wb runtime list --multi`** — extra `MULTI` column listing all real (non-alias)
+  dist directories.
+- **`wb run --runtime NAME`** — now gated by multi-build check; refuses unless
+  multi-build is enabled (or the requested runtime matches the active alias).
+- **`wb run --yes-wineboot`** — new flag to consent to `wineboot -u` on a
+  major-version switch.
+- **`wb_multibuild_reconcile_switch`** — implements the W3 §11.2 decision tree:
+  same-major switch reconciles components only (no wineboot); different-major switch
+  requires `--yes-wineboot` or `WB_AUTO_WINEBOOT_ON_MAJOR_CHANGE=1`; exits 42 on
+  missing consent.
+- **`.wb_runtime.history[]`** and **`.wb_runtime.current_runtime`** — new optional
+  fields tracking every runtime switch with UTC timestamps.
+- **`wb prefix history <NAME>`** — prints runtime-switch history table.
+- **Schema extended** — `wb_runtime.schema.json` gains optional `history[]` and
+  `current_runtime` fields; existing files without these fields continue to validate.
+- **`wb_prefix_adopt` preserves history** — re-adopting a prefix no longer clobbers
+  existing `history[]` or `current_runtime`.
+- **20 new bats tests** in `runtime/tests/20_multibuild.bats`.
+
+### Breaking changes
+
+- `WB_VERSION` bumped to `1.1.0-dev`.
+
+---
+
 ## v1.0.0-MVP (2026-04-19)
 
 ### MVP Release

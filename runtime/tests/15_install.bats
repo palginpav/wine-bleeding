@@ -41,14 +41,14 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. wb --version returns 1.0.0-MVP after install
+# 2. wb --version returns 1.1.0-dev after install
 # ---------------------------------------------------------------------------
-@test "install: wb --version returns 1.0.0-MVP" {
+@test "install: wb --version returns 1.1.0-dev" {
   run bash "${INSTALL_SH}"
   [ "${status}" -eq 0 ]
   run "${WB_HOME}/bin/wb" --version
   [ "${status}" -eq 0 ]
-  [ "${output}" = "wb 1.0.0-MVP" ]
+  [ "${output}" = "wb 1.1.0-dev" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ teardown() {
   [ -f "${custom_path}/bin/wb" ]
   run "${custom_path}/bin/wb" --version
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"1.0.0-MVP"* ]]
+  [[ "${output}" == *"1.1.0-dev"* ]]
 }
 
 # ---------------------------------------------------------------------------

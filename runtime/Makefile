@@ -33,6 +33,7 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-hooks.sh \
   $(SRC_DIR)/wb-lib/wb-pp-installer.sh \
   $(SRC_DIR)/wb-lib/wb-snapshot.sh \
+  $(SRC_DIR)/wb-lib/wb-multibuild.sh \
   $(SRC_DIR)/hooks/reapply.sh \
   $(RUNTIME_DIR)install.sh \
   $(RUNTIME_DIR)publish-release-integration.sh

@@ -413,14 +413,72 @@ The tarball includes env vars, version info, runtime/prefix listings, log tail,
 and per-prefix JSON sentinels. It NEVER includes `drive_c/` contents, `user.reg`,
 `system.reg`, `user.conf`, or auth tokens.
 
+## Multi-build / distro-switching (post-MVP / advanced)
+
+**Status: available as of v1.1.0-dev (M9). Opt-in only.**
+
+This feature lets advanced users switch between multiple wb-managed Wine dists on a
+single prefix WITHOUT the destructive `wineboot -r` that PortProton fires on every
+version-string mismatch.
+
+### Enabling multi-build
+
+```bash
+wb config enable-multibuild
+```
+
+This writes `WB_MULTIBUILD=1` into `$WB_HOME/etc/runtime.conf`.
+
+### Listing dists with multi-build view
+
+```bash
+wb runtime list --multi
+```
+
+Shows an extra `MULTI` column indicating which dists are real (non-alias) directories.
+
+### Switching dists per-launch
+
+```bash
+wb run notepad.exe --prefix MYPFX --runtime WINE-BLEEDING-v2
+```
+
+If the new dist has the **same major Wine version** as the current one, only components
+(DXVK, VKD3D, etc.) are redeployed — no wineboot fires.
+
+If the new dist has a **different major version**, consent is required:
+
+```bash
+# Either pass --yes-wineboot:
+wb run notepad.exe --prefix MYPFX --runtime WINE-BLEEDING-v2 --yes-wineboot
+
+# Or set this env/config flag for automatic consent:
+WB_AUTO_WINEBOOT_ON_MAJOR_CHANGE=1 wb run ...
+```
+
+Without consent, `wb run` exits with code **42** so callers can detect and prompt the user.
+
+### Viewing runtime-switch history
+
+```bash
+wb prefix history MYPFX
+```
+
+Prints a table of `FROM_UTC`, `TO_UTC`, and `RUNTIME` for every switch. The active
+entry shows `TO_UTC=active`.
+
+### Safety guarantees
+
+- wb fires `wineboot -u` (update mode), NOT `-r` (which wipes `drive_c/windows/`).
+- History is written atomically via `wb_json_write_atomic`.
+- Re-adopting a prefix (`wb prefix adopt`) preserves existing `history[]` and
+  `current_runtime` fields — they are never clobbered.
+
 ## Post-MVP scope
 
-The following features are planned for post-MVP milestones and are NOT included
-in v1.0.0-MVP:
+The following features are planned for later post-M9 milestones:
 
 - **GUI launcher** (M12) — graphical front-end for wb
-- **Multi-build distro-switching** (M9) — switch between Wine builds per prefix
 - **Pressure-vessel / container isolation** (M11, opt-in)
 - **Go CLI rewrite** (M10) — performance-focused rewrite of the bash dispatcher
-- **Automatic snapshot on every `wb run`** — the function is callable; auto-integration
-  is a follow-up polish item (do NOT modify `cmd_run` until M9 scope is defined)
+- **External runtime registry** (M13) — `plugins/runtimes.d/*.json` for third-party dists

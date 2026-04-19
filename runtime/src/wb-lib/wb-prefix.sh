@@ -173,6 +173,9 @@ wb_prefix_adopt() {
   local wineboot_generation=0
   local sentinel="${path}/.wb_runtime"
 
+  # M9: history[] and current_runtime fields preserved across re-adopt
+  local existing_history="null"
+  local existing_current_runtime=""
   if [[ -f "${sentinel}" ]] && jq empty "${sentinel}" 2>/dev/null; then
     local existing_init existing_launch existing_mono existing_gen
     existing_init="$(jq -r '.initialized_utc // empty' "${sentinel}" 2>/dev/null || true)"
@@ -187,6 +190,13 @@ wb_prefix_adopt() {
     if [[ -n "${existing_mono}" ]]; then
       mono_version="\"${existing_mono}\""
     fi
+    # M9: preserve history[] and current_runtime if present — do NOT clobber on re-adopt
+    local raw_history
+    raw_history="$(jq -c '.history // null' "${sentinel}" 2>/dev/null || echo "null")"
+    if [[ "${raw_history}" != "null" ]]; then
+      existing_history="${raw_history}"
+    fi
+    existing_current_runtime="$(jq -r '.current_runtime // empty' "${sentinel}" 2>/dev/null || true)"
   fi
 
   local pp_coexist_val="true"
@@ -197,6 +207,10 @@ wb_prefix_adopt() {
   [[ -n "${runtime_target}" ]] && runtime_target_json="\"${runtime_target}\""
   local runtime_sha_json="null"
   [[ -n "${runtime_target_sha256}" ]] && runtime_sha_json="\"${runtime_target_sha256}\""
+
+  # M9: Build optional history/current_runtime args for jq
+  local history_arg="${existing_history}"
+  local current_runtime_arg="${existing_current_runtime}"
 
   local json
   json="$(jq -cn \
@@ -212,6 +226,8 @@ wb_prefix_adopt() {
     --arg owner "wb-runtime" \
     --argjson pp_coexist "${pp_coexist_val}" \
     --arg last_adopted_utc "${now_utc}" \
+    --argjson history "${history_arg}" \
+    --arg current_runtime "${current_runtime_arg}" \
     '{
       schema: $schema,
       prefix_name: $prefix_name,
@@ -225,7 +241,11 @@ wb_prefix_adopt() {
       owner: $owner,
       pp_coexist: $pp_coexist,
       last_adopted_utc: $last_adopted_utc
-    }')"
+    }
+    # M9: only include optional fields if non-empty / non-null
+    | if $history != null then . + {history: $history} else . end
+    | if ($current_runtime | length) > 0 then . + {current_runtime: $current_runtime} else . end
+    ')"
 
   wb_prefix_write_sentinel "${path}" "${json}"
 
