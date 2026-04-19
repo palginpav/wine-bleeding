@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -z "${WINEPREFIX:-}" ]]; then
+  echo "fake-wine: WINEPREFIX not set" >&2
+  exit 1
+fi
+
+_log() {
+  echo "[fake-wine] $*" >> "${WINEPREFIX}/.fake_wine.log"
+}
+
+case "${1:-}" in
+  wineboot)
+    shift
+    case "${1:-}" in
+      --init)
+        mkdir -p \
+          "${WINEPREFIX}/drive_c/windows/system32" \
+          "${WINEPREFIX}/drive_c/windows/syswow64" \
+          "${WINEPREFIX}/drive_c/users/$(id -un)/AppData/Roaming"
+        for dll in ntdll kernel32 user32 gdi32 advapi32; do
+          touch "${WINEPREFIX}/drive_c/windows/system32/${dll}.dll"
+          touch "${WINEPREFIX}/drive_c/windows/syswow64/${dll}.dll"
+        done
+        cat > "${WINEPREFIX}/system.reg" <<'REGEOF'
+WINE REGISTRY Version 2
+;; Stub system.reg created by fake-wine fixture.
+
+[System\\CurrentControlSet\\Control]
+"CurrentControlSet"="CurrentControlSet001"
+
+REGEOF
+        cat > "${WINEPREFIX}/user.reg" <<'REGEOF'
+WINE REGISTRY Version 2
+;; Stub user.reg created by fake-wine fixture.
+
+[Software\\Wine]
+
+REGEOF
+        _log "wineboot --init: created prefix tree at ${WINEPREFIX}"
+        ;;
+      -u)
+        _log "wineboot -u: no-op"
+        ;;
+      *)
+        _log "wineboot ${*}: unrecognised args, no-op"
+        ;;
+    esac
+    ;;
+  *)
+    _log "wine ${*}: unrecognised, no-op"
+    ;;
+esac
+
+exit 0

@@ -7,10 +7,12 @@ SRC_DIR     := $(RUNTIME_DIR)src
 TESTS_DIR   := $(RUNTIME_DIR)tests
 VENDOR_BATS := $(TESTS_DIR)/vendor/bats-core/bin/bats
 
-SCHEMA_FILE       := $(RUNTIME_DIR)share/schemas/wb_dist_meta.schema.json
-SCHEMA_FILE_PFX   := $(RUNTIME_DIR)share/schemas/wb_runtime.schema.json
-FIXTURE_DIST      := $(TESTS_DIR)/fixtures/fake-dist
-FIXTURE_PP_PREFIX := $(TESTS_DIR)/fixtures/fake-pp-prefix
+SCHEMA_FILE           := $(RUNTIME_DIR)share/schemas/wb_dist_meta.schema.json
+SCHEMA_FILE_PFX       := $(RUNTIME_DIR)share/schemas/wb_runtime.schema.json
+SCHEMA_FILE_COMP      := $(RUNTIME_DIR)share/schemas/wb_components.schema.json
+SCHEMA_FILE_PPDB      := $(RUNTIME_DIR)share/schemas/wb_ppdb.schema.json
+FIXTURE_DIST          := $(TESTS_DIR)/fixtures/fake-dist
+FIXTURE_PP_PREFIX     := $(TESTS_DIR)/fixtures/fake-pp-prefix
 
 SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb \
@@ -23,6 +25,10 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-lock.sh \
   $(SRC_DIR)/wb-lib/wb-dist.sh \
   $(SRC_DIR)/wb-lib/wb-prefix.sh \
+  $(SRC_DIR)/wb-lib/wb-components.sh \
+  $(SRC_DIR)/wb-lib/wb-reg.sh \
+  $(SRC_DIR)/wb-lib/wb-wineboot.sh \
+  $(SRC_DIR)/wb-lib/wb-ppdb.sh \
   $(RUNTIME_DIR)install.sh
 
 .PHONY: test lint install schema-check
@@ -79,7 +85,37 @@ schema-check:
 	    wb_prefix_adopt '$${tmp_pfx}' \
 	  "; \
 	  check-jsonschema --schemafile "$(SCHEMA_FILE_PFX)" "$${tmp_pfx}/.wb_runtime"; \
-	  rc2=$$?; rm -rf "$${tmp_pfx}" "$${tmp_home2}"; exit $$rc2; \
+	  rc2=$$?; rm -rf "$${tmp_pfx}" "$${tmp_home2}"; \
+	  echo "Validating wb_components.schema.json against a minimal components fixture..."; \
+	  tmp_comp=$$(mktemp -d); \
+	  cat > "$${tmp_comp}/test_manifest.json" <<COMPEOF \
+{ \
+  "schema": 1, \
+  "prefix_path": "/tmp/pfx", \
+  "dist_target": "/tmp/dist", \
+  "dist_manifest_hash": "", \
+  "deployed_utc": "2026-04-18T12:00:00Z", \
+  "components": { \
+    "dxvk":  {"version": "2.7.1-509", "dll_count": 4, "dll_paths": ["drive_c/windows/system32/d3d11.dll"]}, \
+    "vkd3d": {"version": "1.14",       "dll_count": 2, "dll_paths": []}, \
+    "nvapi": {"version": "0.7.1",      "dll_count": 2, "dll_paths": []}, \
+    "mono":  {"version": "wine-mono-10.1.0", "dll_count": 4, "dll_paths": []}, \
+    "icu":   {"version": "68",         "dll_count": 2, "dll_paths": []} \
+  } \
+} \
+COMPEOF \
+	  check-jsonschema --schemafile "$(SCHEMA_FILE_COMP)" "$${tmp_comp}/test_manifest.json"; \
+	  rc3=$$?; rm -rf "$${tmp_comp}"; \
+	  if [[ -f "$(SCHEMA_FILE_PPDB)" ]]; then \
+	    echo "Validating wb_ppdb.schema.json against fixture..."; \
+	    tmp_ppdb=$$(mktemp -d); \
+	    cp "$(TESTS_DIR)/fixtures/ppdb/valid.wb.ppdb" "$${tmp_ppdb}/valid.wb.ppdb"; \
+	    check-jsonschema --schemafile "$(SCHEMA_FILE_PPDB)" "$${tmp_ppdb}/valid.wb.ppdb"; \
+	    rc4=$$?; rm -rf "$${tmp_ppdb}"; \
+	  else \
+	    rc4=0; \
+	  fi; \
+	  exit $$rc2 || exit $$rc3 || exit $$rc4; \
 	fi
 
 install:

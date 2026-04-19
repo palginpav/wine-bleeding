@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "runtime": "WINE-BLEEDING",
+  "env": {
+    "WB_DXVK": "1"
+  },
+  "pre_exec": [],
+  "post_exec": []
+}

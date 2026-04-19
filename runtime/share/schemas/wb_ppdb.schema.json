@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_ppdb.schema.json",
+  "title": "wb_ppdb",
+  "description": "Per-prefix/per-game profile database file (.wb.ppdb) used by wb-runtime.",
+  "type": "object",
+  "required": ["schema", "runtime"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version; must be exactly 1 for this revision."
+    },
+    "runtime": {
+      "type": "string",
+      "description": "Wine runtime alias (e.g. WINE-BLEEDING, PROTON_LG)."
+    },
+    "prefix": {
+      "type": "string",
+      "description": "Prefix name override; optional — wb uses its own prefix resolution if absent."
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables injected at launch time.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "pre_exec": {
+      "type": "array",
+      "description": "Shell snippets executed before Wine is invoked (M5/wb-hooks.sh).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "post_exec": {
+      "type": "array",
+      "description": "Shell snippets executed after Wine exits (M5/wb-hooks.sh).",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

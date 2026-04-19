@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M3"
+WB_VERSION="0.1.0-M4"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -28,6 +28,22 @@ _wb_load_prefix_lib() {
   _wb_load_dist_lib
   # shellcheck source=wb-lib/wb-prefix.sh
   source "${_WB_LIB_DIR}/wb-prefix.sh"
+}
+
+_wb_load_wineboot_lib() {
+  _wb_load_prefix_lib
+  # shellcheck source=wb-lib/wb-components.sh
+  source "${_WB_LIB_DIR}/wb-components.sh"
+  # shellcheck source=wb-lib/wb-reg.sh
+  source "${_WB_LIB_DIR}/wb-reg.sh"
+  # shellcheck source=wb-lib/wb-wineboot.sh
+  source "${_WB_LIB_DIR}/wb-wineboot.sh"
+}
+
+_wb_load_ppdb_lib() {
+  _wb_load_libs
+  # shellcheck source=wb-lib/wb-ppdb.sh
+  source "${_WB_LIB_DIR}/wb-ppdb.sh"
 }
 
 usage() {
@@ -58,10 +74,17 @@ Subcommands:
   prefix adopt <PATH>       Adopt an existing (PP) prefix in coexist mode
                             [--take-over] claim full ownership (rewrites .wine_ver)
   prefix import <PATH>      Adopt a prefix and symlink it into WB_HOME/prefixes/
+  prefix init [NAME]        Create and initialise a new Wine prefix
+                            [--runtime NAME] use dist by alias name
+                            [--dist PATH]    use dist by absolute path
+  prefix components [NAME]  Print .wb_components JSON for a prefix
+  prefix reconcile [NAME]   Re-deploy components idempotently (no wineboot)
+  import-ppdb <INPUT> [OUT] Convert a legacy bash .ppdb to JSON .wb.ppdb
+                            OUT defaults to INPUT.wb.ppdb
   help                      Show this help
   --version                 Print version string
 
-Future commands: prefix create, run
+Future commands: run
 EOF
 }
 
@@ -546,6 +569,172 @@ cmd_prefix_import() {
   echo "imported as ${basename}"
 }
 
+cmd_prefix_init() {
+  local prefix_name="" dist_path="" runtime_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --runtime)
+        runtime_name="${2:-}"
+        shift 2
+        ;;
+      --runtime=*)
+        runtime_name="${1#--runtime=}"
+        shift
+        ;;
+      --dist)
+        dist_path="${2:-}"
+        shift 2
+        ;;
+      --dist=*)
+        dist_path="${1#--dist=}"
+        shift
+        ;;
+      *)
+        prefix_name="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "${prefix_name}" ]]; then
+    prefix_name="${WB_PREFIX:-}"
+  fi
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix init: NAME required (or set WB_PREFIX)" >&2
+    exit 1
+  fi
+
+  _wb_validate_path_arg "prefix init" "${prefix_name}"
+  if [[ -n "${dist_path}" ]]; then
+    _wb_validate_path_arg "prefix init --dist" "${dist_path}"
+  fi
+  if [[ -n "${runtime_name}" ]]; then
+    _wb_validate_path_arg "prefix init --runtime" "${runtime_name}"
+  fi
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  if [[ -z "${dist_path}" ]]; then
+    if [[ -n "${runtime_name}" ]]; then
+      _wb_validate_path_arg "prefix init --runtime" "${runtime_name}"
+      dist_path="${wb_home}/dist/${runtime_name}"
+    else
+      dist_path="${wb_home}/dist/WINE-BLEEDING"
+    fi
+  fi
+
+  _wb_load_wineboot_lib
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  mkdir -p "${wb_home}/prefixes"
+  wb_prefix_init "${prefix_path}" "${dist_path}"
+  echo "initialized: ${prefix_path}"
+}
+
+cmd_prefix_components() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    prefix_name="${WB_PREFIX:-}"
+  fi
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix components: NAME required" >&2
+    exit 1
+  fi
+
+  _wb_validate_path_arg "prefix components" "${prefix_name}"
+  _wb_load_prefix_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  local manifest="${prefix_path}/.wb_components"
+  if [[ ! -f "${manifest}" ]]; then
+    echo "wb prefix components: no .wb_components at ${prefix_path}" >&2
+    exit 1
+  fi
+
+  if ! jq . "${manifest}"; then
+    echo "wb prefix components: malformed .wb_components JSON" >&2
+    exit 1
+  fi
+}
+
+cmd_prefix_reconcile() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    prefix_name="${WB_PREFIX:-}"
+  fi
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix reconcile: NAME required" >&2
+    exit 1
+  fi
+
+  _wb_validate_path_arg "prefix reconcile" "${prefix_name}"
+  _wb_load_wineboot_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  local before_manifest="${prefix_path}/.wb_components"
+  local before_hash=""
+  if [[ -f "${before_manifest}" ]]; then
+    before_hash="$(jq -r '.deployed_utc // ""' "${before_manifest}" 2>/dev/null || true)"
+  fi
+
+  wb_prefix_reconcile "${prefix_path}"
+
+  local after_hash=""
+  if [[ -f "${before_manifest}" ]]; then
+    after_hash="$(jq -r '.deployed_utc // ""' "${before_manifest}" 2>/dev/null || true)"
+  fi
+
+  if [[ "${before_hash}" != "${after_hash}" ]]; then
+    echo "reconciled: ${prefix_path} (components redeployed)"
+  else
+    echo "reconciled: ${prefix_path} (up to date)"
+  fi
+}
+
+cmd_import_ppdb() {
+  local input_path="${1:-}"
+  local output_path="${2:-}"
+
+  if [[ -z "${input_path}" ]]; then
+    echo "wb import-ppdb: INPUT required" >&2
+    exit 1
+  fi
+
+  if [[ -z "${output_path}" ]]; then
+    output_path="${input_path}.wb.ppdb"
+  fi
+
+  _wb_load_ppdb_lib
+
+  wb_ppdb_import_legacy "${input_path}" "${output_path}"
+  echo "imported to: ${output_path}"
+}
+
 cmd_log_tail() {
   local n="${1:-50}"
   [[ "${n}" =~ ^[0-9]+$ ]] || n=50
@@ -640,12 +829,26 @@ main() {
         import)
           cmd_prefix_import "${3:-}"
           ;;
+        init)
+          shift 2
+          cmd_prefix_init "$@"
+          ;;
+        components)
+          cmd_prefix_components "${3:-}"
+          ;;
+        reconcile)
+          cmd_prefix_reconcile "${3:-}"
+          ;;
         *)
           echo "wb prefix: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, adopt, import" >&2
+          echo "Valid actions: list, info, adopt, import, init, components, reconcile" >&2
           exit 1
           ;;
       esac
+      ;;
+    import-ppdb)
+      shift
+      cmd_import_ppdb "$@"
       ;;
     "")
       usage

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_components.schema.json",
+  "title": "wb_components",
+  "description": "Manifest written into <PREFIX>/.wb_components by wb_components_write",
+  "type": "object",
+  "required": [
+    "schema",
+    "prefix_path",
+    "dist_target",
+    "deployed_utc",
+    "components"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "prefix_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dist_target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dist_manifest_hash": {
+      "type": "string"
+    },
+    "deployed_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dxvk":  { "$ref": "#/$defs/component" },
+        "vkd3d": { "$ref": "#/$defs/component" },
+        "nvapi": { "$ref": "#/$defs/component" },
+        "mono":  { "$ref": "#/$defs/component" },
+        "icu":   { "$ref": "#/$defs/component" }
+      }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "required": ["version", "dll_count", "dll_paths"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ]
+        },
+        "dll_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dll_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

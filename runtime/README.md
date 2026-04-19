@@ -84,7 +84,8 @@ or prints a skip message and exits 0 so CI is not broken.
 | M1 | done | Logger, config loader (5-layer jailed), lock, JSON helpers, paths |
 | M2 | done | Dist manifest, runtime install/activate/prune/list/info |
 | M3 | done | Prefix lifecycle: classify, adopt (coexist/take-over), list, info, import |
-| M4+ | planned | Fresh prefix create, wineboot, component deploy, Wine dispatch |
+| M4 | done | Component deploy, fresh prefix create + wineboot, .wb.ppdb reader/importer |
+| M5+ | planned | Wine dispatch (wb run), hook system, multi-build switching |
 
 ## Prefix subcommands (M3)
 
@@ -106,3 +107,61 @@ Classifications emitted by `wb prefix classify`:
 - `broken` — any other state (diagnostic only; repair is M8)
 
 See `.orchestray/kb/artifacts/runtime-layer-roadmap.md` for the full milestone plan.
+
+## M4 — Component deploy + fresh prefix create + .wb.ppdb reader
+
+### New subcommands
+
+```
+wb prefix init [NAME] [--runtime NAME] [--dist PATH]
+    Create and initialise a Wine prefix.
+    Runs wineboot --init via the dist's wine binary, then deploys DXVK, VKD3D-Proton,
+    DXVK-NVAPI, wine-mono, and ICU. Takes ~30 s against a real Wine dist.
+    Tests use fake-wine so CI is fast and hermetic.
+
+wb prefix components [NAME]
+    Print the .wb_components JSON manifest for an initialised prefix.
+
+wb prefix reconcile [NAME]
+    Re-deploy all components idempotently. Restores missing DLLs without
+    invoking wine or wineserver.
+
+wb import-ppdb <INPUT> [OUTPUT]
+    Convert a legacy PortProton bash-style .ppdb to a strict-JSON .wb.ppdb.
+    OUTPUT defaults to INPUT.wb.ppdb.
+    The input file is executed in a sandboxed bash --restricted subshell
+    (no rm, cp, curl, etc. reachable) to guard against malicious payloads.
+```
+
+### Dependencies
+
+- `jq >= 1.6` — hard runtime dependency (unchanged from M1).
+- `python3` — soft dependency. Used by `wb-components.sh` to inspect PE headers
+  and zero the Wine builtin DLL marker. If absent, component deploy still works
+  but unsigned DLLs will not be marker-zeroed (Wine may prefer builtin over native).
+
+### Performance note
+
+`wb prefix init` calls `wine wineboot --init` which on a real Wine dist takes
+approximately **30 seconds** on an average workstation (Wine builds a fresh registry
+hive and populates the prefix tree). CI always uses the fake-wine fixture so all
+tests complete in milliseconds.
+
+### Manual smoke test
+
+After building a real dist (see `tools/full-build.sh`):
+
+```bash
+export WB_HOME=~/.local/share/wine-bleeding
+# Install and activate a dist first:
+wb runtime install /path/to/WINE-BLEEDING-DDMMYYYY.tar.gz --activate
+
+# Create a fresh prefix:
+wb prefix init test-prefix
+
+# Run an application inside it:
+WINEPREFIX="$WB_HOME/prefixes/test-prefix" \
+  "$WB_HOME/dist/WINE-BLEEDING/bin/wine" notepad
+```
+
+A successfully initialised prefix will open Notepad without errors.
