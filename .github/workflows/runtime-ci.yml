@@ -1,0 +1,46 @@
+name: runtime-ci
+
+on:
+  push:
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-ci.yml"
+  pull_request:
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-ci.yml"
+
+jobs:
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: make -C runtime lint
+
+  test:
+    name: bats (${{ matrix.bash-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bash-version: ["4.4", "5.2"]
+    container:
+      image: bash:${{ matrix.bash-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install bats-core dependencies
+        run: apk add --no-cache bash ncurses
+
+      - name: Initialise bats-core submodule (if not already via checkout)
+        run: git submodule update --init --recursive || true
+
+      - name: Run bats tests
+        run: make -C runtime test

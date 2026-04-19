@@ -1,0 +1,4 @@
+WINE REGISTRY Version 2
+;; Stub user.reg for adoption-path tests. Not a functioning registry hive.
+
+[Software\\Wine] 0

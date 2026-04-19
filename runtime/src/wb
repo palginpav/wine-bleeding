@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WB_VERSION="0.1.0-M0"
+
+usage() {
+  echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)"
+}
+
+cmd_version() {
+  echo "wb ${WB_VERSION}"
+}
+
+cmd_help() {
+  echo "wb ${WB_VERSION} -- wine-bleeding runtime dispatcher (run 'wb help' for subcommands)"
+}
+
+main() {
+  local subcommand="${1:-}"
+
+  case "${subcommand}" in
+    --version)
+      cmd_version
+      ;;
+    help)
+      cmd_help
+      ;;
+    "")
+      usage >&2
+      exit 1
+      ;;
+    *)
+      echo "wb: unknown subcommand '${subcommand}'" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
