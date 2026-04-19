@@ -87,7 +87,84 @@ or prints a skip message and exits 0 so CI is not broken.
 | M4 | done | Component deploy, fresh prefix create + wineboot, .wb.ppdb reader/importer |
 | M5 | done | `wb run` launch dispatcher: env composition, hooks chain, exec |
 | M6 | done | PP-plugin mode: reapply hook, install/uninstall, deploy-to-portproton refactor |
-| M7+ | planned | Standalone installer, prefix migrate, multi-build switching |
+| M7 | done | Standalone installer, migration scaffolding (migrate/export), release packaging |
+| M8+ | planned | Snapshot/repair, log rotation, multi-build switching |
+
+## M7 — Standalone installer + migration (M7)
+
+### Standalone install
+
+```bash
+./runtime/install.sh
+```
+
+Installs wb-runtime to `${XDG_DATA_HOME:-~/.local/share}/wine-bleeding` and
+creates a `~/.local/bin/wb` symlink. The installer is idempotent: running it
+twice produces zero file changes.
+
+Override the install location:
+
+```bash
+./runtime/install.sh --prefix /opt/wine-bleeding
+```
+
+### PortProton plugin install
+
+```bash
+./runtime/install.sh --portproton-plugin [--pp-root ~/PortProton]
+```
+
+Installs wb-runtime into `$PP_ROOT/data/wb/` and hooks into PP's `user.conf`
+via `add_in_start_portwine`. Equivalent to running M6's `wb_pp_install_hook`.
+
+### PATH note
+
+If `~/.local/bin` is not in your PATH, the installer prints a WARN with the
+exact export line to add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export PATH="${HOME}/.local/bin:${PATH}"
+```
+
+### Uninstall
+
+```bash
+./runtime/install.sh --uninstall          # removes installed files; preserves prefixes/ and profile.conf
+./runtime/install.sh --uninstall --purge  # wipes everything including prefixes
+```
+
+### Dry-run
+
+All modes support `--dry-run`: prints the intended actions but writes nothing.
+
+### Prefix migration
+
+Migrate a PortProton prefix into wb:
+
+```bash
+wb prefix migrate --from-portproton GAME [--pp-path ~/PortProton] [--overwrite]
+```
+
+This **copies** (never moves) the PP prefix into `$WB_HOME/prefixes/GAME/`
+and runs `wb prefix adopt --take-over` on the copy. The PP original is
+untouched; verify the migrated prefix works before deleting it manually.
+
+Export a wb prefix back to PortProton:
+
+```bash
+wb prefix export --to-portproton GAME [--pp-path ~/PortProton] [--overwrite]
+```
+
+Round-trip safety: both migrate and export are non-destructive by default.
+Use `--overwrite` only when intentionally replacing the target.
+
+### PortProton plugin via wb subcommand
+
+```bash
+wb install portproton-plugin
+```
+
+Thin wrapper that locates and invokes `install.sh --portproton-plugin`.
 
 ## Prefix subcommands (M3)
 

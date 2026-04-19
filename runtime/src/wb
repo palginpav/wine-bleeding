@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M6"
+WB_VERSION="0.1.0-M7"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -98,8 +98,17 @@ Subcommands:
                             [--dist PATH]    use dist by absolute path
   prefix components [NAME]  Print .wb_components JSON for a prefix
   prefix reconcile [NAME]   Re-deploy components idempotently (no wineboot)
+  prefix migrate --from-portproton [NAME]
+                            Copy PP prefix into \$WB_HOME/prefixes/<NAME> and adopt it
+                            [--pp-path PATH] override PP root (default: \$PORT_WINE_PATH or ~/PortProton)
+                            [--overwrite]    replace existing wb prefix if present
+  prefix export --to-portproton <NAME>
+                            Copy wb prefix into PP prefixes/<NAME>
+                            [--pp-path PATH] override PP root
+                            [--overwrite]    replace existing PP prefix if present
   import-ppdb <INPUT> [OUT] Convert a legacy bash .ppdb to JSON .wb.ppdb
                             OUT defaults to INPUT.wb.ppdb
+  install portproton-plugin Thin wrapper: invokes install.sh --portproton-plugin
   pp install                Install wb hook into PortProton user.conf
   pp uninstall              Remove wb hook from PortProton user.conf
   pp status                 Report PP installation state (hook, reapply.sh, .wine_ver)
@@ -812,6 +821,255 @@ cmd_import_ppdb() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd_prefix_migrate: wb prefix migrate --from-portproton [NAME] [options]
+# Copies a PP prefix into $WB_HOME/prefixes/<NAME>, then adopts it (take-over).
+# PP original is NEVER modified.
+# ---------------------------------------------------------------------------
+cmd_prefix_migrate() {
+  local pp_name=""
+  local pp_path_override=""
+  local overwrite=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from-portproton)
+        pp_name="${2:-}"
+        shift 2
+        ;;
+      --from-portproton=*)
+        pp_name="${1#--from-portproton=}"
+        shift
+        ;;
+      --pp-path)
+        pp_path_override="${2:-}"
+        shift 2
+        ;;
+      --pp-path=*)
+        pp_path_override="${1#--pp-path=}"
+        shift
+        ;;
+      --overwrite)
+        overwrite=1
+        shift
+        ;;
+      *)
+        echo "wb prefix migrate: unknown option '$1'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "${pp_name}" ]]; then
+    echo "wb prefix migrate: NAME required (use --from-portproton NAME)" >&2
+    exit 1
+  fi
+
+  _wb_validate_path_arg "prefix migrate" "${pp_name}"
+
+  local pp_root
+  if [[ -n "${pp_path_override}" ]]; then
+    pp_root="${pp_path_override}"
+  elif [[ -n "${PORT_WINE_PATH:-}" ]]; then
+    pp_root="${PORT_WINE_PATH}"
+  else
+    pp_root="${HOME}/PortProton"
+  fi
+
+  local pp_prefix="${pp_root}/data/prefixes/${pp_name}"
+  if [[ ! -d "${pp_prefix}" ]]; then
+    echo "wb prefix migrate: PP prefix not found: ${pp_prefix}" >&2
+    exit 1
+  fi
+
+  _wb_load_prefix_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local wb_prefix="${wb_home}/prefixes/${pp_name}"
+
+  if [[ -d "${wb_prefix}" ]]; then
+    if [[ "${overwrite}" -eq 0 ]]; then
+      echo "wb prefix migrate: target already exists: ${wb_prefix}" >&2
+      echo "wb prefix migrate: use --overwrite to replace it" >&2
+      exit 1
+    fi
+    rm -rf "${wb_prefix}"
+  fi
+
+  mkdir -p "${wb_home}/prefixes"
+
+  # COPY (never move) — acceptance criterion 16.2.
+  # SECURITY: scan for symlinks that resolve outside the source tree BEFORE
+  # copying; a hostile PP prefix could contain symlinks pointing into user
+  # $HOME or system paths, and cp -a would reproduce them so that subsequent
+  # Wine operations follow them. Reject if found.
+  if _wb_migrate_has_escape_symlink "${pp_prefix}"; then
+    echo "wb prefix migrate: PP prefix contains symlinks escaping its tree; aborting for safety" >&2
+    exit 1
+  fi
+
+  echo "Copying ${pp_prefix} -> ${wb_prefix} ..."
+  cp -a "${pp_prefix}" "${wb_prefix}"
+
+  # Adopt in take-over mode
+  wb_prefix_adopt "${wb_prefix}" --take-over
+
+  echo "migrated: ${pp_name} (PP original untouched)"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_prefix_export: wb prefix export --to-portproton <NAME> [options]
+# Copies a wb prefix into PP's prefixes/<NAME>. PP original is never moved.
+# ---------------------------------------------------------------------------
+cmd_prefix_export() {
+  local wb_name=""
+  local pp_path_override=""
+  local overwrite=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --to-portproton)
+        wb_name="${2:-}"
+        shift 2
+        ;;
+      --to-portproton=*)
+        wb_name="${1#--to-portproton=}"
+        shift
+        ;;
+      --pp-path)
+        pp_path_override="${2:-}"
+        shift 2
+        ;;
+      --pp-path=*)
+        pp_path_override="${1#--pp-path=}"
+        shift
+        ;;
+      --overwrite)
+        overwrite=1
+        shift
+        ;;
+      *)
+        echo "wb prefix export: unknown option '$1'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "${wb_name}" ]]; then
+    echo "wb prefix export: NAME required (use --to-portproton NAME)" >&2
+    exit 1
+  fi
+
+  _wb_validate_path_arg "prefix export" "${wb_name}"
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local wb_prefix="${wb_home}/prefixes/${wb_name}"
+
+  if [[ ! -d "${wb_prefix}" ]]; then
+    echo "wb prefix export: wb prefix not found: ${wb_prefix}" >&2
+    exit 1
+  fi
+
+  local pp_root
+  if [[ -n "${pp_path_override}" ]]; then
+    pp_root="${pp_path_override}"
+  elif [[ -n "${PORT_WINE_PATH:-}" ]]; then
+    pp_root="${PORT_WINE_PATH}"
+  else
+    pp_root="${HOME}/PortProton"
+  fi
+
+  local pp_prefix_dir="${pp_root}/data/prefixes"
+  local pp_prefix="${pp_prefix_dir}/${wb_name}"
+
+  if [[ -d "${pp_prefix}" ]]; then
+    if [[ "${overwrite}" -eq 0 ]]; then
+      echo "wb prefix export: target already exists: ${pp_prefix}" >&2
+      echo "wb prefix export: use --overwrite to replace it" >&2
+      exit 1
+    fi
+    rm -rf "${pp_prefix}"
+  fi
+
+  mkdir -p "${pp_prefix_dir}"
+
+  # SECURITY: same escape-symlink scan as migrate — refuse to propagate
+  # out-of-tree symlinks from wb into the PP directory.
+  if _wb_migrate_has_escape_symlink "${wb_prefix}"; then
+    echo "wb prefix export: wb prefix contains symlinks escaping its tree; aborting for safety" >&2
+    exit 1
+  fi
+
+  echo "Copying ${wb_prefix} -> ${pp_prefix} ..."
+  cp -a "${wb_prefix}" "${pp_prefix}"
+  echo "exported: ${wb_name} -> ${pp_prefix}"
+}
+
+# Walk a prefix tree; return 0 if any symlink resolves outside the tree root,
+# else return 1. Used by migrate/export to refuse hostile content propagation.
+_wb_migrate_has_escape_symlink() {
+  local root="$1"
+  local root_real
+  root_real="$(realpath -m "${root}")/"
+  local link
+  while IFS= read -r link; do
+    [[ -n "${link}" ]] || continue
+    local target
+    target="$(realpath -m "${link}")"
+    if [[ "${target}" != "${root_real}"* ]]; then
+      echo "wb: escape-symlink detected: ${link} -> ${target}" >&2
+      return 0
+    fi
+  done < <(find "${root}" -type l 2>/dev/null)
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# cmd_install: wb install <action>
+# ---------------------------------------------------------------------------
+cmd_install() {
+  local action="${1:-}"
+  case "${action}" in
+    portproton-plugin)
+      # Resolve install.sh path relative to the installed wb location.
+      # wb lives at $WB_HOME/bin/wb (standalone) or PP tree; install.sh is at
+      # $WB_HOME/../runtime/install.sh in standalone mode, or alongside runtime/
+      # in source. We walk up from BASH_SOURCE[0]'s directory.
+      local wb_bin_dir
+      wb_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      # In standalone install: wb_bin_dir = $WB_HOME/bin; install.sh is at
+      # $WB_HOME/../install.sh (if installed from source) or at parent runtime/.
+      # Try a few known locations:
+      local install_sh=""
+      local candidate
+      for candidate in \
+        "${wb_bin_dir}/../install.sh" \
+        "${wb_bin_dir}/../../runtime/install.sh" \
+        "${wb_bin_dir}/../../install.sh"; do
+        if [[ -f "${candidate}" ]]; then
+          install_sh="$(cd "$(dirname "${candidate}")" && pwd)/$(basename "${candidate}")"
+          break
+        fi
+      done
+      if [[ -z "${install_sh}" ]]; then
+        echo "wb install portproton-plugin: cannot locate install.sh" >&2
+        exit 1
+      fi
+      exec bash "${install_sh}" --portproton-plugin
+      ;;
+    "")
+      echo "wb install: action required (e.g. portproton-plugin)" >&2
+      exit 1
+      ;;
+    *)
+      echo "wb install: unknown action '${action}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # cmd_run: wb run <exe> [--prefix NAME] [--runtime NAME] [--wait] [args...]
 # Implements the full §5.2 call graph.
 # ---------------------------------------------------------------------------
@@ -1279,12 +1537,24 @@ main() {
         reconcile)
           cmd_prefix_reconcile "${3:-}"
           ;;
+        migrate)
+          shift 2
+          cmd_prefix_migrate "$@"
+          ;;
+        export)
+          shift 2
+          cmd_prefix_export "$@"
+          ;;
         *)
           echo "wb prefix: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, adopt, import, init, components, reconcile" >&2
+          echo "Valid actions: list, info, adopt, import, init, components, reconcile, migrate, export" >&2
           exit 1
           ;;
       esac
+      ;;
+    install)
+      shift
+      cmd_install "$@"
       ;;
     pp)
       local action="${2:-}"
