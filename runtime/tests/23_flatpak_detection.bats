@@ -24,6 +24,11 @@ _source_pp() {
 setup() {
   TEST_HOME="$(mktemp -d)"
   export TEST_HOME
+  # Ensure $USER is set — CI containers (bash:5.2 Alpine) don't set it.
+  if [[ -z "${USER:-}" ]]; then
+    USER="$(id -un 2>/dev/null || echo testuser)"
+    export USER
+  fi
   # Ensure a clean sandbox environment by default.
   unset FLATPAK_ID   2>/dev/null || true
   unset PORT_WINE_PATH 2>/dev/null || true
