@@ -86,7 +86,8 @@ or prints a skip message and exits 0 so CI is not broken.
 | M3 | done | Prefix lifecycle: classify, adopt (coexist/take-over), list, info, import |
 | M4 | done | Component deploy, fresh prefix create + wineboot, .wb.ppdb reader/importer |
 | M5 | done | `wb run` launch dispatcher: env composition, hooks chain, exec |
-| M6+ | planned | Multi-build switching, pressure-vessel, gamescope/gamemode wrappers |
+| M6 | done | PP-plugin mode: reapply hook, install/uninstall, deploy-to-portproton refactor |
+| M7+ | planned | Standalone installer, prefix migrate, multi-build switching |
 
 ## Prefix subcommands (M3)
 
@@ -146,6 +147,55 @@ Files ending in `.example` are never loaded. Invalid filenames are silently skip
 Symlinks pointing outside `$WB_HOME/plugins/hooks.d/` are skipped with a WARN.
 
 An example hook is installed at `runtime/plugins/hooks.d/00-example.pre-exec.sh.example`.
+
+## M6 — PortProton plugin mode
+
+### Overview
+
+M6 makes wb-runtime usable as a PortProton plugin. When a user selects the
+`WINE-BLEEDING` dist in PortProton's GUI, wb's hook ensures components (DXVK,
+VKD3D-Proton, NVAPI) stay deployed and `.wine_ver` stays correct — preventing
+PortProton from issuing an unwanted `wineboot -r` on each launch.
+
+### Install
+
+```
+wb pp install          # appends hook block to $PORT_WINE_PATH/data/user.conf
+wb pp status           # report hook state
+wb pp uninstall        # restore user.conf from backup; remove wb tree
+```
+
+`PORT_WINE_PATH` defaults to `~/PortProton`. Set it to override.
+
+### What gets written
+
+- `$PORT_WINE_PATH/data/user.conf` — appended with a fenced `# BEGIN wb-runtime`
+  / `# END wb-runtime` block containing an `add_in_start_portwine` function override.
+- `$PORT_WINE_PATH/data/wb/hooks/reapply.sh` — the hook script (chmod +x).
+- `$PORT_WINE_PATH/data/wb/lib/` — copies of required wb-lib shell libraries.
+- `$PORT_WINE_PATH/data/user.conf.wb-backup-<UTC>` — unconditional backup of
+  `user.conf` made before any write.
+
+### Backward-compat promise
+
+`tools/deploy-to-portproton.sh` preserves its full pre-refactor CLI surface.
+All existing flags and positional forms continue to work. A frozen copy of the
+pre-refactor script is kept at `tools/deploy-to-portproton.sh.legacy` for one
+release cycle (M6 through M8).
+
+### Uninstall
+
+`wb pp uninstall` restores `user.conf` from the most-recent backup. If no backup
+exists, it removes only the `# BEGIN wb-runtime` … `# END wb-runtime` block via
+`sed`. It also deletes the entire `$PORT_WINE_PATH/data/wb/` tree.
+
+### New subcommands (M6)
+
+```
+wb pp install      Install hook into PortProton user.conf
+wb pp uninstall    Remove hook (restore from backup or sed-fence-removal)
+wb pp status       Report: PP path, hook installed y/n, reapply.sh present y/n, .wine_ver match y/n
+```
 
 ### exec/trap caveat
 

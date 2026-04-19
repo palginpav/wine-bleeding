@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M5"
+WB_VERSION="0.1.0-M6"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -44,6 +44,12 @@ _wb_load_ppdb_lib() {
   _wb_load_libs
   # shellcheck source=wb-lib/wb-ppdb.sh
   source "${_WB_LIB_DIR}/wb-ppdb.sh"
+}
+
+_wb_load_pp_lib() {
+  _wb_load_wineboot_lib
+  # shellcheck source=wb-lib/wb-pp-installer.sh
+  source "${_WB_LIB_DIR}/wb-pp-installer.sh"
 }
 
 _wb_load_run_lib() {
@@ -94,6 +100,9 @@ Subcommands:
   prefix reconcile [NAME]   Re-deploy components idempotently (no wineboot)
   import-ppdb <INPUT> [OUT] Convert a legacy bash .ppdb to JSON .wb.ppdb
                             OUT defaults to INPUT.wb.ppdb
+  pp install                Install wb hook into PortProton user.conf
+  pp uninstall              Remove wb hook from PortProton user.conf
+  pp status                 Report PP installation state (hook, reapply.sh, .wine_ver)
   help                      Show this help
   --version                 Print version string
 
@@ -730,6 +739,59 @@ cmd_prefix_reconcile() {
   fi
 }
 
+cmd_pp_install() {
+  _wb_load_pp_lib
+  local pp_root
+  pp_root="$(wb_pp_detect_root)"
+  local pp_data="${pp_root}/data"
+  [[ -d "${pp_data}" ]] || { echo "wb pp install: PortProton data dir not found at ${pp_data}" >&2; exit 1; }
+  wb_pp_install_hook "${pp_data}"
+}
+
+cmd_pp_uninstall() {
+  _wb_load_pp_lib
+  local pp_root
+  pp_root="$(wb_pp_detect_root)"
+  local pp_data="${pp_root}/data"
+  wb_pp_uninstall_hook "${pp_data}"
+}
+
+cmd_pp_status() {
+  _wb_load_pp_lib
+  local pp_root
+  pp_root="$(wb_pp_detect_root)"
+  local pp_data="${pp_root}/data"
+  local user_conf="${pp_data}/user.conf"
+  local reapply_hook="${pp_data}/wb/hooks/reapply.sh"
+
+  echo "PP root:          ${pp_root}"
+
+  local hook_installed="no"
+  if [[ -f "${user_conf}" ]] && grep -q '# BEGIN wb-runtime' "${user_conf}" 2>/dev/null; then
+    hook_installed="yes"
+  fi
+  echo "hook installed:   ${hook_installed}"
+
+  local reapply_present="no"
+  if [[ -x "${reapply_hook}" ]]; then
+    reapply_present="yes"
+  fi
+  echo "reapply.sh:       ${reapply_present}"
+
+  local wine_ver_status="n/a (no WINEPREFIX set)"
+  if [[ -n "${WINEPREFIX:-}" && -f "${WINEPREFIX}/.wine_ver" ]]; then
+    local ver
+    ver="$(cat "${WINEPREFIX}/.wine_ver" 2>/dev/null || true)"
+    local alias_val="${PW_WINE_USE:-WINE-BLEEDING}"
+    if [[ "${ver}" == "${alias_val}" ]]; then
+      wine_ver_status="matches (${ver})"
+    else
+      wine_ver_status="mismatch (file=${ver}, alias=${alias_val})"
+    fi
+  fi
+  echo ".wine_ver match:  ${wine_ver_status}"
+}
+
 cmd_import_ppdb() {
   local input_path="${1:-}"
   local output_path="${2:-}"
@@ -1220,6 +1282,25 @@ main() {
         *)
           echo "wb prefix: unknown action '${action}'" >&2
           echo "Valid actions: list, info, adopt, import, init, components, reconcile" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    pp)
+      local action="${2:-}"
+      case "${action}" in
+        install)
+          cmd_pp_install
+          ;;
+        uninstall)
+          cmd_pp_uninstall
+          ;;
+        status)
+          cmd_pp_status
+          ;;
+        *)
+          echo "wb pp: unknown action '${action}'" >&2
+          echo "Valid actions: install, uninstall, status" >&2
           exit 1
           ;;
       esac

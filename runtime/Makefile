@@ -31,6 +31,8 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-ppdb.sh \
   $(SRC_DIR)/wb-lib/wb-env.sh \
   $(SRC_DIR)/wb-lib/wb-hooks.sh \
+  $(SRC_DIR)/wb-lib/wb-pp-installer.sh \
+  $(SRC_DIR)/hooks/reapply.sh \
   $(RUNTIME_DIR)install.sh
 
 .PHONY: test lint install schema-check
