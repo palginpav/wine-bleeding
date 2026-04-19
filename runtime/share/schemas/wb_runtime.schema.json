@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_runtime.schema.json",
+  "title": "wb_runtime",
+  "description": "Sentinel written into <PREFIX>/.wb_runtime by wb_prefix_adopt / wb_prefix_write_sentinel",
+  "type": "object",
+  "required": [
+    "schema",
+    "prefix_name",
+    "runtime_alias",
+    "initialized_utc",
+    "owner",
+    "pp_coexist",
+    "wineboot_generation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1
+    },
+    "prefix_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_./-]+$"
+    },
+    "runtime_alias": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._+-]+$"
+    },
+    "runtime_target": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[A-Za-z0-9._+/:-]+$" },
+        { "type": "null" }
+      ]
+    },
+    "runtime_target_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$|^$" },
+        { "type": "null" }
+      ]
+    },
+    "initialized_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "last_launch_utc": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        { "type": "null" }
+      ]
+    },
+    "mono_version": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[A-Za-z0-9._+-]+$" },
+        { "type": "null" }
+      ]
+    },
+    "wineboot_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "owner": {
+      "type": "string",
+      "const": "wb-runtime"
+    },
+    "pp_coexist": {
+      "type": "boolean"
+    },
+    "last_adopted_utc": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        { "type": "null" }
+      ]
+    }
+  }
+}

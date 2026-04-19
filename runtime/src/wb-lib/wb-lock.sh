@@ -8,7 +8,7 @@ _wb_lock_is_nfs() {
   local prefix_path="$1"
   local fs_type
   fs_type="$(stat -f -c '%T' "${prefix_path}" 2>/dev/null || echo "unknown")"
-  [[ "${fs_type}" =~ ^(nfs|nfs4|cifs|smb|smb2|fuseblk)$ ]]
+  [[ "${fs_type}" =~ ^(nfs|nfs4|cifs|smb|smb2|fuse|fuseblk|virtiofs)$ ]]
 }
 
 _wb_lock_stale_nfs() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M2"
+WB_VERSION="0.1.0-M3"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -22,6 +22,12 @@ _wb_load_dist_lib() {
   _wb_load_libs
   # shellcheck source=wb-lib/wb-dist.sh
   source "${_WB_LIB_DIR}/wb-dist.sh"
+}
+
+_wb_load_prefix_lib() {
+  _wb_load_dist_lib
+  # shellcheck source=wb-lib/wb-prefix.sh
+  source "${_WB_LIB_DIR}/wb-prefix.sh"
 }
 
 usage() {
@@ -47,10 +53,15 @@ Subcommands:
   runtime activate <NAME>   Re-point WINE-BLEEDING alias atomically
   runtime prune [--keep N]  Remove oldest dists beyond N most recent (default 3)
                             [--yes] skip confirmation prompt
+  prefix list               List known prefixes with classification and last-adopted time
+  prefix info <NAME>        Print classification and .wb_runtime JSON for a prefix
+  prefix adopt <PATH>       Adopt an existing (PP) prefix in coexist mode
+                            [--take-over] claim full ownership (rewrites .wine_ver)
+  prefix import <PATH>      Adopt a prefix and symlink it into WB_HOME/prefixes/
   help                      Show this help
   --version                 Print version string
 
-Future commands: prefix create, prefix list, run
+Future commands: prefix create, run
 EOF
 }
 
@@ -343,6 +354,198 @@ cmd_runtime_prune() {
   done
 }
 
+_wb_validate_path_arg() {
+  local context="$1"
+  local val="$2"
+  if [[ -z "${val}" ]]; then
+    echo "wb ${context}: PATH/NAME required" >&2
+    exit 1
+  fi
+  # SECURITY: reject path traversal
+  if [[ "${val}" == *..* ]]; then
+    echo "wb ${context}: invalid PATH/NAME '${val}' (path traversal via '..' rejected)" >&2
+    exit 1
+  fi
+  # Absolute paths allow `/`; relative names do not (prefixes are one segment).
+  if [[ "${val}" == /* ]]; then
+    if ! [[ "${val}" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+      echo "wb ${context}: invalid PATH '${val}' (expected [A-Za-z0-9_./-]+)" >&2
+      exit 1
+    fi
+  else
+    if ! [[ "${val}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+      echo "wb ${context}: invalid NAME '${val}' (expected [A-Za-z0-9_.-]+ with no slashes)" >&2
+      exit 1
+    fi
+  fi
+}
+
+cmd_prefix_list() {
+  _wb_load_prefix_lib
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  printf '%-28s %-20s %s\n' "NAME" "CLASSIFICATION" "LAST_ADOPTED_UTC"
+  local name
+  while IFS= read -r name; do
+    local ppath="${wb_home}/prefixes/${name}"
+    local class last_adopted
+    class="$(wb_prefix_classify "${ppath}")"
+    local sentinel="${ppath}/.wb_runtime"
+    if [[ -f "${sentinel}" ]] && jq empty "${sentinel}" 2>/dev/null; then
+      last_adopted="$(jq -r '.last_adopted_utc // empty' "${sentinel}" 2>/dev/null || true)"
+    else
+      last_adopted=""
+    fi
+    [[ -z "${last_adopted}" ]] && last_adopted="-"
+    printf '%-28s %-20s %s\n' "${name}" "${class}" "${last_adopted}"
+  done < <(wb_prefix_list)
+}
+
+cmd_prefix_info() {
+  local name="${1:-}"
+  _wb_validate_path_arg "prefix info" "${name}"
+  _wb_load_prefix_lib
+
+  local ppath
+  if [[ "${name}" == /* ]]; then
+    ppath="${name}"
+  else
+    local wb_home
+    wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+    ppath="${wb_home}/prefixes/${name}"
+  fi
+
+  echo "Path: ${ppath}"
+
+  local class
+  class="$(wb_prefix_classify "${ppath}")"
+  echo "Classification: ${class}"
+
+  local sentinel="${ppath}/.wb_runtime"
+  if [[ ! -f "${sentinel}" ]]; then
+    echo "(no sentinel)"
+    return 0
+  fi
+
+  # SECURITY: hold a shared lock across the sentinel read so a concurrent
+  # writer cannot produce a torn view. Shared (-s) permits parallel readers.
+  local lockfile="${ppath}/.wb_lock"
+  local deadline=$(( $(date +%s) + 5 ))
+  local got_lock=0
+  exec 9>"${lockfile}"
+  while [[ "${got_lock}" -eq 0 ]]; do
+    if flock -s -n 9 2>/dev/null; then
+      got_lock=1
+    else
+      if [[ "$(date +%s)" -ge "${deadline}" ]]; then
+        exec 9>&-
+        echo "prefix busy" >&2
+        exit 1
+      fi
+      sleep 0.5
+    fi
+  done
+
+  if jq empty "${sentinel}" 2>/dev/null; then
+    jq . "${sentinel}"
+  else
+    echo "(malformed sentinel)"
+  fi
+  exec 9>&-
+}
+
+cmd_prefix_adopt() {
+  local path="${1:-}"
+  _wb_validate_path_arg "prefix adopt" "${path}"
+  shift || true
+
+  _wb_load_prefix_lib
+
+  local class_before
+  class_before="$(wb_prefix_classify "${path}")"
+  wb_log_info "prefix adopt: classification before: ${class_before}"
+  echo "Classification before: ${class_before}"
+
+  local take_over=0
+  local extra_args=()
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --take-over)
+        take_over=1
+        extra_args+=("--take-over")
+        ;;
+      *)
+        echo "wb prefix adopt: unknown option '${arg}'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "${take_over}" -eq 1 ]]; then
+    wb_log_info "prefix adopt: take-over mode selected"
+  else
+    wb_log_info "prefix adopt: coexist mode (default)"
+  fi
+
+  wb_prefix_adopt "${path}" "${extra_args[@]+"${extra_args[@]}"}"
+
+  local class_after
+  class_after="$(wb_prefix_classify "${path}")"
+  wb_log_info "prefix adopt: classification after: ${class_after}"
+  echo "Classification after: ${class_after}"
+}
+
+cmd_prefix_import() {
+  local path="${1:-}"
+  _wb_validate_path_arg "prefix import" "${path}"
+  _wb_load_prefix_lib
+
+  if [[ ! -d "${path}" ]]; then
+    echo "wb prefix import: path '${path}' does not exist or is not a directory" >&2
+    exit 1
+  fi
+
+  local basename
+  basename="$(basename "${path}")"
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local link_target="${wb_home}/prefixes/${basename}"
+
+  local resolved_path
+  resolved_path="$(readlink -f "${path}")"
+
+  # Collision check BEFORE adopt so we don't orphan .wb_runtime on conflict.
+  if [[ -L "${link_target}" ]]; then
+    local existing_target
+    existing_target="$(readlink -f "${link_target}" 2>/dev/null || true)"
+    if [[ "${existing_target}" != "${resolved_path}" ]]; then
+      echo "wb prefix import: symlink '${link_target}' already exists and points elsewhere (${existing_target})" >&2
+      exit 1
+    fi
+  elif [[ -e "${link_target}" ]]; then
+    echo "wb prefix import: '${link_target}' already exists and is not a symlink" >&2
+    exit 1
+  fi
+
+  # Coexist adopt
+  wb_prefix_adopt "${path}"
+
+  mkdir -p "${wb_home}/prefixes"
+
+  if [[ -L "${link_target}" ]]; then
+    # Collision already checked above; existing symlink points at the same target.
+    echo "imported as ${basename} (symlink already exists, no-op)"
+    return 0
+  elif [[ -e "${link_target}" ]]; then
+    echo "wb prefix import: '${link_target}' already exists and is not a symlink" >&2
+    exit 1
+  fi
+
+  ln -s "${resolved_path}" "${link_target}"
+  echo "imported as ${basename}"
+}
+
 cmd_log_tail() {
   local n="${1:-50}"
   [[ "${n}" =~ ^[0-9]+$ ]] || n=50
@@ -417,6 +620,29 @@ main() {
         *)
           echo "wb runtime: unknown action '${action}'" >&2
           echo "Valid actions: list, info, install, activate, prune" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    prefix)
+      local action="${2:-}"
+      case "${action}" in
+        list)
+          cmd_prefix_list
+          ;;
+        info)
+          cmd_prefix_info "${3:-}"
+          ;;
+        adopt)
+          shift 2
+          cmd_prefix_adopt "$@"
+          ;;
+        import)
+          cmd_prefix_import "${3:-}"
+          ;;
+        *)
+          echo "wb prefix: unknown action '${action}'" >&2
+          echo "Valid actions: list, info, adopt, import" >&2
           exit 1
           ;;
       esac

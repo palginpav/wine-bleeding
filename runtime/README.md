@@ -82,6 +82,27 @@ or prints a skip message and exits 0 so CI is not broken.
 |-----------|--------|-------|
 | M0 | done | Foundation scaffolding (this commit) |
 | M1 | done | Logger, config loader (5-layer jailed), lock, JSON helpers, paths |
-| M2+ | planned | Dist manifest, prefix lifecycle, Wine dispatch |
+| M2 | done | Dist manifest, runtime install/activate/prune/list/info |
+| M3 | done | Prefix lifecycle: classify, adopt (coexist/take-over), list, info, import |
+| M4+ | planned | Fresh prefix create, wineboot, component deploy, Wine dispatch |
+
+## Prefix subcommands (M3)
+
+The `wb prefix` family manages Wine prefix lifecycle without invoking Wine.
+
+```
+wb prefix list                  List known prefixes (name, classification, last-adopted time)
+wb prefix info <NAME|PATH>      Show classification and .wb_runtime sentinel JSON
+wb prefix adopt <PATH>          Adopt an existing PortProton prefix (coexist mode)
+wb prefix adopt <PATH> --take-over   Claim full ownership (rewrites .wine_ver only; wineboot in M4)
+wb prefix import <PATH>         Adopt a prefix and symlink it into $WB_HOME/prefixes/
+```
+
+Classifications emitted by `wb prefix classify`:
+- `absent` — directory does not exist
+- `wb-native` — owned by wb-runtime with `pp_coexist=false`
+- `shared-adopted` — owned by wb-runtime with `pp_coexist=true`
+- `pp-owned-untouched` — PortProton prefix not yet adopted
+- `broken` — any other state (diagnostic only; repair is M8)
 
 See `.orchestray/kb/artifacts/runtime-layer-roadmap.md` for the full milestone plan.

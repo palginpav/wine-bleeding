@@ -1,0 +1,4 @@
+WINE REGISTRY Version 2
+;; Stub user.reg for test fixtures.
+
+[Software\Wine] 0
