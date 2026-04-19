@@ -11,9 +11,44 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 # --- PP root detection ---------------------------------------------------
+#
+# Detection order:
+#   1. $PORT_WINE_PATH — always wins if set (any environment).
+#   2. Flatpak sandbox ($FLATPAK_ID is set) — check the host path that
+#      --filesystem=~/PortProton surfaces at /run/host/home/<user>/PortProton.
+#   3. Standard ~/PortProton (non-sandbox fallback).
+#
+# The function only prints the path; it never creates directories.
+# Callers that require the path to exist must validate it themselves.
+# In Flatpak mode without a detectable PortProton directory the function still
+# returns the standard ~/PortProton path and emits a warning to stderr so that
+# callers can decide how to proceed (plugin mode will fail cleanly).
 
 wb_pp_detect_root() {
-  echo "${PORT_WINE_PATH:-${HOME}/PortProton}"
+  # Priority 1: explicit override from environment (works everywhere).
+  if [[ -n "${PORT_WINE_PATH:-}" ]]; then
+    echo "${PORT_WINE_PATH}"
+    return 0
+  fi
+
+  # Priority 2: Flatpak sandbox — FLATPAK_ID is set inside a Flatpak app.
+  if [[ -n "${FLATPAK_ID:-}" ]]; then
+    # Flatpak exposes the real home via /run/host/home/<user> when
+    # --filesystem=~/PortProton is granted at install time.
+    local _flatpak_host_pp="/run/host/home/${USER}/PortProton"
+    if [[ -d "${_flatpak_host_pp}" ]]; then
+      echo "${_flatpak_host_pp}"
+      return 0
+    fi
+    # Host path not visible — either permission was not granted or PortProton
+    # is not installed.  Warn and fall through to the standard path so that
+    # the caller can produce a useful error.
+    echo "wb-pp-installer: PortProton not accessible from Flatpak sandbox;" \
+         "grant --filesystem=~/PortProton at install time" >&2
+  fi
+
+  # Priority 3: standard non-sandbox location.
+  echo "${HOME}/PortProton"
 }
 
 # --- Install hook into user.conf -----------------------------------------

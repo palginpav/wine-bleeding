@@ -42,7 +42,10 @@ SHELLCHECK_TARGETS := \
   $(RUNTIME_DIR)install.sh \
   $(RUNTIME_DIR)publish-release-integration.sh
 
-.PHONY: test lint install schema-check
+FLATPAK_DIR      := $(RUNTIME_DIR)flatpak
+FLATPAK_MANIFEST := $(FLATPAK_DIR)/org.wine_bleeding.wb.yaml
+
+.PHONY: test lint install schema-check flatpak-validate flatpak-build
 
 test:
 	@if [[ -x "$(VENDOR_BATS)" ]]; then \
@@ -138,3 +141,24 @@ COMPEOF \
 
 install:
 	@echo "install.sh: not yet implemented (lands M7) [PREFIX=$(PREFIX)]"; exit 1
+
+# ---------------------------------------------------------------------------
+# Flatpak targets (M14)
+# These targets skip gracefully if flatpak-builder is not installed.
+# flatpak-builder is NOT required for make test or make lint.
+# ---------------------------------------------------------------------------
+
+flatpak-validate:
+	@if ! command -v python3 >/dev/null 2>&1; then \
+	  echo "SKIP: python3 not found; cannot validate YAML manifest"; \
+	  exit 0; \
+	fi
+	@python3 -c "import yaml; yaml.safe_load(open('$(FLATPAK_MANIFEST)'))" && \
+	  echo "YAML OK: $(FLATPAK_MANIFEST)"
+
+flatpak-build:
+	@if ! command -v flatpak-builder >/dev/null 2>&1; then \
+	  echo "SKIP: flatpak-builder not found on PATH"; \
+	  exit 0; \
+	fi
+	flatpak-builder build-dir "$(FLATPAK_MANIFEST)"

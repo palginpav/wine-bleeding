@@ -97,6 +97,41 @@ or prints a skip message and exits 0 so CI is not broken.
 | M9 | done | Multi-build / distro-switching (`wb run --runtime NAME`, `wb runtime list --multi`) |
 | M11 | done | Pressure-vessel / SLR container opt-in (`WB_CONTAINER=1`) |
 | M13 | done | Runtime plugin registry (`wb runtime register/unregister`, external runtimes in list + resolver) |
+| M14 | done | Flatpak packaging (`org.wine_bleeding.wb.yaml`), sandbox-aware PP detection |
+
+## M14 — Flatpak install (advanced / post-MVP)
+
+Distributes `wb` via Flatpak for distros where PATH/XDG setup is awkward or
+where sandboxed delivery is preferred.
+
+### Building from source
+
+```bash
+# From the repo root
+flatpak-builder build-dir runtime/flatpak/org.wine_bleeding.wb.yaml
+```
+
+### Test-installing locally
+
+```bash
+flatpak-builder --user --install build-dir runtime/flatpak/org.wine_bleeding.wb.yaml
+flatpak run org.wine_bleeding.wb --version
+```
+
+### Caveats
+
+- **No build toolchain inside Flatpak**: `full-build.sh` (Wine build from source)
+  is not included.  Download a pre-built `wine-bleeding` dist tarball separately
+  and register it with `wb runtime install /path/to/tarball`.
+- **PortProton plugin mode** requires the `--filesystem=~/PortProton` permission
+  to be granted at Flatpak install time (the manifest already requests it).
+  Sandbox detection uses `$FLATPAK_ID`; the resolved path inside the sandbox is
+  `/run/host/home/<user>/PortProton`.
+- **user.conf mutations**: prefer running `wb pp-install` from outside the
+  sandbox (standalone install) so `user.conf` is written by the host environment.
+
+See `runtime/flatpak/README.md` for full build instructions and Flathub
+submission notes.
 
 ## M13 — Runtime plugin registry
 

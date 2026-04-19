@@ -1,5 +1,34 @@
 # wine-bleeding Runtime Layer Changelog
 
+## [Unreleased] — v1.4.0-dev
+
+### M14 — Flatpak packaging
+
+- **`runtime/flatpak/org.wine_bleeding.wb.yaml`** — flatpak-builder manifest.
+  Targets `org.freedesktop.Platform//24.08`; installs `wb`, `wb-diag`, all
+  `wb-lib` shell libraries, hooks, schemas, and documentation into `/app`.
+  Finish-args grant `--filesystem=host` (Wine prefixes anywhere),
+  `--filesystem=~/PortProton` (plugin mode), XDG data/config/cache subdirs,
+  Wayland + X11 sockets, PulseAudio, and DRI device access.
+- **Sandbox-aware `wb_pp_detect_root`** — updated detection order:
+  1. `$PORT_WINE_PATH` environment variable (always wins).
+  2. Flatpak sandbox (`$FLATPAK_ID` set): check
+     `/run/host/home/<user>/PortProton` (path Flatpak surfaces when
+     `--filesystem=~/PortProton` is granted). Warns to stderr if not visible.
+  3. Standard `~/PortProton` fallback (unchanged prior behaviour).
+  Function remains side-effect-free (no mkdir).
+- **`runtime/flatpak/README.md`** — build, test-install, and caveats
+  (no toolchain in sandbox; PortProton plugin permission; XDG path notes;
+  Flathub submission overview).
+- **7 new bats tests** in `runtime/tests/23_flatpak_detection.bats`.
+- **`WB_VERSION`** bumped to `1.4.0-dev`.
+
+### Breaking changes
+
+- `WB_VERSION` bumped from `1.3.0-dev` to `1.4.0-dev`.
+
+---
+
 ## [Unreleased] — v1.3.0-dev
 
 ### M13 — Runtime plugin registry

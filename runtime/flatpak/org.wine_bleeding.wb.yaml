@@ -1,0 +1,99 @@
+app-id: org.wine_bleeding.wb
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: wb
+
+finish-args:
+  # wb reads/writes $WB_HOME under $XDG_DATA_HOME
+  - --filesystem=xdg-data/wine-bleeding:create
+  # wb reads $XDG_CONFIG_HOME/wine-bleeding/profile.conf
+  - --filesystem=xdg-config/wine-bleeding:create
+  # wb writes $XDG_CACHE_HOME/wine-bleeding during dist installs
+  - --filesystem=xdg-cache/wine-bleeding:create
+  # Access to any prefix the user configures — wb prefix init/run need this.
+  # Broad host access is intentional: wb's scope is game prefixes anywhere.
+  - --filesystem=host
+  # PortProton plugin mode: Flatpak exposes ~/PortProton via /run/host/home/<user>/PortProton
+  - --filesystem=~/PortProton
+  # Network for `wb runtime install <URL>` (future; currently uses local tarball)
+  - --share=network
+  # Wine needs to talk to display and audio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+
+modules:
+  - name: jq
+    # jq is a hard dependency of wb; org.freedesktop.Platform 24.08 ships it.
+    # This module is a no-op placeholder; add a real jq build here if a future
+    # runtime version drops it.
+    buildsystem: simple
+    build-commands:
+      - echo "jq provided by runtime"
+
+  - name: wb-runtime
+    buildsystem: simple
+    build-commands:
+      # -----------------------------------------------------------------------
+      # Main CLI binaries
+      # -----------------------------------------------------------------------
+      - install -Dm755 src/wb                /app/bin/wb
+      - install -Dm755 src/wb-diag           /app/bin/wb-diag
+
+      # -----------------------------------------------------------------------
+      # wb-lib — shell libraries sourced by wb and reapply.sh
+      # -----------------------------------------------------------------------
+      - install -Dm755 src/wb-lib/wb-paths.sh       /app/lib/wb/wb-lib/wb-paths.sh
+      - install -Dm755 src/wb-lib/wb-log.sh         /app/lib/wb/wb-lib/wb-log.sh
+      - install -Dm755 src/wb-lib/wb-die.sh         /app/lib/wb/wb-lib/wb-die.sh
+      - install -Dm755 src/wb-lib/wb-config.sh      /app/lib/wb/wb-lib/wb-config.sh
+      - install -Dm755 src/wb-lib/wb-json.sh        /app/lib/wb/wb-lib/wb-json.sh
+      - install -Dm755 src/wb-lib/wb-lock.sh        /app/lib/wb/wb-lib/wb-lock.sh
+      - install -Dm755 src/wb-lib/wb-dist.sh        /app/lib/wb/wb-lib/wb-dist.sh
+      - install -Dm755 src/wb-lib/wb-prefix.sh      /app/lib/wb/wb-lib/wb-prefix.sh
+      - install -Dm755 src/wb-lib/wb-components.sh  /app/lib/wb/wb-lib/wb-components.sh
+      - install -Dm755 src/wb-lib/wb-reg.sh         /app/lib/wb/wb-lib/wb-reg.sh
+      - install -Dm755 src/wb-lib/wb-wineboot.sh    /app/lib/wb/wb-lib/wb-wineboot.sh
+      - install -Dm755 src/wb-lib/wb-ppdb.sh        /app/lib/wb/wb-lib/wb-ppdb.sh
+      - install -Dm755 src/wb-lib/wb-env.sh         /app/lib/wb/wb-lib/wb-env.sh
+      - install -Dm755 src/wb-lib/wb-hooks.sh       /app/lib/wb/wb-lib/wb-hooks.sh
+      - install -Dm755 src/wb-lib/wb-pp-installer.sh /app/lib/wb/wb-lib/wb-pp-installer.sh
+      - install -Dm755 src/wb-lib/wb-snapshot.sh    /app/lib/wb/wb-lib/wb-snapshot.sh
+      - install -Dm755 src/wb-lib/wb-multibuild.sh  /app/lib/wb/wb-lib/wb-multibuild.sh
+      - install -Dm755 src/wb-lib/wb-container.sh   /app/lib/wb/wb-lib/wb-container.sh
+      - install -Dm755 src/wb-lib/wb-runtimes.sh    /app/lib/wb/wb-lib/wb-runtimes.sh
+
+      # -----------------------------------------------------------------------
+      # Hooks
+      # -----------------------------------------------------------------------
+      - install -Dm755 src/hooks/reapply.sh  /app/lib/wb/hooks/reapply.sh
+
+      # -----------------------------------------------------------------------
+      # Shared data: defaults.conf and JSON schemas
+      # -----------------------------------------------------------------------
+      - install -Dm644 share/defaults.conf                         /app/share/wb/defaults.conf
+      - install -Dm644 share/schemas/wb_dist_meta.schema.json      /app/share/wb/schemas/wb_dist_meta.schema.json
+      - install -Dm644 share/schemas/wb_runtime.schema.json        /app/share/wb/schemas/wb_runtime.schema.json
+      - install -Dm644 share/schemas/wb_components.schema.json     /app/share/wb/schemas/wb_components.schema.json
+      - install -Dm644 share/schemas/wb_ppdb.schema.json           /app/share/wb/schemas/wb_ppdb.schema.json
+      - install -Dm644 share/schemas/wb_runtime_plugin.schema.json /app/share/wb/schemas/wb_runtime_plugin.schema.json
+
+      # -----------------------------------------------------------------------
+      # Documentation
+      # -----------------------------------------------------------------------
+      - install -Dm644 README.md   /app/share/doc/wb/README.md
+      - install -Dm644 CHANGELOG.md /app/share/doc/wb/CHANGELOG.md
+
+      # -----------------------------------------------------------------------
+      # Wrapper: rewrite _WB_LIB_DIR so that wb finds its libs under /app/lib/wb
+      # when invoked from the Flatpak sandbox.
+      # -----------------------------------------------------------------------
+      - |
+        sed -i 's|_WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE\[0\]}")/wb-lib" && pwd)"|_WB_LIB_DIR="/app/lib/wb/wb-lib"|' \
+          /app/bin/wb
+
+    sources:
+      - type: dir
+        path: ..
