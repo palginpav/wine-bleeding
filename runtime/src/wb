@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M7"
+WB_VERSION="1.0.0-MVP"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -60,6 +60,12 @@ _wb_load_run_lib() {
   source "${_WB_LIB_DIR}/wb-hooks.sh"
 }
 
+_wb_load_snapshot_lib() {
+  _wb_load_wineboot_lib
+  # shellcheck source=wb-lib/wb-snapshot.sh
+  source "${_WB_LIB_DIR}/wb-snapshot.sh"
+}
+
 usage() {
   echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)" >&2
 }
@@ -98,6 +104,11 @@ Subcommands:
                             [--dist PATH]    use dist by absolute path
   prefix components [NAME]  Print .wb_components JSON for a prefix
   prefix reconcile [NAME]   Re-deploy components idempotently (no wineboot)
+  prefix snapshot <NAME>    Capture a snapshot of prefix state for repair
+  prefix snapshots <NAME>   List snapshots for a prefix (newest first)
+  prefix repair <NAME>      Recover a blown-away prefix from its latest snapshot
+                            [--yes]                  skip confirmation prompt
+                            [--from-snapshot <UTC>]  use a specific snapshot by UTC
   prefix migrate --from-portproton [NAME]
                             Copy PP prefix into \$WB_HOME/prefixes/<NAME> and adopt it
                             [--pp-path PATH] override PP root (default: \$PORT_WINE_PATH or ~/PortProton)
@@ -113,7 +124,7 @@ Subcommands:
   pp uninstall              Remove wb hook from PortProton user.conf
   pp status                 Report PP installation state (hook, reapply.sh, .wine_ver)
   help                      Show this help
-  --version                 Print version string
+  --version                 Print version string (1.0.0-MVP)
 
 NOTE: wb run replaces itself with wine via exec. Bash trap handlers registered
 in hooks DO NOT fire after exec. Use --wait if you need the post-exec hook.
@@ -818,6 +829,99 @@ cmd_import_ppdb() {
 
   wb_ppdb_import_legacy "${input_path}" "${output_path}"
   echo "imported to: ${output_path}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_prefix_snapshot: wb prefix snapshot <NAME>
+# ---------------------------------------------------------------------------
+cmd_prefix_snapshot() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix snapshot: NAME required" >&2
+    exit 1
+  fi
+  _wb_validate_path_arg "prefix snapshot" "${prefix_name}"
+  _wb_load_snapshot_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  if [[ ! -d "${prefix_path}" ]]; then
+    echo "wb prefix snapshot: prefix '${prefix_name}' not found at ${prefix_path}" >&2
+    exit 1
+  fi
+
+  local snap_file
+  snap_file="$(wb_snapshot_capture "${prefix_path}")"
+  echo "snapshot: ${snap_file}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_prefix_snapshots: wb prefix snapshots <NAME>
+# ---------------------------------------------------------------------------
+cmd_prefix_snapshots() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix snapshots: NAME required" >&2
+    exit 1
+  fi
+  _wb_validate_path_arg "prefix snapshots" "${prefix_name}"
+  _wb_load_snapshot_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  printf '%-28s %-12s %s\n' "CAPTURED_UTC" "SIZE_BYTES" "PATH"
+  local line utc sz path
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    utc="${line%% *}"
+    line="${line#* }"
+    sz="${line%% *}"
+    path="${line#* }"
+    printf '%-28s %-12s %s\n' "${utc}" "${sz}" "${path}"
+  done < <(wb_snapshot_list "${prefix_path}")
+}
+
+# ---------------------------------------------------------------------------
+# cmd_prefix_repair: wb prefix repair <NAME> [--yes] [--from-snapshot <UTC>]
+# ---------------------------------------------------------------------------
+cmd_prefix_repair() {
+  local prefix_name="${1:-}"
+  if [[ -z "${prefix_name}" ]]; then
+    echo "wb prefix repair: NAME required" >&2
+    exit 1
+  fi
+  _wb_validate_path_arg "prefix repair" "${prefix_name}"
+  shift || true
+
+  _wb_load_snapshot_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local prefix_path
+  if [[ "${prefix_name}" == /* ]]; then
+    prefix_path="${prefix_name}"
+  else
+    prefix_path="${wb_home}/prefixes/${prefix_name}"
+  fi
+
+  wb_snapshot_repair "${prefix_path}" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -1537,6 +1641,16 @@ main() {
         reconcile)
           cmd_prefix_reconcile "${3:-}"
           ;;
+        snapshot)
+          cmd_prefix_snapshot "${3:-}"
+          ;;
+        snapshots)
+          cmd_prefix_snapshots "${3:-}"
+          ;;
+        repair)
+          shift 2
+          cmd_prefix_repair "$@"
+          ;;
         migrate)
           shift 2
           cmd_prefix_migrate "$@"
@@ -1547,7 +1661,7 @@ main() {
           ;;
         *)
           echo "wb prefix: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, adopt, import, init, components, reconcile, migrate, export" >&2
+          echo "Valid actions: list, info, adopt, import, init, components, reconcile, snapshot, snapshots, repair, migrate, export" >&2
           exit 1
           ;;
       esac

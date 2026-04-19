@@ -1,5 +1,233 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "wb-diag: not yet implemented"
-exit 1
+# ---------------------------------------------------------------------------
+# wb-diag — Collect a support bundle tarball for bug reports.
+# M8 deliverable.
+#
+# SECURITY: explicit allowlist of what is collected. NEVER includes:
+#   - drive_c/ directory contents (user game data)
+#   - user.reg / system.reg (may contain user credentials / sensitive values)
+#   - PortProton user.conf (may contain auth state)
+#   - Any auth tokens or secrets
+# ---------------------------------------------------------------------------
+
+_WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
+_WB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_WB="${_WB_SCRIPT_DIR}/wb"
+
+_wb_diag_load_libs() {
+  # shellcheck source=wb-lib/wb-paths.sh
+  source "${_WB_LIB_DIR}/wb-paths.sh"
+  # shellcheck source=wb-lib/wb-log.sh
+  source "${_WB_LIB_DIR}/wb-log.sh"
+  # shellcheck source=wb-lib/wb-json.sh
+  source "${_WB_LIB_DIR}/wb-json.sh"
+  # shellcheck source=wb-lib/wb-config.sh
+  source "${_WB_LIB_DIR}/wb-config.sh"
+  # shellcheck source=wb-lib/wb-lock.sh
+  source "${_WB_LIB_DIR}/wb-lock.sh"
+  # shellcheck source=wb-lib/wb-dist.sh
+  source "${_WB_LIB_DIR}/wb-dist.sh"
+  # shellcheck source=wb-lib/wb-prefix.sh
+  source "${_WB_LIB_DIR}/wb-prefix.sh"
+}
+
+# Emit a safe subset of environment variables (never auth tokens).
+_wb_diag_env() {
+  local safe_prefixes=("WB_" "WINE" "DXVK_" "VKD3D_" "NVAPI_" "XDG_" "HOME" "USER" "LANG" "LC_" "PATH")
+  env | sort | while IFS= read -r line; do
+    local key="${line%%=*}"
+    local matched=0
+    local prefix
+    for prefix in "${safe_prefixes[@]}"; do
+      if [[ "${key}" == "${prefix}"* ]]; then
+        matched=1
+        break
+      fi
+    done
+    if [[ "${matched}" -eq 1 ]]; then
+      # Double-check: never emit anything that looks like a token/secret.
+      case "${key}" in
+        *TOKEN*|*SECRET*|*PASSWORD*|*PASSWD*|*AUTH*|*CREDENTIAL*|*KEY*|*PRIVATE*|*PASSPHRASE*)
+          echo "${key}=<REDACTED>"
+          ;;
+        *)
+          echo "${line}"
+          ;;
+      esac
+    fi
+  done
+}
+
+# Collect per-prefix info: classification, .wb_runtime, .wb_components sentinels.
+# NEVER copies drive_c/, user.reg, or system.reg.
+_wb_diag_prefix_info() {
+  local prefix_path="$1"
+  local pname
+  pname="$(basename "${prefix_path}")"
+
+  echo "=== Prefix: ${pname} ==="
+  echo "Path: ${prefix_path}"
+
+  local class
+  class="$(wb_prefix_classify "${prefix_path}" 2>/dev/null || echo "unknown")"
+  echo "Classification: ${class}"
+
+  if [[ -f "${prefix_path}/.wb_runtime" ]] && jq empty "${prefix_path}/.wb_runtime" 2>/dev/null; then
+    echo "--- .wb_runtime ---"
+    jq . "${prefix_path}/.wb_runtime"
+  else
+    echo ".wb_runtime: absent or malformed"
+  fi
+
+  if [[ -f "${prefix_path}/.wb_components" ]] && jq empty "${prefix_path}/.wb_components" 2>/dev/null; then
+    echo "--- .wb_components ---"
+    jq . "${prefix_path}/.wb_components"
+  else
+    echo ".wb_components: absent or malformed"
+  fi
+
+  if [[ -f "${prefix_path}/.wine_ver" ]]; then
+    echo ".wine_ver: $(cat "${prefix_path}/.wine_ver")"
+  fi
+}
+
+_wb_diag_main() {
+  local dry_run=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      --help|-h)
+        echo "Usage: wb-diag [--dry-run]"
+        echo ""
+        echo "Collect a support bundle tarball (wb-diag-<UTC>.tar.gz) in the current directory."
+        echo ""
+        echo "Collected (allowlist):"
+        echo "  env.txt              — WB_* / WINE* / XDG_* env vars (no secrets)"
+        echo "  version.txt          — wb --version"
+        echo "  runtime-list.txt     — wb runtime list"
+        echo "  prefix-list.txt      — wb prefix list"
+        echo "  log-tail.txt         — last 200 log lines"
+        echo "  per-prefix/<N>/info.txt             — classification + sentinels"
+        echo "  per-prefix/<N>/latest-snapshot.json — most recent snapshot (if any)"
+        echo "  system.txt           — uname -a, filesystem info, bash version"
+        echo ""
+        echo "NEVER collected: drive_c/, user.reg, system.reg, user.conf, auth tokens."
+        return 0
+        ;;
+      *)
+        echo "wb-diag: unknown option '$1'" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  _wb_diag_load_libs
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  local utc
+  utc="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+  # Append $$ so two concurrent runs in the same CWD don't clobber each other.
+  local bundle_name="wb-diag-${utc}-$$"
+
+  if [[ "${dry_run}" -eq 1 ]]; then
+    echo "wb-diag --dry-run: would collect:"
+    echo "  ${bundle_name}/env.txt"
+    echo "  ${bundle_name}/version.txt"
+    echo "  ${bundle_name}/runtime-list.txt"
+    echo "  ${bundle_name}/prefix-list.txt"
+    echo "  ${bundle_name}/log-tail.txt"
+    echo "  ${bundle_name}/system.txt"
+    echo "  ${bundle_name}/per-prefix/<NAME>/info.txt (for each prefix)"
+    echo "  ${bundle_name}/per-prefix/<NAME>/latest-snapshot.json (if any)"
+    echo "NEVER: drive_c/, user.reg, system.reg, user.conf, auth tokens"
+    return 0
+  fi
+
+  local bundle_dir
+  bundle_dir="$(mktemp -d)"
+  local bundle_path="${bundle_dir}/${bundle_name}"
+  mkdir -p "${bundle_path}"
+
+  # --- env.txt ---
+  _wb_diag_env > "${bundle_path}/env.txt"
+
+  # --- version.txt ---
+  "${_WB}" --version > "${bundle_path}/version.txt" 2>&1 || true
+
+  # --- runtime-list.txt ---
+  "${_WB}" runtime list > "${bundle_path}/runtime-list.txt" 2>&1 || true
+
+  # --- prefix-list.txt ---
+  "${_WB}" prefix list > "${bundle_path}/prefix-list.txt" 2>&1 || true
+
+  # --- log-tail.txt ---
+  "${_WB}" log tail 200 > "${bundle_path}/log-tail.txt" 2>&1 || true
+
+  # --- system.txt ---
+  {
+    echo "=== uname -a ==="
+    uname -a 2>/dev/null || true
+    echo ""
+    echo "=== bash version ==="
+    echo "${BASH_VERSION}"
+    echo ""
+    echo "=== filesystem (stat --file-system WB_HOME) ==="
+    # Try GNU stat first, then BSD-style
+    stat --file-system "${wb_home}" 2>/dev/null || stat -f "${wb_home}" 2>/dev/null || true
+    echo ""
+    echo "=== WB_HOME disk usage ==="
+    du -sh "${wb_home}" 2>/dev/null | awk '{print $1, $2}' || true
+  } > "${bundle_path}/system.txt"
+
+  # --- per-prefix ---
+  if [[ -d "${wb_home}/prefixes" ]]; then
+    local pname
+    while IFS= read -r pname; do
+      [[ -n "${pname}" ]] || continue
+      local ppath="${wb_home}/prefixes/${pname}"
+      [[ -d "${ppath}" ]] || continue
+
+      local pdir="${bundle_path}/per-prefix/${pname}"
+      mkdir -p "${pdir}"
+
+      # Collect info (SECURITY: no drive_c/, no reg files)
+      _wb_diag_prefix_info "${ppath}" > "${pdir}/info.txt" 2>&1 || true
+
+      # Latest snapshot (already JSON — safe to include)
+      local snap_dir="${wb_home}/state/prefix-snapshots/${pname}"
+      if [[ -d "${snap_dir}" ]]; then
+        local latest_snap
+        latest_snap="$(find "${snap_dir}" -maxdepth 1 -name "${pname}-*.json" \
+          | sort -r | head -1 2>/dev/null || true)"
+        if [[ -n "${latest_snap}" && -f "${latest_snap}" ]]; then
+          cp "${latest_snap}" "${pdir}/latest-snapshot.json"
+        fi
+      fi
+    done < <(wb_prefix_list 2>/dev/null || true)
+  fi
+
+  # --- Create tarball ---
+  # Use umask 077 for the tarball so it is user-readable only; shared-dir
+  # (/tmp) runs should not leak diagnostic contents to other local users.
+  local tarball_name="${bundle_name}.tar.gz"
+  local tarball_path="${PWD}/${tarball_name}"
+
+  ( umask 077; tar -czf "${tarball_path}" -C "${bundle_dir}" "${bundle_name}" )
+  rm -rf "${bundle_dir}"
+
+  # Compute SHA256
+  local sha256
+  sha256="$(sha256sum "${tarball_path}" | awk '{print $1}')"
+
+  echo "${tarball_path}"
+  echo "SHA256: ${sha256}"
+}
+
+_wb_diag_main "$@"

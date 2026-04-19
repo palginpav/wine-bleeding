@@ -1,6 +1,11 @@
 # runtime — Developer README
 
-This directory contains the wb-runtime source tree (milestone M0 scaffold).
+**v1.0.0-MVP** — The MVP release of the wine-bleeding native runtime layer.
+This release ships all nine planned MVP milestones (M0-M8) and is the
+foundation for post-MVP features (GUI, multi-build, container isolation).
+Post-MVP items are listed in the "Post-MVP scope" section below.
+
+This directory contains the wb-runtime source tree.
 It is a sibling of `tools/`, `dlls/`, and `server/` and is intentionally
 independent of Wine's build system.
 
@@ -88,7 +93,7 @@ or prints a skip message and exits 0 so CI is not broken.
 | M5 | done | `wb run` launch dispatcher: env composition, hooks chain, exec |
 | M6 | done | PP-plugin mode: reapply hook, install/uninstall, deploy-to-portproton refactor |
 | M7 | done | Standalone installer, migration scaffolding (migrate/export), release packaging |
-| M8+ | planned | Snapshot/repair, log rotation, multi-build switching |
+| M8 | done | Snapshot/repair, log rotation, wb-diag support bundle, MVP polish |
 
 ## M7 — Standalone installer + migration (M7)
 
@@ -355,3 +360,67 @@ WINEPREFIX="$WB_HOME/prefixes/test-prefix" \
 ```
 
 A successfully initialised prefix will open Notepad without errors.
+
+## M8 — Snapshot/repair, log rotation, wb-diag (v1.0.0-MVP)
+
+### Snapshot and repair
+
+Capture the recoverable state of a prefix at any time:
+
+```bash
+wb prefix snapshot GAME
+```
+
+List available snapshots (newest first):
+
+```bash
+wb prefix snapshots GAME
+```
+
+After PortProton's `pw_clear_pfx` wipes a prefix, recover it:
+
+```bash
+wb prefix repair GAME              # prompts for confirmation
+wb prefix repair GAME --yes        # non-interactive
+wb prefix repair GAME --yes --from-snapshot 2026-04-19T12:00:00Z
+```
+
+Repair re-runs wineboot + component deployment + DllOverrides from the snapshot.
+User data (game saves, Documents) is intentionally NOT restored — snapshots
+carry only metadata, never file contents (privacy by design).
+
+### Log rotation
+
+`wb-log.sh` rotates `wb.log` to `wb.log.1` .. `wb.log.5` when the log file
+reaches 10 MB. Override the threshold:
+
+```bash
+export WB_LOG_MAX_BYTES=5242880    # 5 MB
+```
+
+Uses `flock` to prevent concurrent writers from racing during rotation.
+
+### wb-diag support bundle
+
+Collect a support bundle for bug reports:
+
+```bash
+wb-diag                 # creates wb-diag-<UTC>.tar.gz in the current directory
+wb-diag --dry-run       # lists what would be collected without creating the tarball
+```
+
+The tarball includes env vars, version info, runtime/prefix listings, log tail,
+and per-prefix JSON sentinels. It NEVER includes `drive_c/` contents, `user.reg`,
+`system.reg`, `user.conf`, or auth tokens.
+
+## Post-MVP scope
+
+The following features are planned for post-MVP milestones and are NOT included
+in v1.0.0-MVP:
+
+- **GUI launcher** (M12) — graphical front-end for wb
+- **Multi-build distro-switching** (M9) — switch between Wine builds per prefix
+- **Pressure-vessel / container isolation** (M11, opt-in)
+- **Go CLI rewrite** (M10) — performance-focused rewrite of the bash dispatcher
+- **Automatic snapshot on every `wb run`** — the function is callable; auto-integration
+  is a follow-up polish item (do NOT modify `cmd_run` until M9 scope is defined)
