@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="1.2.0-dev"
+WB_VERSION="1.3.0-dev"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -52,16 +52,26 @@ _wb_load_pp_lib() {
   source "${_WB_LIB_DIR}/wb-pp-installer.sh"
 }
 
+_wb_load_runtimes_lib() {
+  _wb_load_libs
+  # shellcheck source=wb-lib/wb-runtimes.sh
+  source "${_WB_LIB_DIR}/wb-runtimes.sh"
+}
+
 _wb_load_multibuild_lib() {
   _wb_load_wineboot_lib
   # shellcheck source=wb-lib/wb-multibuild.sh
   source "${_WB_LIB_DIR}/wb-multibuild.sh"
+  # shellcheck source=wb-lib/wb-runtimes.sh
+  source "${_WB_LIB_DIR}/wb-runtimes.sh"
 }
 
 _wb_load_run_lib() {
   _wb_load_wineboot_lib
   # shellcheck source=wb-lib/wb-multibuild.sh
   source "${_WB_LIB_DIR}/wb-multibuild.sh"
+  # shellcheck source=wb-lib/wb-runtimes.sh
+  source "${_WB_LIB_DIR}/wb-runtimes.sh"
   # shellcheck source=wb-lib/wb-env.sh
   source "${_WB_LIB_DIR}/wb-env.sh"
   # shellcheck source=wb-lib/wb-hooks.sh
@@ -102,14 +112,18 @@ Subcommands:
   config enable-container   Enable pressure-vessel / SLR container wrapping (sets WB_CONTAINER=1)
   config disable-container  Disable pressure-vessel / SLR container wrapping (unsets WB_CONTAINER)
   log tail [N]              Print last N JSON log entries (default 50)
-  runtime list              List installed Wine dists (name, active, size, build date)
-                            [--multi] show MULTI column (whether dist is non-aliased)
+  runtime list              List installed Wine dists + registered plugins with KIND column
+                            [--multi]    show MULTI column (whether dist is non-aliased)
+                            [--native]   show only native dists (dist/ directory entries)
+                            [--external] show only external plugin entries (runtimes.d/)
   runtime info <NAME>       Print .wb_dist_meta JSON for a dist
   runtime install <TARBALL> Extract tarball into dist/, write manifest
                             [--activate] also point WINE-BLEEDING alias at it
   runtime activate <NAME>   Re-point WINE-BLEEDING alias atomically
   runtime prune [--keep N]  Remove oldest dists beyond N most recent (default 3)
                             [--yes] skip confirmation prompt
+  runtime register <JSON>   Register an external Wine build from a plugin JSON descriptor
+  runtime unregister <NAME> Remove a registered external plugin by name
   prefix list               List known prefixes with classification and last-adopted time
   prefix history <NAME>     Print runtime-switch history for a prefix (M9 multi-build)
   prefix info <NAME>        Print classification and .wb_runtime JSON for a prefix
@@ -245,17 +259,22 @@ cmd_config_disable_container() {
 }
 
 cmd_runtime_list() {
-  local show_multi=0
+  local show_multi=0 only_native=0 only_external=0
   local -a leftover_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --multi) show_multi=1 ;;
-      *) leftover_args+=("$1") ;;
+      --multi)    show_multi=1 ;;
+      --native)   only_native=1 ;;
+      --external) only_external=1 ;;
+      *)          leftover_args+=("$1") ;;
     esac
     shift
   done
 
   _wb_load_dist_lib
+  # Load runtimes lib for plugin enumeration
+  # shellcheck source=wb-lib/wb-runtimes.sh
+  source "${_WB_LIB_DIR}/wb-runtimes.sh"
   wb_config_load
 
   # --multi flag OR WB_MULTIBUILD=1 enables the MULTI column
@@ -269,16 +288,17 @@ cmd_runtime_list() {
   local alias_target
   alias_target="$(wb_dist_resolve_alias 2>/dev/null || true)"
 
+  # Print header — always includes KIND column (M13)
   if [[ "${show_multi}" -eq 1 ]]; then
-    printf '%-28s %-6s %-6s %-8s %s\n' "NAME" "ACTIVE" "MULTI" "SIZE" "BUILD_DATE"
+    printf '%-28s %-8s %-6s %-6s %-8s %s\n' "NAME" "KIND" "ACTIVE" "MULTI" "SIZE" "BUILD_DATE"
   else
-    printf '%-28s %-6s %-8s %s\n' "NAME" "ACTIVE" "SIZE" "BUILD_DATE"
+    printf '%-28s %-8s %-6s %-8s %s\n' "NAME" "KIND" "ACTIVE" "SIZE" "BUILD_DATE"
   fi
 
   local name entry active size build_date
-  # In --multi mode, also list alias-only dirs (symlinks) that are non-native dirs
-  _wb_runtime_list_all() {
-    # Emit both real dirs and the alias if --multi
+
+  # Helper: enumerate native dist names
+  _wb_runtime_list_native_names() {
     if [[ "${show_multi}" -eq 1 ]]; then
       local e n
       for e in "${dist_dir}"/*/; do
@@ -291,29 +311,49 @@ cmd_runtime_list() {
     fi
   }
 
-  while IFS= read -r name; do
-    entry="${dist_dir}/${name}"
-    if [[ "${entry}" == "${alias_target}" ]]; then
-      active="y"
-    else
-      active="n"
-    fi
-    size="$(timeout 3 du -sh "${entry}" 2>/dev/null | awk '{print $1}' || echo "?")"
-    build_date="$(wb_dist_meta_read "${entry}" '.build_utc' 2>/dev/null || true)"
-    if [[ -z "${build_date}" ]]; then
-      build_date="$(stat -c '%y' "${entry}" 2>/dev/null | cut -d' ' -f1 || echo "?")"
-    fi
-    if [[ "${show_multi}" -eq 1 ]]; then
-      # MULTI column: "y" if this is a non-aliased real dist dir
-      local multi_col="n"
-      if [[ ! -L "${dist_dir}/${name}" ]]; then
-        multi_col="y"
+  # --- Native dists ---
+  if [[ "${only_external}" -eq 0 ]]; then
+    while IFS= read -r name; do
+      entry="${dist_dir}/${name}"
+      if [[ "${entry}" == "${alias_target}" ]]; then
+        active="y"
+      else
+        active="n"
       fi
-      printf '%-28s %-6s %-6s %-8s %s\n' "${name}" "${active}" "${multi_col}" "${size}" "${build_date}"
-    else
-      printf '%-28s %-6s %-8s %s\n' "${name}" "${active}" "${size}" "${build_date}"
-    fi
-  done < <(_wb_runtime_list_all)
+      size="$(timeout 3 du -sh "${entry}" 2>/dev/null | awk '{print $1}' || echo "?")"
+      build_date="$(wb_dist_meta_read "${entry}" '.build_utc' 2>/dev/null || true)"
+      if [[ -z "${build_date}" ]]; then
+        build_date="$(stat -c '%y' "${entry}" 2>/dev/null | cut -d' ' -f1 || echo "?")"
+      fi
+      if [[ "${show_multi}" -eq 1 ]]; then
+        local multi_col="n"
+        if [[ ! -L "${dist_dir}/${name}" ]]; then
+          multi_col="y"
+        fi
+        printf '%-28s %-8s %-6s %-6s %-8s %s\n' \
+          "${name}" "native" "${active}" "${multi_col}" "${size}" "${build_date}"
+      else
+        printf '%-28s %-8s %-6s %-8s %s\n' \
+          "${name}" "native" "${active}" "${size}" "${build_date}"
+      fi
+    done < <(_wb_runtime_list_native_names)
+  fi
+
+  # --- External plugins ---
+  if [[ "${only_native}" -eq 0 ]]; then
+    local plugin_name plugin_path
+    local _plugin_file
+    while IFS=$'\t' read -r plugin_name plugin_path _plugin_file; do
+      [[ -n "${plugin_name}" ]] || continue
+      if [[ "${show_multi}" -eq 1 ]]; then
+        printf '%-28s %-8s %-6s %-6s %-8s %s\n' \
+          "${plugin_name}" "external" "n" "n" "-" "-"
+      else
+        printf '%-28s %-8s %-6s %-8s %s\n' \
+          "${plugin_name}" "external" "n" "-" "-"
+      fi
+    done < <(wb_runtimes_plugin_list 2>/dev/null || true)
+  fi
 }
 
 cmd_runtime_info() {
@@ -565,6 +605,57 @@ cmd_runtime_prune() {
     rm -rf "${dist_dir:?}/${d}"
     echo "Deleted: ${d}"
   done
+}
+
+# ---------------------------------------------------------------------------
+# cmd_runtime_register: wb runtime register <JSON_PATH>
+# Validates and copies an external plugin JSON into the plugin registry.
+# ---------------------------------------------------------------------------
+cmd_runtime_register() {
+  local json_path="${1:-}"
+  if [[ -z "${json_path}" ]]; then
+    echo "wb runtime register: JSON_PATH required" >&2
+    exit 1
+  fi
+
+  _wb_load_runtimes_lib
+
+  wb_runtimes_plugin_register "${json_path}"
+
+  # Print the registered name for confirmation
+  local name
+  name="$(jq -r '.name // empty' "${json_path}" 2>/dev/null || true)"
+  echo "registered: ${name}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_runtime_unregister: wb runtime unregister <NAME>
+# Removes a registered external plugin JSON by name.
+# ---------------------------------------------------------------------------
+cmd_runtime_unregister() {
+  local name="${1:-}"
+  if [[ -z "${name}" ]]; then
+    echo "wb runtime unregister: NAME required" >&2
+    exit 1
+  fi
+
+  # Validate name before any file operation
+  _wb_validate_path_arg "runtime unregister" "${name}"
+
+  _wb_load_runtimes_lib
+
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local plugin_dir="${wb_home}/plugins/runtimes.d"
+  local dest="${plugin_dir}/${name}.json"
+
+  if [[ ! -f "${dest}" ]]; then
+    echo "wb runtime unregister: plugin '${name}' not found (${dest})" >&2
+    exit 1
+  fi
+
+  rm -f "${dest}"
+  echo "unregistered: ${name}"
 }
 
 _wb_validate_path_arg() {
@@ -1465,7 +1556,7 @@ cmd_run() {
   # Step 3: Resolve runtime (dist path)
   local dist_path
 
-  # M9: if --runtime NAME given, check multi-build gating first
+  # M9/M13: if --runtime NAME given, check multi-build gating first
   if [[ -n "${runtime_name}" ]]; then
     _wb_validate_path_arg "run --runtime" "${runtime_name}"
     # Check if multi-build is enabled; if not, and the requested runtime differs
@@ -1481,15 +1572,14 @@ cmd_run() {
         exit 1
       fi
     fi
-    dist_path="${wb_home}/dist/${runtime_name}"
-    if [[ ! -d "${dist_path}" ]]; then
-      echo "wb run: runtime '${runtime_name}' not found in ${wb_home}/dist/" >&2
+    # M13: use extended resolver (dist/ wins over plugins/runtimes.d/)
+    if ! dist_path="$(wb_runtime_resolve "${runtime_name}" 2>/dev/null)"; then
+      echo "wb run: runtime '${runtime_name}' not found in dist/ or plugin registry" >&2
       exit 1
     fi
   elif [[ -n "${WB_RUNTIME:-}" && "${WB_RUNTIME}" != "WINE-BLEEDING" ]]; then
-    dist_path="${wb_home}/dist/${WB_RUNTIME}"
-    if [[ ! -d "${dist_path}" ]]; then
-      echo "wb run: WB_RUNTIME '${WB_RUNTIME}' not found in ${wb_home}/dist/" >&2
+    if ! dist_path="$(wb_runtime_resolve "${WB_RUNTIME}" 2>/dev/null)"; then
+      echo "wb run: WB_RUNTIME '${WB_RUNTIME}' not found in dist/ or plugin registry" >&2
       exit 1
     fi
   else
@@ -1884,9 +1974,15 @@ main() {
           shift 2
           cmd_runtime_prune "$@"
           ;;
+        register)
+          cmd_runtime_register "${3:-}"
+          ;;
+        unregister)
+          cmd_runtime_unregister "${3:-}"
+          ;;
         *)
           echo "wb runtime: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, install, activate, prune" >&2
+          echo "Valid actions: list, info, install, activate, prune, register, unregister" >&2
           exit 1
           ;;
       esac

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wine-bleeding.example/schemas/wb_runtime_plugin.schema.json",
+  "title": "wb runtime plugin descriptor",
+  "description": "Schema for $WB_HOME/plugins/runtimes.d/<name>.json — registers an external Wine build as a selectable runtime.",
+  "type": "object",
+  "required": ["schema", "name", "path"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Always 1."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "Unique runtime identifier. Used as the selector in --runtime NAME and as the filename stem (<name>.json)."
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\s]+$",
+      "description": "Absolute path to the external Wine build root (e.g. /opt/ge-proton). Must be absolute and contain no whitespace."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["external", "native"],
+      "default": "external",
+      "description": "Runtime kind. 'external' for third-party builds (GE-Proton, Lutris, custom). 'native' is reserved for wb-managed dists."
+    },
+    "wine_major_version": {
+      "type": "string",
+      "description": "Major Wine version number (e.g. '9'). Informational; used for display and wineboot gating."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-form human-readable notes about this runtime (e.g. 'GloriousEggroll Proton build')."
+    }
+  }
+}

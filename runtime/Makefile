@@ -11,6 +11,8 @@ SCHEMA_FILE           := $(RUNTIME_DIR)share/schemas/wb_dist_meta.schema.json
 SCHEMA_FILE_PFX       := $(RUNTIME_DIR)share/schemas/wb_runtime.schema.json
 SCHEMA_FILE_COMP      := $(RUNTIME_DIR)share/schemas/wb_components.schema.json
 SCHEMA_FILE_PPDB      := $(RUNTIME_DIR)share/schemas/wb_ppdb.schema.json
+SCHEMA_FILE_PLUGIN    := $(RUNTIME_DIR)share/schemas/wb_runtime_plugin.schema.json
+FIXTURE_PLUGIN        := $(TESTS_DIR)/fixtures/runtime-plugins/ge-proton-9-26.json
 FIXTURE_DIST          := $(TESTS_DIR)/fixtures/fake-dist
 FIXTURE_PP_PREFIX     := $(TESTS_DIR)/fixtures/fake-pp-prefix
 
@@ -35,6 +37,7 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-snapshot.sh \
   $(SRC_DIR)/wb-lib/wb-multibuild.sh \
   $(SRC_DIR)/wb-lib/wb-container.sh \
+  $(SRC_DIR)/wb-lib/wb-runtimes.sh \
   $(SRC_DIR)/hooks/reapply.sh \
   $(RUNTIME_DIR)install.sh \
   $(RUNTIME_DIR)publish-release-integration.sh
@@ -123,7 +126,14 @@ COMPEOF \
 	  else \
 	    rc4=0; \
 	  fi; \
-	  exit $$rc2 || exit $$rc3 || exit $$rc4; \
+	  if [[ -f "$(SCHEMA_FILE_PLUGIN)" && -f "$(FIXTURE_PLUGIN)" ]]; then \
+	    echo "Validating wb_runtime_plugin.schema.json against fixture..."; \
+	    check-jsonschema --schemafile "$(SCHEMA_FILE_PLUGIN)" "$(FIXTURE_PLUGIN)"; \
+	    rc5=$$?; \
+	  else \
+	    rc5=0; \
+	  fi; \
+	  exit $$rc2 || exit $$rc3 || exit $$rc4 || exit $$rc5; \
 	fi
 
 install:

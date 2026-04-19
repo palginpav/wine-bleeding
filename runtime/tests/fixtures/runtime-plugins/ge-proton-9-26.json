@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "name": "GE-Proton-9-26",
+  "path": "/opt/ge-proton-9-26",
+  "kind": "external",
+  "wine_major_version": "9",
+  "notes": "GloriousEggroll's Proton build (GE-Proton9-26)"
+}

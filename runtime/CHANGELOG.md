@@ -1,5 +1,37 @@
 # wine-bleeding Runtime Layer Changelog
 
+## [Unreleased] — v1.3.0-dev
+
+### M13 — Runtime plugin registry
+
+- **`wb runtime register <JSON>`** — validates and registers an external Wine
+  build (GE-Proton, Lutris, custom) from a plugin JSON descriptor into
+  `$WB_HOME/plugins/runtimes.d/<name>.json`. Atomic write; idempotent on same
+  content. Required fields: `schema`, `name`, `path`. Name pattern enforced
+  (`^[A-Za-z0-9_.-]+$`); `path` must be absolute with no whitespace.
+- **`wb runtime unregister <NAME>`** — removes a registered plugin by name.
+- **`wb runtime list`** — now shows both native `dist/` entries and external
+  plugin entries in a single table with a `KIND` column (`native`|`external`).
+  - `--native` flag: show only dist entries.
+  - `--external` flag: show only plugin entries.
+  - `--multi` flag still works orthogonally.
+- **`wb run --runtime NAME`** — extended resolver now checks
+  `plugins/runtimes.d/` after `dist/` (dist wins on name collision).
+- **New lib** — `runtime/src/wb-lib/wb-runtimes.sh` with public functions
+  `wb_runtimes_plugin_dir`, `wb_runtimes_plugin_list`,
+  `wb_runtimes_plugin_read`, `wb_runtimes_plugin_register`,
+  `wb_runtimes_plugin_resolve`.
+- **New schema** — `runtime/share/schemas/wb_runtime_plugin.schema.json`
+  (JSON Schema Draft 2020-12).
+- **12 new bats tests** in `runtime/tests/22_runtimes_plugin.bats`.
+- **Resolver precedence**: dist/ > plugins/runtimes.d/ > WINE-BLEEDING alias.
+
+### Breaking changes
+
+- `WB_VERSION` bumped to `1.3.0-dev`.
+
+---
+
 ## [Unreleased] — v1.2.0-dev
 
 ### M11 — Pressure-vessel / SLR container opt-in

@@ -19,8 +19,11 @@ wb_multibuild_enabled() {
 # ---------------------------------------------------------------------------
 # wb_runtime_resolve <name>
 # Resolve a runtime NAME to an absolute dist path.
-# Honors $WB_HOME/dist/<NAME>/ if present; falls back to the WINE-BLEEDING
-# alias target if NAME == "WINE-BLEEDING".
+# Resolution order (first match wins):
+#   1. $WB_HOME/dist/<NAME>/ directory exists   (native dist)
+#   2. plugins/runtimes.d/<NAME>.json "path"    (external plugin)
+#   3. WINE-BLEEDING alias symlink target        (stable alias fallback)
+# Returns empty + exit 1 if nothing matches.
 # ---------------------------------------------------------------------------
 wb_runtime_resolve() {
   local name="$1"
@@ -34,13 +37,24 @@ wb_runtime_resolve() {
   wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
   local dist_dir="${wb_home}/dist"
 
-  # If a directory exists directly, use it.
+  # Step 1: If a dist directory exists directly, prefer it (native wins).
   if [[ -d "${dist_dir}/${name}" ]]; then
     printf '%s' "${dist_dir}/${name}"
     return 0
   fi
 
-  # WINE-BLEEDING is the stable alias; resolve its symlink target.
+  # Step 2: Check external plugin registry (plugins/runtimes.d/*.json).
+  # wb-runtimes.sh must already be sourced by the caller.
+  if declare -f wb_runtimes_plugin_resolve >/dev/null 2>&1; then
+    local plugin_path
+    plugin_path="$(wb_runtimes_plugin_resolve "${name}" 2>/dev/null || true)"
+    if [[ -n "${plugin_path}" ]]; then
+      printf '%s' "${plugin_path}"
+      return 0
+    fi
+  fi
+
+  # Step 3: WINE-BLEEDING is the stable alias; resolve its symlink target.
   if [[ "${name}" == "WINE-BLEEDING" ]]; then
     local alias_path="${dist_dir}/WINE-BLEEDING"
     if [[ -L "${alias_path}" ]] || [[ -d "${alias_path}" ]]; then
@@ -53,7 +67,7 @@ wb_runtime_resolve() {
     fi
   fi
 
-  echo "wb_runtime_resolve: runtime '${name}' not found in ${dist_dir}" >&2
+  echo "wb_runtime_resolve: runtime '${name}' not found in ${dist_dir} or plugin registry" >&2
   return 1
 }
 

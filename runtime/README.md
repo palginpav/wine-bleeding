@@ -94,6 +94,84 @@ or prints a skip message and exits 0 so CI is not broken.
 | M6 | done | PP-plugin mode: reapply hook, install/uninstall, deploy-to-portproton refactor |
 | M7 | done | Standalone installer, migration scaffolding (migrate/export), release packaging |
 | M8 | done | Snapshot/repair, log rotation, wb-diag support bundle, MVP polish |
+| M9 | done | Multi-build / distro-switching (`wb run --runtime NAME`, `wb runtime list --multi`) |
+| M11 | done | Pressure-vessel / SLR container opt-in (`WB_CONTAINER=1`) |
+| M13 | done | Runtime plugin registry (`wb runtime register/unregister`, external runtimes in list + resolver) |
+
+## M13 — Runtime plugin registry
+
+Enables advanced users to register external Wine builds — GE-Proton, Lutris,
+custom forks — as selectable runtimes alongside wb's own `dist/` dists.
+
+### Registering an external runtime
+
+Create a plugin JSON descriptor:
+
+```json
+{
+  "schema": 1,
+  "name": "GE-Proton-9-26",
+  "path": "/home/user/.steam/root/compatibilitytools.d/GE-Proton9-26",
+  "kind": "external",
+  "wine_major_version": "9",
+  "notes": "GloriousEggroll's Proton build"
+}
+```
+
+Required fields: `schema` (always `1`), `name` (alphanumeric + `_.-`), `path`
+(absolute, no whitespace). Optional: `kind`, `wine_major_version`, `notes`.
+
+Then register it:
+
+```bash
+wb runtime register /path/to/ge-proton-9-26.json
+# registered: GE-Proton-9-26
+```
+
+The file is copied atomically into `$WB_HOME/plugins/runtimes.d/GE-Proton-9-26.json`.
+Re-registering the same content is a no-op.
+
+### Listing runtimes (including externals)
+
+```bash
+wb runtime list            # native + external, with KIND column
+wb runtime list --native   # only dist/ entries
+wb runtime list --external # only plugin entries
+wb runtime list --multi    # add MULTI column (M9 flag, works orthogonally)
+```
+
+### Using an external runtime
+
+```bash
+wb config enable-multibuild
+wb run game.exe --runtime GE-Proton-9-26
+```
+
+Resolver precedence (first match wins):
+1. `$WB_HOME/dist/<NAME>/` — native dist (always wins on name collision)
+2. `$WB_HOME/plugins/runtimes.d/<NAME>.json` — external plugin path
+3. `WINE-BLEEDING` alias symlink target (fallback for the stable alias)
+
+### Unregistering
+
+```bash
+wb runtime unregister GE-Proton-9-26
+# unregistered: GE-Proton-9-26
+```
+
+### Schema
+
+Plugin files are validated against
+`runtime/share/schemas/wb_runtime_plugin.schema.json` (JSON Schema Draft 2020-12).
+Run `make schema-check` to validate the fixture against the schema.
+
+### Security notes
+
+- `path` is recorded as-is; symlinks are **not** resolved at register time
+  (consistent with M11 policy of not granting bind-mount access via symlink).
+- `name` is validated against `^[A-Za-z0-9_.-]+$` before any filesystem
+  operation — path traversal via `..` or slashes is rejected immediately.
+- Plugin JSON is written atomically via `wb_json_write_atomic` (temp + `mv -T`).
 
 ## M7 — Standalone installer + migration (M7)
 
