@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M1"
+WB_VERSION="0.1.0-M2"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -18,6 +18,12 @@ _wb_load_libs() {
   source "${_WB_LIB_DIR}/wb-lock.sh"
 }
 
+_wb_load_dist_lib() {
+  _wb_load_libs
+  # shellcheck source=wb-lib/wb-dist.sh
+  source "${_WB_LIB_DIR}/wb-dist.sh"
+}
+
 usage() {
   echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)" >&2
 }
@@ -31,13 +37,20 @@ cmd_help() {
 wb ${WB_VERSION} -- wine-bleeding runtime dispatcher
 
 Subcommands:
-  config show           Print effective config as JSON (all 5 layers merged)
-  config path [KEY]     Print which file supplied each config key (or only KEY)
-  log tail [N]          Print last N JSON log entries (default 50)
-  help                  Show this help
-  --version             Print version string
+  config show               Print effective config as JSON (all 5 layers merged)
+  config path [KEY]         Print which file supplied each config key (or only KEY)
+  log tail [N]              Print last N JSON log entries (default 50)
+  runtime list              List installed Wine dists (name, active, size, build date)
+  runtime info <NAME>       Print .wb_dist_meta JSON for a dist
+  runtime install <TARBALL> Extract tarball into dist/, write manifest
+                            [--activate] also point WINE-BLEEDING alias at it
+  runtime activate <NAME>   Re-point WINE-BLEEDING alias atomically
+  runtime prune [--keep N]  Remove oldest dists beyond N most recent (default 3)
+                            [--yes] skip confirmation prompt
+  help                      Show this help
+  --version                 Print version string
 
-Future commands: prefix create, prefix list, run, runtime install
+Future commands: prefix create, prefix list, run
 EOF
 }
 
@@ -52,6 +65,282 @@ cmd_config_path() {
   _wb_load_libs
   wb_config_load
   wb_config_path_for "${key}"
+}
+
+cmd_runtime_list() {
+  _wb_load_dist_lib
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  local alias_target
+  alias_target="$(wb_dist_resolve_alias)"
+
+  printf '%-28s %-6s %-8s %s\n' "NAME" "ACTIVE" "SIZE" "BUILD_DATE"
+  local name entry active size build_date
+  while IFS= read -r name; do
+    entry="${dist_dir}/${name}"
+    if [[ "${entry}" == "${alias_target}" ]]; then
+      active="y"
+    else
+      active="n"
+    fi
+    size="$(timeout 3 du -sh "${entry}" 2>/dev/null | awk '{print $1}' || echo "?")"
+    build_date="$(wb_dist_meta_read "${entry}" '.build_utc' 2>/dev/null || true)"
+    if [[ -z "${build_date}" ]]; then
+      build_date="$(stat -c '%y' "${entry}" 2>/dev/null | cut -d' ' -f1 || echo "?")"
+    fi
+    printf '%-28s %-6s %-8s %s\n' "${name}" "${active}" "${size}" "${build_date}"
+  done < <(wb_dist_list)
+}
+
+cmd_runtime_info() {
+  local name="${1:-}"
+  if [[ -z "${name}" ]]; then
+    echo "wb runtime info: NAME required" >&2
+    exit 1
+  fi
+  if ! [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "wb runtime info: invalid NAME '${name}' (expected [A-Za-z0-9_.-]+)" >&2
+    exit 1
+  fi
+  _wb_load_dist_lib
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  local dist_path="${dist_dir}/${name}"
+  if [[ ! -d "${dist_path}" ]]; then
+    echo "wb runtime info: dist '${name}' not found in ${dist_dir}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${dist_path}/.wb_dist_meta" ]]; then
+    echo "wb runtime info: no .wb_dist_meta in '${name}'" >&2
+    exit 1
+  fi
+  jq . "${dist_path}/.wb_dist_meta"
+}
+
+cmd_runtime_install() {
+  local tarball="" activate=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --activate) activate=1 ;;
+      *) tarball="$1" ;;
+    esac
+    shift
+  done
+
+  if [[ -z "${tarball}" ]]; then
+    echo "wb runtime install: TARBALL required" >&2
+    exit 1
+  fi
+  if [[ ! -f "${tarball}" ]]; then
+    echo "wb runtime install: tarball not found: ${tarball}" >&2
+    exit 1
+  fi
+
+  _wb_load_dist_lib
+
+  # SECURITY: validate tarball entries before extraction
+  local entry
+  while IFS= read -r entry; do
+    # Reject absolute paths
+    if [[ "${entry}" == /* ]]; then
+      echo "wb runtime install: REJECTED — tarball contains absolute path: ${entry}" >&2
+      exit 1
+    fi
+    # Reject path traversal via ..
+    if [[ "${entry}" == *..* ]]; then
+      echo "wb runtime install: REJECTED — tarball contains path traversal: ${entry}" >&2
+      exit 1
+    fi
+  done < <(tar -tf "${tarball}" 2>/dev/null)
+
+  # SECURITY: validate absolute AND relative-escape symlinks inside the tarball.
+  # Relative targets containing `..` can still escape the dist root after extraction.
+  local link_entry link_target
+  while IFS= read -r link_entry; do
+    link_target="${link_entry##* -> }"
+    if [[ "${link_target}" == /* ]]; then
+      echo "wb runtime install: REJECTED — tarball contains absolute symlink: ${link_target}" >&2
+      exit 1
+    fi
+    if [[ "${link_target}" == *..* ]]; then
+      echo "wb runtime install: REJECTED — tarball contains escape symlink (..): ${link_target}" >&2
+      exit 1
+    fi
+  done < <(tar -tvf "${tarball}" 2>/dev/null | grep '^l')
+
+  # SECURITY: reject non-regular entries (FIFO, device, socket).
+  local type_line type_char
+  while IFS= read -r type_line; do
+    type_char="${type_line:0:1}"
+    case "${type_char}" in
+      -|d|l) : ;;  # regular, directory, symlink OK
+      *)
+        echo "wb runtime install: REJECTED — tarball contains non-regular entry (${type_char}): ${type_line}" >&2
+        exit 1
+        ;;
+    esac
+  done < <(tar -tvf "${tarball}" 2>/dev/null)
+
+  # Validate single top-level directory matching WINE-BLEEDING-*
+  local top_dirs
+  top_dirs="$(tar -tf "${tarball}" 2>/dev/null \
+    | grep -oP '^[^/]+/' \
+    | sort -u || true)"
+  local top_count
+  top_count="$(echo "${top_dirs}" | grep -c . || true)"
+  if [[ "${top_count}" -ne 1 ]]; then
+    echo "wb runtime install: REJECTED — tarball must contain exactly one top-level directory, found: ${top_dirs}" >&2
+    exit 1
+  fi
+  local top_dir
+  top_dir="$(echo "${top_dirs}" | tr -d '/')"
+  if [[ "${top_dir}" != WINE-BLEEDING-* ]]; then
+    echo "wb runtime install: REJECTED — top-level directory must be named WINE-BLEEDING-*, got: ${top_dir}" >&2
+    exit 1
+  fi
+
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  mkdir -p "${dist_dir}"
+
+  local dist_path="${dist_dir}/${top_dir}"
+  # Clean up partial extraction if install fails partway (H1/M1).
+  trap 'rm -rf "${dist_path}"' ERR
+
+  wb_log_info "Installing ${tarball} into ${dist_dir}"
+  tar --no-same-owner --no-same-permissions -xf "${tarball}" -C "${dist_dir}"
+
+  wb_dist_meta_write "${dist_path}"
+  wb_log_info "Wrote .wb_dist_meta for ${top_dir}"
+  trap - ERR
+
+  if [[ "${activate}" -eq 1 ]]; then
+    wb_dist_set_alias "${dist_path}"
+    wb_log_info "Activated ${top_dir} as WINE-BLEEDING alias"
+  fi
+
+  echo "Installed: ${top_dir}"
+}
+
+cmd_runtime_activate() {
+  local name="${1:-}"
+  if [[ -z "${name}" ]]; then
+    echo "wb runtime activate: NAME required" >&2
+    exit 1
+  fi
+  if ! [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "wb runtime activate: invalid NAME '${name}' (expected [A-Za-z0-9_.-]+)" >&2
+    exit 1
+  fi
+  _wb_load_dist_lib
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  local dist_path="${dist_dir}/${name}"
+  if [[ ! -d "${dist_path}" ]]; then
+    echo "wb runtime activate: dist '${name}' not found in ${dist_dir}" >&2
+    exit 1
+  fi
+  wb_dist_set_alias "${dist_path}"
+  wb_log_info "Activated ${name} as WINE-BLEEDING alias"
+  echo "Activated: ${name}"
+}
+
+cmd_runtime_prune() {
+  local keep=3 yes=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep)
+        keep="${2:-3}"
+        shift
+        ;;
+      --keep=*)
+        keep="${1#--keep=}"
+        ;;
+      --yes)
+        yes=1
+        ;;
+    esac
+    shift
+  done
+
+  if ! [[ "${keep}" =~ ^[0-9]+$ ]]; then
+    echo "wb runtime prune: --keep must be a non-negative integer, got '${keep}'" >&2
+    exit 1
+  fi
+
+  _wb_load_dist_lib
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+
+  local alias_target
+  alias_target="$(wb_dist_resolve_alias)"
+
+  # Build sorted list: newest first, by build_utc then fallback mtime
+  local -a all_dists=()
+  local name entry
+  while IFS= read -r name; do
+    entry="${dist_dir}/${name}"
+    local ts
+    ts="$(wb_dist_meta_read "${entry}" '.build_utc' 2>/dev/null || true)"
+    if [[ -z "${ts}" ]]; then
+      ts="$(stat -c '%Y' "${entry}" 2>/dev/null || echo "0")"
+    fi
+    all_dists+=("${ts}|${name}")
+  done < <(wb_dist_list)
+
+  # Sort descending by timestamp (newest first)
+  local -a sorted_dists=()
+  while IFS= read -r line; do
+    sorted_dists+=("${line}")
+  done < <(printf '%s\n' "${all_dists[@]}" | sort -t'|' -k1 -r)
+
+  local total="${#sorted_dists[@]}"
+  if [[ "${total}" -le "${keep}" ]]; then
+    echo "Nothing to prune: ${total} dist(s) present, keeping ${keep}"
+    return 0
+  fi
+
+  # Collect candidates to delete (everything beyond keep-th)
+  local -a to_delete=()
+  local i
+  for (( i=keep; i<total; i++ )); do
+    local pair="${sorted_dists[${i}]}"
+    name="${pair#*|}"
+    entry="${dist_dir}/${name}"
+    # NEVER delete the alias target
+    if [[ "${entry}" == "${alias_target}" ]]; then
+      echo "Skipping alias target: ${name}"
+      continue
+    fi
+    to_delete+=("${name}")
+  done
+
+  if [[ "${#to_delete[@]}" -eq 0 ]]; then
+    echo "Nothing to prune."
+    return 0
+  fi
+
+  echo "Will delete:"
+  local d
+  for d in "${to_delete[@]}"; do
+    echo "  ${d}"
+  done
+
+  if [[ "${yes}" -ne 1 ]]; then
+    printf 'Proceed? [y/N] '
+    local answer
+    read -r answer
+    if [[ "${answer}" != "y" && "${answer}" != "Y" ]]; then
+      echo "Aborted."
+      return 0
+    fi
+  fi
+
+  for d in "${to_delete[@]}"; do
+    wb_log_info "Pruning ${d}"
+    rm -rf "${dist_dir:?}/${d}"
+    echo "Deleted: ${d}"
+  done
 }
 
 cmd_log_tail() {
@@ -101,6 +390,33 @@ main() {
         *)
           echo "wb log: unknown action '${action}'" >&2
           echo "Valid actions: tail" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    runtime)
+      local action="${2:-}"
+      case "${action}" in
+        list)
+          cmd_runtime_list
+          ;;
+        info)
+          cmd_runtime_info "${3:-}"
+          ;;
+        install)
+          shift 2
+          cmd_runtime_install "$@"
+          ;;
+        activate)
+          cmd_runtime_activate "${3:-}"
+          ;;
+        prune)
+          shift 2
+          cmd_runtime_prune "$@"
+          ;;
+        *)
+          echo "wb runtime: unknown action '${action}'" >&2
+          echo "Valid actions: list, info, install, activate, prune" >&2
           exit 1
           ;;
       esac

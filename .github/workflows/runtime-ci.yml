@@ -44,3 +44,17 @@ jobs:
 
       - name: Run bats tests
         run: make -C runtime test
+
+  schema-check:
+    name: schema-check (check-jsonschema)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y jq
+          pip install check-jsonschema
+
+      - name: Run schema-check
+        run: make -C runtime schema-check

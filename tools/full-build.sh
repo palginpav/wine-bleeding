@@ -170,3 +170,22 @@ echo "========== Готово =========="
 DIST_NAME="${DIST_NAME:-WINE-BLEEDING-$(date +%d%m%Y)}"
 echo "Дистрибутив: $WINE_ROOT/dist/$DIST_NAME"
 echo "Запуск: $WINE_ROOT/dist/$DIST_NAME/bin/wine --version"
+
+# wine-bleeding runtime layer: write .wb_dist_meta into produced dist (M2)
+if [ -x "${WINE_ROOT}/runtime/src/wb-lib/wb-dist.sh" ]; then
+  (
+    # shellcheck source=../runtime/src/wb-lib/wb-log.sh
+    source "${WINE_ROOT}/runtime/src/wb-lib/wb-log.sh"
+    # shellcheck source=../runtime/src/wb-lib/wb-json.sh
+    source "${WINE_ROOT}/runtime/src/wb-lib/wb-json.sh"
+    # shellcheck source=../runtime/src/wb-lib/wb-dist.sh
+    source "${WINE_ROOT}/runtime/src/wb-lib/wb-dist.sh"
+    DIST_DIR="${WINE_ROOT}/dist/${DIST_NAME}"
+    if [ -d "${DIST_DIR}" ]; then
+      if ! wb_dist_meta_write "${DIST_DIR}"; then
+        echo "wb-dist: manifest write failed for ${DIST_DIR}" >&2
+        exit 1
+      fi
+    fi
+  ) || exit 1
+fi

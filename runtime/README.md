@@ -39,6 +39,11 @@ runtime/
 
       git submodule update --init -- runtime/tests/vendor/bats-core
 
+- **check-jsonschema** (optional, for `make schema-check`) — validates `.wb_dist_meta`
+  against `runtime/share/schemas/wb_dist_meta.schema.json`. Install via pip:
+
+      pip install check-jsonschema
+
 ## Developer setup
 
 ### Prerequisites
