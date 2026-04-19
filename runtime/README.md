@@ -27,11 +27,24 @@ runtime/
   README.md              # this file
 ```
 
+## Dependencies
+
+- **bash >= 4.4** (associative arrays, `[[ ]]`, `set -euo pipefail`)
+- **jq >= 1.6** — hard dependency from M1 onward. Required for `wb config show`,
+  `wb_json_read`, `wb_json_write_atomic`, and `wb log tail`. Install via your
+  package manager (`apt install jq`, `dnf install jq`, etc.)
+- **flock** — advisory locking (`util-linux`; present on all major Linux distros)
+- **shellcheck** (for `make lint`)
+- **bats-core** (for `make test`) — see below; init the submodule with:
+
+      git submodule update --init -- runtime/tests/vendor/bats-core
+
 ## Developer setup
 
 ### Prerequisites
 
 - bash >= 4.4
+- jq >= 1.6 (hard dependency for M1+; see Dependencies above)
 - shellcheck (for `make lint`)
 - bats-core (for `make test`) — see below
 
@@ -43,6 +56,8 @@ bats-core is vendored as a git submodule. After cloning the repo, initialise it:
 
 If the submodule is not present, `make test` falls back to any system `bats` on PATH,
 or prints a skip message and exits 0 so CI is not broken.
+
+
 
 ### Running tests
 
@@ -61,6 +76,7 @@ or prints a skip message and exits 0 so CI is not broken.
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | M0 | done | Foundation scaffolding (this commit) |
-| M1+ | planned | Logger, config loader, lock, dispatcher |
+| M1 | done | Logger, config loader (5-layer jailed), lock, JSON helpers, paths |
+| M2+ | planned | Dist manifest, prefix lifecycle, Wine dispatch |
 
 See `.orchestray/kb/artifacts/runtime-layer-roadmap.md` for the full milestone plan.

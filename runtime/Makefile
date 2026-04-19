@@ -12,6 +12,10 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-diag \
   $(SRC_DIR)/wb-lib/wb-log.sh \
   $(SRC_DIR)/wb-lib/wb-die.sh \
+  $(SRC_DIR)/wb-lib/wb-paths.sh \
+  $(SRC_DIR)/wb-lib/wb-config.sh \
+  $(SRC_DIR)/wb-lib/wb-json.sh \
+  $(SRC_DIR)/wb-lib/wb-lock.sh \
   $(RUNTIME_DIR)install.sh
 
 .PHONY: test lint install
@@ -33,7 +37,7 @@ lint:
 	  echo "SKIP: shellcheck not found on PATH"; \
 	  exit 0; \
 	else \
-	  shellcheck $(SHELLCHECK_TARGETS); \
+	  shellcheck -x --source-path=$(SRC_DIR) $(SHELLCHECK_TARGETS); \
 	fi
 
 install:

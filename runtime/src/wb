@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="0.1.0-M0"
+WB_VERSION="0.1.0-M1"
+
+_WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
+
+_wb_load_libs() {
+  # shellcheck source=wb-lib/wb-paths.sh
+  source "${_WB_LIB_DIR}/wb-paths.sh"
+  # shellcheck source=wb-lib/wb-log.sh
+  source "${_WB_LIB_DIR}/wb-log.sh"
+  # shellcheck source=wb-lib/wb-json.sh
+  source "${_WB_LIB_DIR}/wb-json.sh"
+  # shellcheck source=wb-lib/wb-config.sh
+  source "${_WB_LIB_DIR}/wb-config.sh"
+  # shellcheck source=wb-lib/wb-lock.sh
+  source "${_WB_LIB_DIR}/wb-lock.sh"
+}
 
 usage() {
-  echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)"
+  echo "Usage: wb <subcommand> [args]  (run 'wb help' for more)" >&2
 }
 
 cmd_version() {
@@ -12,7 +27,43 @@ cmd_version() {
 }
 
 cmd_help() {
-  echo "wb ${WB_VERSION} -- wine-bleeding runtime dispatcher (run 'wb help' for subcommands)"
+  cat <<EOF
+wb ${WB_VERSION} -- wine-bleeding runtime dispatcher
+
+Subcommands:
+  config show           Print effective config as JSON (all 5 layers merged)
+  config path [KEY]     Print which file supplied each config key (or only KEY)
+  log tail [N]          Print last N JSON log entries (default 50)
+  help                  Show this help
+  --version             Print version string
+
+Future commands: prefix create, prefix list, run, runtime install
+EOF
+}
+
+cmd_config_show() {
+  _wb_load_libs
+  wb_config_load
+  wb_config_as_json
+}
+
+cmd_config_path() {
+  local key="${1:-}"
+  _wb_load_libs
+  wb_config_load
+  wb_config_path_for "${key}"
+}
+
+cmd_log_tail() {
+  local n="${1:-50}"
+  [[ "${n}" =~ ^[0-9]+$ ]] || n=50
+  _wb_load_libs
+  local log_file
+  log_file="${WB_LOG_FILE:-$(wb_home)/log/wb.log}"
+  if [[ ! -f "${log_file}" ]]; then
+    exit 0
+  fi
+  tail -n "${n}" "${log_file}"
 }
 
 main() {
@@ -25,13 +76,42 @@ main() {
     help)
       cmd_help
       ;;
+    config)
+      local action="${2:-}"
+      case "${action}" in
+        show)
+          cmd_config_show
+          ;;
+        path)
+          cmd_config_path "${3:-}"
+          ;;
+        *)
+          echo "wb config: unknown action '${action}'" >&2
+          echo "Valid actions: show, path" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    log)
+      local action="${2:-}"
+      case "${action}" in
+        tail)
+          cmd_log_tail "${3:-50}"
+          ;;
+        *)
+          echo "wb log: unknown action '${action}'" >&2
+          echo "Valid actions: tail" >&2
+          exit 1
+          ;;
+      esac
+      ;;
     "")
-      usage >&2
+      usage
       exit 1
       ;;
     *)
       echo "wb: unknown subcommand '${subcommand}'" >&2
-      usage >&2
+      usage
       exit 1
       ;;
   esac
