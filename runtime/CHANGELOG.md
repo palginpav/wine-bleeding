@@ -1,6 +1,33 @@
 # wine-bleeding Runtime Layer Changelog
 
-## [Unreleased] — v1.1.0-dev
+## [Unreleased] — v1.2.0-dev
+
+### M11 — Pressure-vessel / SLR container opt-in
+
+- **`wb config enable-container`** / **`wb config disable-container`** — flip
+  `WB_CONTAINER=1` in `$WB_HOME/etc/runtime.conf`.
+- **`wb_container_enabled`** — returns 0 when `WB_CONTAINER=1`.
+- **`wb_container_detect`** — finds the SLR `_v2-entry-point`. Checks
+  `$WB_CONTAINER_ENTRY`, then three well-known Steam install paths.
+- **`wb_container_compose_argv`** — emits one argv element per line for the
+  pressure-vessel invocation (`--filesystem=<prefix>`, `--verb=waitforexitandrun`, `--`).
+- **`wb run`** and **`wb exec`** both honor `WB_CONTAINER=1`. When enabled:
+  wine is wrapped inside the SLR container.
+- **Graceful failure** — if pressure-vessel is not found, exits 1 with a clear
+  actionable message directing the user to install via Steam or set
+  `$WB_CONTAINER_ENTRY`.
+- **No auto-download** — installing SLR (~1 GB) is a manual Steam step; wb
+  detects and fails cleanly, never downloads anything automatically.
+- **New lib** — `runtime/src/wb-lib/wb-container.sh`.
+- **12 new bats tests** in `runtime/tests/21_container.bats`.
+
+### Breaking changes
+
+- `WB_VERSION` bumped to `1.2.0-dev`.
+
+---
+
+## v1.1.0-dev
 
 ### M9 — Multi-build / distro-switching (opt-in)
 

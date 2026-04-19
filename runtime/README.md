@@ -474,11 +474,90 @@ entry shows `TO_UTC=active`.
 - Re-adopting a prefix (`wb prefix adopt`) preserves existing `history[]` and
   `current_runtime` fields — they are never clobbered.
 
+## M11 — Pressure-vessel / SLR container isolation (post-MVP / advanced)
+
+**Status: available as of v1.2.0-dev (M11). Opt-in only. Requires manual SLR install.**
+
+This feature lets advanced users run Wine inside a
+[Steam Linux Runtime (pressure-vessel)](https://gitlab.steamos.cloud/steamrt/steam-runtime-tools/-/blob/master/docs/container-runtime.md)
+sandbox for library-version isolation. The SLR container pins the runtime
+libraries (glibc, Mesa, etc.) to a known-good Steam Sniper snapshot, which can
+improve compatibility with games that ship native Linux libraries.
+
+### Prerequisites
+
+pressure-vessel is distributed as part of **Steam Linux Runtime - Sniper** (~1 GB),
+available in Steam under `Tools`. Install it there first:
+
+1. Open Steam → Library → Tools → **Steam Linux Runtime - Sniper** → Install
+2. After installation the entry-point appears at:
+   `~/.steam/steam/steamapps/common/SteamLinuxRuntime_sniper/_v2-entry-point`
+
+Alternatively, point `$WB_CONTAINER_ENTRY` at any compatible pressure-vessel
+`_v2-entry-point` binary.
+
+**wb does not auto-download pressure-vessel.** This is intentional: the download
+is large and requires an active Steam account. Future milestones may add a guided
+install prompt (M12).
+
+### Enabling container mode
+
+```bash
+wb config enable-container
+```
+
+Writes `WB_CONTAINER=1` to `$WB_HOME/etc/runtime.conf`. All subsequent `wb run`
+and `wb exec` invocations wrap wine inside the pressure-vessel sandbox.
+
+### Disabling container mode
+
+```bash
+wb config disable-container
+```
+
+Removes `WB_CONTAINER` from `runtime.conf`. Wine is invoked directly again.
+
+### Overriding the entry-point
+
+Set `$WB_CONTAINER_ENTRY` to the absolute path of the `_v2-entry-point` executable
+to override the default detection order:
+
+```bash
+export WB_CONTAINER_ENTRY="/opt/slr/_v2-entry-point"
+wb run notepad.exe --prefix MYPFX
+```
+
+### What changes at launch
+
+When `WB_CONTAINER=1`, `wb run` replaces the direct wine exec with:
+
+```
+<entry-point> --filesystem=<prefix_path> --verb=waitforexitandrun -- <wineloader> <exe> [args...]
+```
+
+All `WB_*`-derived environment variables (WINEPREFIX, WINEDLLOVERRIDES, etc.) are
+still composed and passed through `env` into the container.
+
+### Graceful failure when SLR is not installed
+
+If pressure-vessel is not found and `$WB_CONTAINER_ENTRY` is not set, wb prints a
+clear error and exits 1 without launching wine:
+
+```
+wb run: pressure-vessel not found; install Steam Linux Runtime via Steam
+wb run: (Tools > Steam Linux Runtime - Sniper) or set $WB_CONTAINER_ENTRY
+```
+
+### Limitations
+
+- Nested container support (running wb inside another container) is not supported.
+- No GUI install prompt — see post-MVP M12.
+- Auto-download of SLR is deferred to a future milestone if user demand warrants it.
+
 ## Post-MVP scope
 
-The following features are planned for later post-M9 milestones:
+The following features are planned for later post-M11 milestones:
 
-- **GUI launcher** (M12) — graphical front-end for wb
-- **Pressure-vessel / container isolation** (M11, opt-in)
+- **GUI launcher** (M12) — graphical front-end for wb with SLR install prompt
 - **Go CLI rewrite** (M10) — performance-focused rewrite of the bash dispatcher
 - **External runtime registry** (M13) — `plugins/runtimes.d/*.json` for third-party dists

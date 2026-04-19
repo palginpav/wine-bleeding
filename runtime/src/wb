@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="1.1.0-dev"
+WB_VERSION="1.2.0-dev"
 
 _WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
 
@@ -66,6 +66,8 @@ _wb_load_run_lib() {
   source "${_WB_LIB_DIR}/wb-env.sh"
   # shellcheck source=wb-lib/wb-hooks.sh
   source "${_WB_LIB_DIR}/wb-hooks.sh"
+  # shellcheck source=wb-lib/wb-container.sh
+  source "${_WB_LIB_DIR}/wb-container.sh"
 }
 
 _wb_load_snapshot_lib() {
@@ -97,6 +99,8 @@ Subcommands:
   config path [KEY]         Print which file supplied each config key (or only KEY)
   config enable-multibuild  Enable multi-build mode (sets WB_MULTIBUILD=1)
   config disable-multibuild Disable multi-build mode (unsets WB_MULTIBUILD)
+  config enable-container   Enable pressure-vessel / SLR container wrapping (sets WB_CONTAINER=1)
+  config disable-container  Disable pressure-vessel / SLR container wrapping (unsets WB_CONTAINER)
   log tail [N]              Print last N JSON log entries (default 50)
   runtime list              List installed Wine dists (name, active, size, build date)
                             [--multi] show MULTI column (whether dist is non-aliased)
@@ -214,6 +218,30 @@ cmd_config_disable_multibuild() {
   local conf="${wb_home}/etc/runtime.conf"
   _wb_conf_unset_key "${conf}" "WB_MULTIBUILD"
   echo "multi-build mode disabled"
+}
+
+# ---------------------------------------------------------------------------
+# cmd_config_enable_container / cmd_config_disable_container (M11)
+# Writes/updates WB_CONTAINER in $WB_HOME/etc/runtime.conf.
+# ---------------------------------------------------------------------------
+cmd_config_enable_container() {
+  _wb_load_libs
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local conf="${wb_home}/etc/runtime.conf"
+  _wb_conf_set_key "${conf}" "WB_CONTAINER" "1"
+  echo "container mode enabled; wb run will wrap wine inside pressure-vessel / Steam Linux Runtime"
+  echo "NOTE: SteamLinuxRuntime_sniper must be installed via Steam (Tools > Steam Linux Runtime - Sniper)"
+  echo "      or set WB_CONTAINER_ENTRY to point at your _v2-entry-point executable"
+}
+
+cmd_config_disable_container() {
+  _wb_load_libs
+  local wb_home
+  wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local conf="${wb_home}/etc/runtime.conf"
+  _wb_conf_unset_key "${conf}" "WB_CONTAINER"
+  echo "container mode disabled"
 }
 
 cmd_runtime_list() {
@@ -1608,6 +1636,39 @@ cmd_run() {
   wb_release_lock "${prefix_path}" 2>/dev/null || true
   trap - EXIT
 
+  # M11: pressure-vessel / SLR container wrapping.
+  # When WB_CONTAINER=1, wrap the wine invocation inside the SLR entry-point.
+  # The container wrapping replaces the direct exec with a pressure-vessel exec.
+  if wb_container_enabled; then
+    local pv_entry
+    if ! pv_entry="$(wb_container_detect)"; then
+      echo "wb run: pressure-vessel not found; install Steam Linux Runtime via Steam" >&2
+      echo "wb run: (Tools > Steam Linux Runtime - Sniper) or set \$WB_CONTAINER_ENTRY" >&2
+      exit 1
+    fi
+
+    # Build the full argv: <entry> --filesystem=<prefix> --verb=waitforexitandrun -- <wineloader> <exe> [args...]
+    local -a pv_argv=()
+    while IFS= read -r REPLY; do
+      pv_argv+=("${REPLY}")
+    done < <(wb_container_compose_argv "${pv_entry}" "${prefix_path}" "${dist_path}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}")
+
+    # Step 12 / 13 (container path): exec (or fork+wait)
+    if [[ "${do_wait}" -eq 1 ]]; then
+      local child_pid child_exit
+      (
+        exec env "${env_pairs[@]}" "${pv_argv[@]}"
+      ) &
+      child_pid=$!
+      wait "${child_pid}" && child_exit=0 || child_exit=$?
+      export WB_EXIT="${child_exit}"
+      wb_hooks_run "post-exec" || true
+      exit "${child_exit}"
+    else
+      exec env "${env_pairs[@]}" "${pv_argv[@]}"
+    fi
+  fi
+
   # Step 12 / 13: exec (or fork+wait if --wait was passed)
   if [[ "${do_wait}" -eq 1 ]]; then
     # Fork-and-wait: run Wine in a child process, capture exit, run post-exec hook.
@@ -1713,6 +1774,21 @@ cmd_exec() {
     fi
   done
 
+  # M11: honor WB_CONTAINER in exec path as well
+  if wb_container_enabled; then
+    local pv_entry
+    if ! pv_entry="$(wb_container_detect)"; then
+      echo "wb exec: pressure-vessel not found; install Steam Linux Runtime via Steam" >&2
+      echo "wb exec: (Tools > Steam Linux Runtime - Sniper) or set \$WB_CONTAINER_ENTRY" >&2
+      exit 1
+    fi
+    local -a pv_argv=()
+    while IFS= read -r REPLY; do
+      pv_argv+=("${REPLY}")
+    done < <(wb_container_compose_argv "${pv_entry}" "${prefix_path}" "${dist_path}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}")
+    exec env "${env_pairs[@]}" "${pv_argv[@]}"
+  fi
+
   exec env "${env_pairs[@]}" "${wineloader}" "${exe}" "${extra_args[@]+"${extra_args[@]}"}"
 }
 
@@ -1761,9 +1837,15 @@ main() {
         disable-multibuild)
           cmd_config_disable_multibuild
           ;;
+        enable-container)
+          cmd_config_enable_container
+          ;;
+        disable-container)
+          cmd_config_disable_container
+          ;;
         *)
           echo "wb config: unknown action '${action}'" >&2
-          echo "Valid actions: show, path, enable-multibuild, disable-multibuild" >&2
+          echo "Valid actions: show, path, enable-multibuild, disable-multibuild, enable-container, disable-container" >&2
           exit 1
           ;;
       esac
