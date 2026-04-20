@@ -531,6 +531,12 @@ _src() {
 # 19. Atomic write: kill -9 mid-write leaves original intact
 # ---------------------------------------------------------------------------
 @test "settings: atomic write survives kill-9 mid-write (original preserved)" {
+    # Root ignores chmod-based access checks, so the perm-drop trick we use
+    # below cannot block the write. CI (bash docker image) runs as root;
+    # locally this test runs as an unprivileged user.
+    if [[ "${EUID}" -eq 0 ]]; then
+        skip "root ignores chmod 555; cannot simulate perm-based write failure"
+    fi
     # Pre-seed the general.json with a known value
     mkdir -p "${WB_HOME}/settings"
     printf '{"schema":1,"updated_utc":"2026-01-01T00:00:00Z","gpu":"amd"}' \

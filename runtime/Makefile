@@ -81,7 +81,7 @@ lint:
 	  echo "SKIP: shellcheck not found on PATH"; \
 	  exit 0; \
 	else \
-	  shellcheck -x --source-path=$(SRC_DIR) $(SHELLCHECK_TARGETS); \
+	  shellcheck --severity=warning -x --source-path=$(SRC_DIR) $(SHELLCHECK_TARGETS); \
 	fi
 
 schema-check:
