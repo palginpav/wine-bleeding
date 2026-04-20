@@ -187,9 +187,9 @@ install:
 	  install -Dm644 $(RUNTIME_DIR)share/icons/hicolor/scalable/apps/wine-bleeding.svg \
 	    $(DESTDIR)$(SHAREDIR)/icons/hicolor/scalable/apps/wine-bleeding.svg; \
 	fi
-	@if test -d $(RUNTIME_DIR)share/steam/compatibilitytools.d/wine-bleeding; then \
+	@if test -d $(RUNTIME_DIR)share/compatibilitytools.d/wine-bleeding; then \
 	  mkdir -p "$(DESTDIR)$(SHAREDIR)/steam/compatibilitytools.d"; \
-	  cp -a $(RUNTIME_DIR)share/steam/compatibilitytools.d/wine-bleeding \
+	  cp -a $(RUNTIME_DIR)share/compatibilitytools.d/wine-bleeding \
 	    $(DESTDIR)$(SHAREDIR)/steam/compatibilitytools.d/wine-bleeding; \
 	fi
 	install -Dm644 $(RUNTIME_DIR)CHANGELOG.md \

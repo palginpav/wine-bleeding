@@ -8,8 +8,11 @@ override_dh_auto_build:
 	# Pure shell — nothing to compile.
 
 override_dh_auto_install:
-	# The runtime source is two levels above debian/; go up from packaging/deb/
-	make -C ../../.. install \
+	# deb/build.sh stages the runtime tree into $SRC_STAGE with debian/ at its
+	# root; CURDIR is $SRC_STAGE when dpkg-buildpackage runs, so the Makefile
+	# is right here. Previously this used ../../.. which was a leftover from
+	# an older in-tree layout and produced an empty package.
+	make -C $(CURDIR) install \
 		DESTDIR=$(CURDIR)/debian/wine-bleeding-wb \
 		PREFIX=/usr \
 		LIBDIR=/usr/lib \

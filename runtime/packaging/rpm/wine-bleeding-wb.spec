@@ -3,10 +3,11 @@ Version:        WB_VERSION_PLACEHOLDER
 Release:        1%{?dist}
 Summary:        wine-bleeding runtime dispatcher and tooling
 Group:          Applications/System
-License:        GPL-2.1-or-later
+License:        GPL-2.0-or-later
 URL:            https://github.com/palginpav/wine
 # Source tarball is prepared by build.sh and placed in SOURCES/
 Source0:        %{name}-%{version}.tar.gz
+BuildArch:      noarch
 
 BuildRequires:  bash
 BuildRequires:  make
