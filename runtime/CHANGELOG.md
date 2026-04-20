@@ -2,6 +2,32 @@
 
 ## [Unreleased] — v1.5.0-dev
 
+### Pre-GA hardening (M12 security review follow-ups + M8 deferred)
+
+- **AppImage SHA256 pin (M-2 RELEASE BLOCKER)** — `build-appimage.sh` now pins
+  to appimagetool 1.9.0 (`46fdd785…`) instead of the rolling `continuous` channel.
+  SHA256 is verified before `chmod +x`; mismatch deletes the cached binary and
+  exits 1 (fail-closed). Env override `APPIMAGETOOL_SHA256=<hash>` allows CI to
+  supply a pre-verified hash. `packaging/README.md` documents the pinned version,
+  hash, and upgrade procedure.
+- **`.desktop` `%U` → `%f` + MimeType (L-2)** — `share/applications/wine-bleeding-wb.desktop`
+  changes `Exec=wb-gui %U` to `Exec=wb-gui %f` (file path, not URI) and adds
+  `MimeType=application/x-ms-dos-executable;` so file managers can open `.exe`
+  files via wb-gui.
+- **AppRun bash 4.4+ guard (I-3)** — `packaging/appimage/AppRun` now checks
+  `${BASH_VERSINFO}` at startup and exits 1 with a clear error on bash < 4.4.
+- **UUID `/dev/urandom` fallback (L-5)** — `src/wb-gui-lib/wb-gui-games.sh`
+  UUID fallback 3 replaced from `$RANDOM`-based (non-cryptographic, ~96-bit)
+  to `head -c 16 /dev/urandom | od -An -tx1` (full 128-bit, cryptographic).
+- **Snapshot auto-capture on `wb run` (M8 deferred)** — `cmd_run` in `src/wb`
+  now calls `wb_snapshot_capture` after reconcile, before the pre-exec hook.
+  Opt-out via `WB_SNAPSHOT=0`. Failures are non-fatal (logged, launch continues).
+  Two new bats tests in `runtime/tests/12_run_dry.bats` verify capture occurs and
+  that `WB_SNAPSHOT=0` suppresses it.
+- **Pango markup escape (I-4)** — `src/wb-gui-lib/wb-gui-dialogs.sh` info,
+  error, and confirm dialogs now pass `--no-markup` to yad, preventing crafted
+  game names containing `<span>` or `&amp;` from being rendered as Pango markup.
+
 ### M12 — GUI (`wb-gui`) + Steam Compatibility Tool entry
 
 - **`runtime/src/wb-gui`** — bash + yad game-library GUI. Main window lists

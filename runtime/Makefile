@@ -183,10 +183,16 @@ install:
 	  install -Dm644 $(RUNTIME_DIR)share/applications/wine-bleeding-wb.desktop \
 	    $(DESTDIR)$(SHAREDIR)/applications/wine-bleeding-wb.desktop; \
 	fi
-	@if test -f $(RUNTIME_DIR)share/icons/hicolor/scalable/apps/wine-bleeding.svg; then \
-	  install -Dm644 $(RUNTIME_DIR)share/icons/hicolor/scalable/apps/wine-bleeding.svg \
-	    $(DESTDIR)$(SHAREDIR)/icons/hicolor/scalable/apps/wine-bleeding.svg; \
-	fi
+	@# Install every icon size + format present in share/icons/hicolor/
+	@for sub in scalable 256x256 512x512 1024x1024; do \
+	  for ext in svg png; do \
+	    src=$(RUNTIME_DIR)share/icons/hicolor/$$sub/apps/wine-bleeding.$$ext; \
+	    if test -f "$$src"; then \
+	      install -Dm644 "$$src" \
+	        $(DESTDIR)$(SHAREDIR)/icons/hicolor/$$sub/apps/wine-bleeding.$$ext; \
+	    fi; \
+	  done; \
+	done
 	@if test -d $(RUNTIME_DIR)share/compatibilitytools.d/wine-bleeding; then \
 	  mkdir -p "$(DESTDIR)$(SHAREDIR)/steam/compatibilitytools.d"; \
 	  cp -a $(RUNTIME_DIR)share/compatibilitytools.d/wine-bleeding \

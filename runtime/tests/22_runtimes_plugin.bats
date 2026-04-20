@@ -13,6 +13,31 @@ setup() {
   export WB_HOME="${TEST_HOME}"
   export WB_LOG_FILE="${TEST_HOME}/wb.log"
   mkdir -p "${TEST_HOME}/dist"
+
+  # Stage a fake external Wine build root so register passes the new
+  # existence + bin/wine executable checks (W2 M13-retro #1).
+  FAKE_PLUGIN_ROOT="${TEST_HOME}/fake-ge-proton"
+  mkdir -p "${FAKE_PLUGIN_ROOT}/bin"
+  cat > "${FAKE_PLUGIN_ROOT}/bin/wine" <<'EOF'
+#!/usr/bin/env bash
+echo "fake wine $*"
+EOF
+  chmod +x "${FAKE_PLUGIN_ROOT}/bin/wine"
+
+  # Generate the plugin JSON pointing at the staged root.
+  STAGED_PLUGIN="${TEST_HOME}/plugin.json"
+  cat > "${STAGED_PLUGIN}" <<EOF
+{
+  "schema": 1,
+  "name": "GE-Proton-9-26",
+  "path": "${FAKE_PLUGIN_ROOT}",
+  "kind": "external",
+  "wine_major_version": "9",
+  "notes": "GloriousEggroll's Proton build (staged for bats test)"
+}
+EOF
+  # Override FIXTURE_PLUGIN for every test in this file so they use the staged copy.
+  FIXTURE_PLUGIN="${STAGED_PLUGIN}"
 }
 
 teardown() {
@@ -154,7 +179,8 @@ _source_resolve() {
     echo "\${result}"
 EOF
   [ "${status}" -eq 0 ]
-  [ "${output}" = "/opt/ge-proton-9-26" ]
+  # Resolver now canonicalises via realpath; compare against realpath of the staged root.
+  [ "${output}" = "$(realpath -m "${FAKE_PLUGIN_ROOT}")" ]
 }
 
 # ---------------------------------------------------------------------------

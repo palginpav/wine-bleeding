@@ -156,9 +156,17 @@ wb_runtimes_plugin_register() {
     return 1
   fi
 
-  # Security: do NOT follow symlinks for path validation (M11 concern).
-  # We record the path as-is; the caller's intent is what matters.
-  # We do not call realpath on path_val here.
+  # Existence + shape check: refuse to register a plugin whose path is not a
+  # Wine build root. Prevents `/etc/passwd`-style values from being accepted
+  # and later exec'd via `<path>/bin/wine` (W2 M13-retro finding #1).
+  if [[ ! -d "${path_val}" ]]; then
+    echo "wb_runtimes_plugin_register: path '${path_val}' does not exist or is not a directory" >&2
+    return 1
+  fi
+  if [[ ! -x "${path_val}/bin/wine" ]]; then
+    echo "wb_runtimes_plugin_register: '${path_val}/bin/wine' missing or not executable; refusing to register" >&2
+    return 1
+  fi
 
   local wb_home
   wb_home="$(_wb_runtimes_wb_home)"
@@ -211,7 +219,10 @@ wb_runtimes_plugin_resolve() {
     candidate_name="$(jq -r '.name // empty' "${dest}" 2>/dev/null || true)"
     path_val="$(jq -r '.path // empty' "${dest}" 2>/dev/null || true)"
     if [[ "${candidate_name}" == "${name}" && -n "${path_val}" ]]; then
-      printf '%s' "${path_val}"
+      # Canonicalize to defeat symlink chains inside the registered path
+      # (W2 M13-retro finding #2). `realpath -m` resolves even if the target
+      # is missing, so we don't silently hide "directory vanished" errors.
+      realpath -m "${path_val}"
       return 0
     fi
   fi

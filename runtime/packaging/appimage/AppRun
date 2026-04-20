@@ -13,6 +13,14 @@ set -euo pipefail
 # Those must be present on the host system. See packaging/README.md.
 # ---------------------------------------------------------------------------
 
+# Guard: require bash >= 4.4 (associative arrays, mapfile -d, and other
+# features used throughout wb and wb-lib are unavailable in older bash).
+if [[ ${BASH_VERSINFO[0]} -lt 4 ]] || \
+   { [[ ${BASH_VERSINFO[0]} -eq 4 ]] && [[ ${BASH_VERSINFO[1]} -lt 4 ]]; }; then
+  echo "wine-bleeding-wb: requires bash >= 4.4 (found ${BASH_VERSION})" >&2
+  exit 1
+fi
+
 APPDIR="${APPDIR:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"}"
 
 # Prefer the AppImage-bundled wb

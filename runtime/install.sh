@@ -463,17 +463,30 @@ _install_gui() {
     fi
   fi
 
-  # 5. Icon
-  local icon_dir="${HOME}/.local/share/icons/hicolor/scalable/apps"
-  local icon_src="${_SHARE_DIR}/icons/hicolor/scalable/apps/wine-bleeding.svg"
-  if [[ -f "${icon_src}" ]]; then
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-      echo "  [dry-run] install icon -> ${icon_dir}/wine-bleeding.svg"
-    else
-      mkdir -p "${icon_dir}"
-      cp -f "${icon_src}" "${icon_dir}/wine-bleeding.svg"
-      chmod 644 "${icon_dir}/wine-bleeding.svg"
-      _info "Installed icon -> ${icon_dir}/wine-bleeding.svg"
+  # 5. Icons — install all available sizes from share/icons/hicolor/
+  local icons_root="${HOME}/.local/share/icons/hicolor"
+  local icons_src_root="${_SHARE_DIR}/icons/hicolor"
+  local icon_subdir icon_basename installed_any=0
+  for icon_subdir in scalable 256x256 512x512 1024x1024; do
+    for ext in svg png; do
+      local icon_src="${icons_src_root}/${icon_subdir}/apps/wine-bleeding.${ext}"
+      if [[ -f "${icon_src}" ]]; then
+        icon_basename="wine-bleeding.${ext}"
+        if [[ "${DRY_RUN}" -eq 1 ]]; then
+          echo "  [dry-run] install icon -> ${icons_root}/${icon_subdir}/apps/${icon_basename}"
+        else
+          mkdir -p "${icons_root}/${icon_subdir}/apps"
+          cp -f "${icon_src}" "${icons_root}/${icon_subdir}/apps/${icon_basename}"
+          chmod 644 "${icons_root}/${icon_subdir}/apps/${icon_basename}"
+          installed_any=1
+        fi
+      fi
+    done
+  done
+  if [[ "${installed_any}" -eq 1 ]]; then
+    _info "Installed icons -> ${icons_root}"
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache -q -f "${icons_root}" 2>/dev/null || true
     fi
   fi
 

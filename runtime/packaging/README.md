@@ -96,14 +96,34 @@ sudo apt-get install -f   # fix any missing deps
 
 ### Prerequisites
 
-`appimagetool` must be on PATH or will be downloaded automatically on first run:
+`appimagetool` must be on PATH or will be downloaded automatically on first run.
+The build script is pinned to **appimagetool 1.9.0** and verifies the download
+against a known SHA256 before use (supply-chain hardening, M12 M-2):
+
+| Version | SHA256 |
+|---------|--------|
+| 1.9.0   | `46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1` |
 
 ```bash
-# Manual download (optional, for air-gapped builds):
-wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-chmod +x appimagetool-x86_64.AppImage
+# Manual download for air-gapped builds (must match the pinned version):
+wget https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+# Verify hash before use:
+sha256sum appimagetool-x86_64.AppImage
 # Place it at runtime/packaging/appimage/appimagetool-x86_64.AppImage
 ```
+
+To override the expected hash (e.g. when upgrading the pinned version):
+
+```bash
+APPIMAGETOOL_SHA256=<new-hash> make -C runtime dist-appimage
+```
+
+### AppRun bash version guard
+
+`AppRun` checks that the host bash is >= 4.4 at startup and exits with a clear
+error message if not. `wb` and its libraries require bash 4.4+ for associative
+arrays and other features. Debian 9+ and any distro shipped since 2017 satisfy
+this requirement.
 
 ### Build
 
@@ -136,6 +156,11 @@ a fully hermetic bundle. For truly hermetic packaging, use Flatpak (M14).
 ### Troubleshooting
 
 - **"SKIP: failed to download appimagetool"**: download manually (see above).
+- **"FATAL: appimagetool SHA256 mismatch"**: the cached binary does not match
+  the pinned hash. Delete `runtime/packaging/appimage/appimagetool-x86_64.AppImage`
+  and re-run the build; or set `APPIMAGETOOL_SHA256=<hash>` if upgrading the pin.
+- **"requires bash >= 4.4"**: upgrade bash on the host (`apt install bash` /
+  `dnf install bash`).
 - **"cannot find wb"**: ensure `make install` ran successfully before AppImage
   assembly; check `runtime/dist-packages/` for build artefacts.
 - **AppImage won't run**: check FUSE is available (`modprobe fuse`) or extract

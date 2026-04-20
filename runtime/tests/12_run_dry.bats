@@ -129,3 +129,26 @@ EOF
   elapsed=$(( end - start ))
   [ "${elapsed}" -lt 5 ]
 }
+
+# 10. Snapshot auto-capture: wb run creates a snapshot under state/prefix-snapshots/
+@test "run: wb run --wait creates a snapshot under WB_HOME/state/prefix-snapshots/TESTPFX/" {
+  "${WB}" run notepad.exe --prefix TESTPFX --wait >/dev/null 2>&1
+  local snap_dir="${TEST_HOME}/state/prefix-snapshots/TESTPFX"
+  [ -d "${snap_dir}" ]
+  # At least one snapshot JSON file must exist
+  local count
+  count="$(find "${snap_dir}" -maxdepth 1 -name 'TESTPFX-*.json' | wc -l)"
+  [ "${count}" -ge 1 ]
+}
+
+# 11. WB_SNAPSHOT=0 suppresses auto-capture
+@test "run: WB_SNAPSHOT=0 does not create a snapshot" {
+  WB_SNAPSHOT=0 "${WB}" run notepad.exe --prefix TESTPFX --wait >/dev/null 2>&1
+  local snap_dir="${TEST_HOME}/state/prefix-snapshots/TESTPFX"
+  # Directory must not exist or be empty
+  if [ -d "${snap_dir}" ]; then
+    local count
+    count="$(find "${snap_dir}" -maxdepth 1 -name 'TESTPFX-*.json' | wc -l)"
+    [ "${count}" -eq 0 ]
+  fi
+}

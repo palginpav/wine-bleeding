@@ -114,6 +114,8 @@ _wb_load_run_lib() {
   source "${_WB_LIB_DIR}/wb-hooks.sh"
   # shellcheck source=wb-lib/wb-container.sh
   source "${_WB_LIB_DIR}/wb-container.sh"
+  # shellcheck source=wb-lib/wb-snapshot.sh
+  source "${_WB_LIB_DIR}/wb-snapshot.sh"
 }
 
 _wb_load_snapshot_lib() {
@@ -1727,6 +1729,15 @@ cmd_run() {
   if ! wb_hooks_run "post-materialize"; then
     echo "wb run: post-materialize hook failed; aborting" >&2
     exit 1
+  fi
+
+  # Step 8b: Auto-snapshot — capture prefix state before launch so that
+  # 'wb prefix repair' can restore a blown-away prefix.
+  # Opt-out: WB_SNAPSHOT=0 skips capture silently.
+  # Failures here MUST NOT block the launch (non-fatal warn).
+  if [[ "${WB_SNAPSHOT:-1}" != "0" ]]; then
+    wb_snapshot_capture "${prefix_path}" >/dev/null \
+      || wb_log_warn "snapshot: capture failed; launch continues"
   fi
 
   # Step 9: pre-exec hook — failure aborts launch

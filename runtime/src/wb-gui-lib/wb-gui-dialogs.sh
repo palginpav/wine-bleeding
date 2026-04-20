@@ -27,11 +27,14 @@ wb_gui_yad() {
 # ---------------------------------------------------------------------------
 # wb_gui_dialog_info <title> <text>
 # Show an informational message dialog (OK button).
+# --no-markup: prevents yad from interpreting Pango markup in user-supplied
+# text (e.g. game names containing '<', '>', '&'). Cosmetic-only risk but
+# --no-markup is the correct default for untrusted content (M12 I-4).
 # ---------------------------------------------------------------------------
 wb_gui_dialog_info() {
   local title="${1:-Info}"
   local text="${2:-}"
-  wb_gui_yad --title="${title}" --text="${text}" \
+  wb_gui_yad --title="${title}" --text="${text}" --no-markup \
     --button="OK:0" --image=dialog-information
 }
 
@@ -43,7 +46,7 @@ wb_gui_dialog_info() {
 wb_gui_dialog_error() {
   local title="${1:-Error}"
   local text="${2:-}"
-  wb_gui_yad --title="${title}" --text="${text}" \
+  wb_gui_yad --title="${title}" --text="${text}" --no-markup \
     --button="OK:0" --image=dialog-error || true
 }
 
@@ -54,7 +57,7 @@ wb_gui_dialog_error() {
 wb_gui_dialog_confirm() {
   local title="${1:-Confirm}"
   local text="${2:-}"
-  wb_gui_yad --title="${title}" --text="${text}" \
+  wb_gui_yad --title="${title}" --text="${text}" --no-markup \
     --button="Yes:0" --button="No:1" --image=dialog-question
 }
 
@@ -77,7 +80,7 @@ wb_gui_dialog_entry() {
   local title="${1:-Input}"
   local text="${2:-}"
   local default="${3:-}"
-  wb_gui_yad --title="${title}" --text="${text}" \
+  wb_gui_yad --title="${title}" --text="${text}" --no-markup \
     --entry --entry-text="${default}" \
     --button="OK:0" --button="Cancel:1"
 }
@@ -103,7 +106,7 @@ wb_gui_dialog_form_settings() {
   local dxvk_hud="${8:-}"
   local overrides="${9:-}"
 
-  wb_gui_yad --form \
+  wb_gui_yad --form --no-markup \
     --title="Settings — ${prefix_name}" \
     --text="Per-game settings for: ${exe_path}" \
     --separator="|" \

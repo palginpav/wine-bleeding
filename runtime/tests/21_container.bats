@@ -12,6 +12,10 @@ FIXTURE_WINE="${BATS_TEST_DIRNAME}/fixtures/fake-wine"
 # Setup: isolated WB_HOME with one fake dist and initialized prefix.
 # ---------------------------------------------------------------------------
 setup() {
+  # Defensively unset container-related env so a leak from a prior test does
+  # not turn a later test into a "container always on" scenario.
+  unset WB_CONTAINER WB_CONTAINER_ENTRY 2>/dev/null || true
+
   TEST_HOME="$(mktemp -d)"
   export WB_HOME="${TEST_HOME}"
   export WB_LOG_FILE="${TEST_HOME}/wb.log"

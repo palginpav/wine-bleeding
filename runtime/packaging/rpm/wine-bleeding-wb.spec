@@ -59,6 +59,9 @@ make install \
 %ghost /usr/lib/wine-bleeding/wb-gui-lib/
 %ghost %{_datadir}/applications/wine-bleeding-wb.desktop
 %ghost %{_datadir}/icons/hicolor/scalable/apps/wine-bleeding.svg
+%ghost %{_datadir}/icons/hicolor/256x256/apps/wine-bleeding.png
+%ghost %{_datadir}/icons/hicolor/512x512/apps/wine-bleeding.png
+%ghost %{_datadir}/icons/hicolor/1024x1024/apps/wine-bleeding.png
 
 %post
 # Update desktop database if available

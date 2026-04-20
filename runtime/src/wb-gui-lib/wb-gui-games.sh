@@ -25,13 +25,17 @@ _wb_gui_games_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
     uuidgen | tr '[:upper:]' '[:lower:]'
   else
-    # Fallback: /proc/sys/kernel/random/uuid (Linux)
+    # Fallback 2: /proc/sys/kernel/random/uuid (Linux kernel ≥ 2.6)
     if [[ -r /proc/sys/kernel/random/uuid ]]; then
       cat /proc/sys/kernel/random/uuid
     else
-      # Last resort: use date+random hex
-      printf '%08x-%04x-%04x-%04x-%012x\n' \
-        "$RANDOM$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM$RANDOM$RANDOM"
+      # Fallback 3: 16 bytes from /dev/urandom as 128-bit hex, formatted as UUID-like.
+      # Provides full 128-bit entropy; replaces the former $RANDOM-based fallback
+      # which had at most 96 bits of entropy and used a non-cryptographic source.
+      local hex
+      hex="$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+      printf '%s-%s-%s-%s-%s' \
+        "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
     fi
   fi
 }
