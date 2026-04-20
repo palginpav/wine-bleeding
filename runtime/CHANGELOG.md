@@ -2,6 +2,21 @@
 
 ## [Unreleased] — v1.5.0-dev
 
+### Window/taskbar icon linkage (StartupWMClass + yad --class)
+
+- **`StartupWMClass=wine-bleeding` + yad `--class=wine-bleeding`** — without
+  these two in sync, KDE Plasma / GNOME could not associate wb-gui's yad
+  window with the installed `.desktop` entry (yad's default WM_CLASS is
+  literally `yad`, not our app name). Plasma fell back to its "first-letter
+  placeholder" badge in the title bar and taskbar — a yellow rounded tile
+  with a generic "W" glyph — instead of rendering the real PNG icon the
+  `.desktop`'s `Icon=wine-bleeding` points at. Fixed by:
+  - `share/applications/wine-bleeding-wb.desktop`: added
+    `StartupWMClass=wine-bleeding` under the other keys.
+  - `src/wb-gui-lib/wb-gui-dialogs.sh`: added `--class=wine-bleeding` to
+    `_WB_GUI_YAD_COMMON` so every yad window wb-gui spawns advertises
+    the matching WM_CLASS.
+
 ### Post-install GUI launch fixes
 
 - **`wb-gui` Option A lib-dir fallback (system-install crash fix)** —

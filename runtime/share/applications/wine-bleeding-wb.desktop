@@ -20,3 +20,4 @@ Type=Application
 Categories=Game;Emulator;
 MimeType=application/x-ms-dos-executable;
 StartupNotify=true
+StartupWMClass=wine-bleeding

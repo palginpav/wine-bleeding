@@ -9,10 +9,17 @@ set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Common yad style flags.  Exported so subshells can use them too.
+#
+# --class=wine-bleeding sets the X11 WM_CLASS (and Wayland app_id) so window
+# managers can associate the window with our .desktop launcher (which carries
+# StartupWMClass=wine-bleeding). Without this, KDE Plasma / GNOME fall back
+# to a first-letter placeholder icon in the title bar and taskbar because
+# yad's default WM_CLASS is "yad", not our app name.
 # ---------------------------------------------------------------------------
 _WB_GUI_YAD_COMMON=(
   --center
   --window-icon=wine-bleeding
+  --class=wine-bleeding
   --width=600
 )
 
