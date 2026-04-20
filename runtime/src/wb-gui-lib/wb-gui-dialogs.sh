@@ -41,7 +41,18 @@ wb_gui_yad() {
     echo "wb-gui: yad not found on PATH" >&2
     return 1
   }
-  (exec -a wine-bleeding "${_yad_bin}" "${_WB_GUI_YAD_COMMON[@]}" "$@")
+  # Force XWayland (GDK_BACKEND=x11) so the window sets _NET_WM_ICON with
+  # real pixel data from the icon theme (GTK3 reads the --window-icon name
+  # and encodes pixels into the atom). Plasma's Wayland compositor reads
+  # _NET_WM_ICON from XWayland windows for the title bar decoration; pure
+  # Wayland-native GTK3 apps rely on an xdg-shell icon convention Plasma's
+  # decorations don't consistently pick up, which left a yellow "W" badge
+  # in the title bar even after taskbar matching started working. Taskbar
+  # continues to match via StartupWMClass under XWayland.
+  (
+    export GDK_BACKEND=x11
+    exec -a wine-bleeding "${_yad_bin}" "${_WB_GUI_YAD_COMMON[@]}" "$@"
+  )
 }
 
 # ---------------------------------------------------------------------------

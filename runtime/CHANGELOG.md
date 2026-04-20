@@ -2,6 +2,21 @@
 
 ## [Unreleased] — v1.5.0-dev
 
+### First-run desktop shortcut (parity with PortProton onboarding)
+
+- **`_wb_gui_place_desktop_shortcut()` in `src/wb-gui`** — on first open of
+  the main game-library window, wb-gui now drops the `.desktop` launcher on
+  the user's Desktop (same UX as PortProton's onboarding). One-shot: guarded
+  by `$WB_HOME/.gui-desktop-shortcut-placed` sentinel; opt-out via
+  `WB_GUI_NO_DESKTOP_SHORTCUT=1` for headless / CI use. Desktop dir resolved
+  via `xdg-user-dir DESKTOP` with fallbacks to `$HOME/Desktop` and the
+  Russian localized `$HOME/Рабочий стол`. Source `.desktop` resolved via a
+  candidate list (RPM install → `/usr/local` install → `~/.local/share`
+  user install → dev tree). `chmod +x` applied so KDE/GNOME treat the
+  launcher as trusted; additionally tries `gio set metadata::trusted true`
+  for KDE Plasma 5.24+. Safe no-op when source file or Desktop dir
+  can't be located. Invoked at the top of `_cmd_main_window`.
+
 ### Window/taskbar icon linkage (StartupWMClass + argv[0] rewrite for Wayland)
 
 - **`StartupWMClass=wine-bleeding` + yad `--class=wine-bleeding` + argv[0]
@@ -15,10 +30,16 @@
   - `src/wb-gui-lib/wb-gui-dialogs.sh` `_WB_GUI_YAD_COMMON`: added
     `--class=wine-bleeding` for X11 / XWayland sessions (sets `WM_CLASS`).
   - `src/wb-gui-lib/wb-gui-dialogs.sh` `wb_gui_yad()`: invokes yad via
-    `(exec -a wine-bleeding "$(command -v yad)" ...)` so argv[0] is rewritten.
-    GTK3 on Wayland derives the xdg-toplevel `app_id` from `g_get_prgname()`
-    which defaults to argv[0]; `--class` alone is ignored on native Wayland.
-    Both mechanisms cover both session types.
+    `(exec -a wine-bleeding "$(command -v yad)" ...)` so argv[0] is
+    rewritten (GTK3 on Wayland derives the xdg-toplevel `app_id` from
+    `g_get_prgname()` which defaults to argv[0]; `--class` alone is ignored
+    on native Wayland). The same function also exports `GDK_BACKEND=x11`
+    before the exec so yad runs under XWayland — Plasma's title-bar
+    decoration reads `_NET_WM_ICON` from X11 windows for its icon, while
+    the Wayland decoration path didn't consistently pick up the .desktop's
+    Icon= even after app_id matching worked for the taskbar. XWayland keeps
+    `StartupWMClass` matching working for the taskbar while giving KWin the
+    `_NET_WM_ICON` pixels it needs for the decoration.
 
 ### Post-install GUI launch fixes
 

@@ -117,6 +117,77 @@ _wb_gui_home() {
 }
 
 # ---------------------------------------------------------------------------
+# _wb_gui_place_desktop_shortcut — drop a launcher on the user's Desktop on
+# first GUI run (mirrors PortProton's onboarding). Controlled by a sentinel
+# file so it's one-shot; skipped entirely if WB_GUI_NO_DESKTOP_SHORTCUT=1.
+# Safe no-op when the system .desktop file, the Desktop directory, or both
+# cannot be located.
+# ---------------------------------------------------------------------------
+_wb_gui_place_desktop_shortcut() {
+  [[ "${WB_GUI_NO_DESKTOP_SHORTCUT:-0}" == "1" ]] && return 0
+
+  local home_dir sentinel
+  home_dir="$(_wb_gui_home)"
+  sentinel="${home_dir}/.gui-desktop-shortcut-placed"
+  # Sentinel exists → already placed (or user deleted and we should respect that)
+  [[ -e "${sentinel}" ]] && return 0
+
+  # Locate the source .desktop — prefer system-installed, fall back to
+  # dev-tree (sibling share/ relative to wb-gui binary), fall back to
+  # user-install. Silently no-op if none found.
+  local src_desktop=""
+  local candidate
+  for candidate in \
+      "/usr/share/applications/wine-bleeding-wb.desktop" \
+      "/usr/local/share/applications/wine-bleeding-wb.desktop" \
+      "${HOME}/.local/share/applications/wine-bleeding-wb.desktop" \
+      "${_WB_GUI_SELF_DIR}/../share/applications/wine-bleeding-wb.desktop"
+  do
+    if [[ -f "${candidate}" ]]; then
+      src_desktop="${candidate}"
+      break
+    fi
+  done
+  [[ -z "${src_desktop}" ]] && return 0
+
+  # Resolve the user's Desktop directory via xdg-user-dir; fall back to
+  # the two conventional names (en + ru localized).
+  local desktop_dir=""
+  if command -v xdg-user-dir >/dev/null 2>&1; then
+    desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  fi
+  if [[ -z "${desktop_dir}" || ! -d "${desktop_dir}" ]]; then
+    if [[ -d "${HOME}/Desktop" ]]; then
+      desktop_dir="${HOME}/Desktop"
+    elif [[ -d "${HOME}/Рабочий стол" ]]; then
+      desktop_dir="${HOME}/Рабочий стол"
+    else
+      return 0
+    fi
+  fi
+
+  local dst="${desktop_dir}/wine-bleeding-wb.desktop"
+  # Don't clobber if the user already has one there.
+  if [[ -e "${dst}" ]]; then
+    mkdir -p "${home_dir}" && touch "${sentinel}"
+    return 0
+  fi
+
+  # Copy + make executable (KDE/GNOME require +x to treat the file as a
+  # trusted launcher; otherwise it renders as a text file).
+  if cp "${src_desktop}" "${dst}" 2>/dev/null && chmod +x "${dst}" 2>/dev/null; then
+    # KDE Plasma 5.24+ also honours an xattr marking the file as trusted.
+    # Try but don't require success (filesystem may not support xattrs).
+    command -v gio >/dev/null 2>&1 && \
+      gio set -t string "${dst}" metadata::trusted true 2>/dev/null || true
+  fi
+
+  # Always mark placed, even if copy failed — we don't want to retry every
+  # launch. User can delete the sentinel to re-trigger.
+  mkdir -p "${home_dir}" && touch "${sentinel}"
+}
+
+# ---------------------------------------------------------------------------
 # cmd: wb-gui --version
 # ---------------------------------------------------------------------------
 _cmd_version() {
@@ -361,6 +432,7 @@ _gui_build_game_rows() {
 # ---------------------------------------------------------------------------
 _cmd_main_window() {
   _wb_gui_load_libs
+  _wb_gui_place_desktop_shortcut
 
   while true; do
     # Build game rows for this iteration
