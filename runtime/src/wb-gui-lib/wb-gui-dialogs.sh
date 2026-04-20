@@ -26,9 +26,22 @@ _WB_GUI_YAD_COMMON=(
 # ---------------------------------------------------------------------------
 # wb_gui_yad — call yad with common style flags prepended.
 # Usage: wb_gui_yad [yad-args...]
+#
+# argv[0] rewrite: GTK3 on Wayland derives the xdg-toplevel app_id from
+# g_get_prgname(), which defaults to argv[0]. yad's binary name "yad" would
+# leave the window unmatched against our StartupWMClass=wine-bleeding, so
+# KDE Plasma falls back to a first-letter placeholder badge. Running yad as
+# argv[0]="wine-bleeding" makes the Wayland app_id match. On X11 / XWayland,
+# --class=wine-bleeding in _WB_GUI_YAD_COMMON does the equivalent for
+# WM_CLASS; we keep both for belt-and-braces across session types.
 # ---------------------------------------------------------------------------
 wb_gui_yad() {
-  yad "${_WB_GUI_YAD_COMMON[@]}" "$@"
+  local _yad_bin
+  _yad_bin="$(command -v yad)" || {
+    echo "wb-gui: yad not found on PATH" >&2
+    return 1
+  }
+  (exec -a wine-bleeding "${_yad_bin}" "${_WB_GUI_YAD_COMMON[@]}" "$@")
 }
 
 # ---------------------------------------------------------------------------

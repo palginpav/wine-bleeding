@@ -2,20 +2,23 @@
 
 ## [Unreleased] — v1.5.0-dev
 
-### Window/taskbar icon linkage (StartupWMClass + yad --class)
+### Window/taskbar icon linkage (StartupWMClass + argv[0] rewrite for Wayland)
 
-- **`StartupWMClass=wine-bleeding` + yad `--class=wine-bleeding`** — without
-  these two in sync, KDE Plasma / GNOME could not associate wb-gui's yad
-  window with the installed `.desktop` entry (yad's default WM_CLASS is
-  literally `yad`, not our app name). Plasma fell back to its "first-letter
-  placeholder" badge in the title bar and taskbar — a yellow rounded tile
-  with a generic "W" glyph — instead of rendering the real PNG icon the
-  `.desktop`'s `Icon=wine-bleeding` points at. Fixed by:
+- **`StartupWMClass=wine-bleeding` + yad `--class=wine-bleeding` + argv[0]
+  rewrite** — without these, KDE Plasma / GNOME could not associate wb-gui's
+  yad window with the installed `.desktop` entry (yad's default WM_CLASS /
+  Wayland app_id is literally `yad`). Plasma fell back to its "first-letter
+  placeholder" badge — a yellow rounded tile with a generic "W" glyph — in
+  the title bar and taskbar. Three-pronged fix:
   - `share/applications/wine-bleeding-wb.desktop`: added
-    `StartupWMClass=wine-bleeding` under the other keys.
-  - `src/wb-gui-lib/wb-gui-dialogs.sh`: added `--class=wine-bleeding` to
-    `_WB_GUI_YAD_COMMON` so every yad window wb-gui spawns advertises
-    the matching WM_CLASS.
+    `StartupWMClass=wine-bleeding` so the `.desktop` declares its match key.
+  - `src/wb-gui-lib/wb-gui-dialogs.sh` `_WB_GUI_YAD_COMMON`: added
+    `--class=wine-bleeding` for X11 / XWayland sessions (sets `WM_CLASS`).
+  - `src/wb-gui-lib/wb-gui-dialogs.sh` `wb_gui_yad()`: invokes yad via
+    `(exec -a wine-bleeding "$(command -v yad)" ...)` so argv[0] is rewritten.
+    GTK3 on Wayland derives the xdg-toplevel `app_id` from `g_get_prgname()`
+    which defaults to argv[0]; `--class` alone is ignored on native Wayland.
+    Both mechanisms cover both session types.
 
 ### Post-install GUI launch fixes
 
