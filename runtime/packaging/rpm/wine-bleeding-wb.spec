@@ -83,6 +83,17 @@ make install \
 %{_datadir}/icons/hicolor/512x512/apps/wine-bleeding.png
 %{_datadir}/icons/hicolor/1024x1024/apps/wine-bleeding.png
 
+%pre
+# Upgrade from the short-lived intermediate release that shipped a
+# placeholder scalable SVG (commit 74f00d7fa17): rpm --force same-version
+# reinstall does not run the erase-old-files sweep, so that SVG lingers
+# on disk as an orphan and FDO IconThemeSpec gives it priority over the
+# real PNGs. Remove it pre-upgrade so the new install lands cleanly.
+# The test -f guard makes this safe on fresh installs.
+if [ -f %{_datadir}/icons/hicolor/scalable/apps/wine-bleeding.svg ]; then
+    rm -f %{_datadir}/icons/hicolor/scalable/apps/wine-bleeding.svg
+fi
+
 %post
 # Update desktop database if available
 if command -v update-desktop-database >/dev/null 2>&1; then

@@ -13,13 +13,19 @@
   `WB_LIB_DIR`/`WB_GUI_LIB_DIR` env overrides → sibling → `/usr/lib/wine-bleeding`
   → `/usr/local/lib/wine-bleeding`. Resolves both `wb-lib/` and `wb-gui-lib/`
   independently. `_WB_BIN` now prefers `command -v wb` over a sibling guess.
-- **Placeholder scalable SVG icon removed** — `share/icons/hicolor/scalable/apps/wine-bleeding.svg`
-  was an 822-byte hand-coded wine-glass-plus-blood-drop stub. FDO
-  IconThemeSpec prefers scalable over PNG, so DEs rendered the stub instead
-  of the real 256/512/1024 PNG artwork. Deleted the placeholder and the now-empty
-  `scalable/` directory; DEs fall back to the PNGs. AppImage already prefers
-  the 512 PNG (`build-appimage.sh:135-137`) so the AppImage `.DirIcon` is
-  unaffected.
+- **Placeholder scalable SVG icon removed + RPM `%pre` cleanup for orphan** —
+  `share/icons/hicolor/scalable/apps/wine-bleeding.svg` was an 822-byte
+  hand-coded wine-glass-plus-blood-drop stub. FDO IconThemeSpec prefers
+  scalable over PNG, so DEs rendered the stub instead of the real
+  256/512/1024 PNG artwork. Deleted the placeholder from the source tree.
+  An intermediate release (commit 74f00d7fa17) shipped the SVG as a real
+  `%files` entry before it was recognised as a placeholder, so users who
+  installed that intermediate and then `rpm -Uvh --force` upgraded to the
+  SVG-less version ended up with an orphaned SVG on disk (rpm same-version
+  `--force` skips the erase-old-files sweep). Added a `%pre` scriptlet that
+  `rm -f`'s the SVG path pre-upgrade, safe as a no-op on fresh installs.
+  AppImage already prefers the 512 PNG (`build-appimage.sh:135-137`) so
+  the AppImage `.DirIcon` is unaffected.
 - **wb-gui, `.desktop`, and icons now ship in the RPM payload (was: empty
   `%ghost` paths)** — `packaging/rpm/wine-bleeding-wb.spec` marked the wb-gui
   binary, `wb-gui-lib/`, the `.desktop` launcher, and all icon sizes with
