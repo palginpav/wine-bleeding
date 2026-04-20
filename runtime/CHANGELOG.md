@@ -35,11 +35,17 @@ per-component rebuilds (DXVK / VKD3D-Proton / DXVK-NVAPI). gstreamer is
 - **Tests** (+30) — `30_dist_registry.bats`, `31_dist_manager.bats`,
   `32_build_component.bats`. Full suite 409 → 439, all green.
 
+### Polish — Phase B follow-up (Stage 2 auto-close)
+
+- **`src/wb-gui` `_cmd_build_component`** — Stage 2 log-tail now closes
+  automatically when the builder exits naturally (async yad launch + poll
+  loop on both PIDs). Previously the user had to click Cancel to advance
+  to Stage 3. User-cancel path unchanged (still SIGTERM → 5s → SIGKILL
+  to the process group). Poll interval and post-exit drain configurable
+  via `WB_GUI_BUILD_POLL_SEC` / `WB_GUI_BUILD_TAIL_DRAIN_SEC`.
+
 Known limitations (polish follow-ups for v1.7.x):
 
-- Stage 2 log-tail window does not auto-close when the builder exits — the
-  user clicks Cancel to advance to Stage 3. A `kill-yad-after-wait` fix is
-  tracked as a v1.7.x polish item.
 - Stage 1 "Current version" field is static (shows DXVK at open time);
   `yad --form` does not support live field refresh on `CB` change.
 - `full-build.sh` decomposition Steps 3-4 are deferred (see above).

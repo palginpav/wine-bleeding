@@ -1725,29 +1725,39 @@ _cmd_build_component() {
   ) &
   local builder_pid=$!
 
-  # Stage 2 yad --text-info --tail (blocks until user clicks Cancel or builder exits)
-  local yad_tail_rc=0
+  # Stage 2 — launch yad --text-info --tail async so we can close it
+  # automatically when the builder exits naturally (P1 polish, v1.7.x).
   wb_gui_dialog_log_tail \
     "Building ${component_display} — ${dist_name}" \
-    "${log_file}" || yad_tail_rc=$?
+    "${log_file}" &
+  local yad_pid=$!
 
-  # yad returned — either user clicked Cancel (rc=1/252) or we kill it when builder exits
-  # Handle cancel: SIGTERM → 5s watchdog → SIGKILL (W2 OQ-4)
-  if [[ "${yad_tail_rc}" -ne 0 ]]; then
-    # User clicked Cancel
+  # Poll until EITHER yad closes (user cancel) OR the builder finishes.
+  while kill -0 "${yad_pid}" 2>/dev/null && kill -0 "${builder_pid}" 2>/dev/null; do
+    sleep "${WB_GUI_BUILD_POLL_SEC:-0.3}"
+  done
+
+  if kill -0 "${builder_pid}" 2>/dev/null; then
+    # yad exited first → user cancelled. SIGTERM → 5s watchdog → SIGKILL (W2 OQ-4).
+    kill -TERM -- "-${builder_pid}" 2>/dev/null || true
+    local watchdog_secs=5 elapsed=0
+    while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt "${watchdog_secs}" ]]; do
+      sleep 1
+      (( elapsed++ )) || true
+    done
     if kill -0 "${builder_pid}" 2>/dev/null; then
-      kill -TERM -- "-${builder_pid}" 2>/dev/null || true
-      local watchdog_secs=5
-      local elapsed=0
-      while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt "${watchdog_secs}" ]]; do
-        sleep 1
-        (( elapsed++ )) || true
-      done
-      if kill -0 "${builder_pid}" 2>/dev/null; then
-        kill -KILL -- "-${builder_pid}" 2>/dev/null || true
-      fi
+      kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+    fi
+  else
+    # Builder finished first → close the tail window after a short drain.
+    sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
+    if kill -0 "${yad_pid}" 2>/dev/null; then
+      kill "${yad_pid}" 2>/dev/null || true
     fi
   fi
+
+  # Reap yad (non-fatal if already gone).
+  wait "${yad_pid}" 2>/dev/null || true
 
   # Wait for builder to finish (get exit code)
   local builder_exit=0
