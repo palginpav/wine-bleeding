@@ -19,7 +19,7 @@
 #   - apps.json registry lives at $WB_HOME/apps.json; mutations are atomic.
 set -euo pipefail
 
-WB_GUI_VERSION="1.6.0-dev"
+WB_GUI_VERSION="1.6.0"
 
 # ---------------------------------------------------------------------------
 # Resolve paths — Option A fallback for system-package installs (mirrors wb).
@@ -815,7 +815,13 @@ _launch_tab_general() {
   gpu_opts="$(echo "${gpu_opts}" | sed 's/Auto!Auto/Auto/;s/NVIDIA!NVIDIA/NVIDIA/;s/AMD!AMD/AMD/;s/Intel!Intel/Intel/')"
 
   local winver_opts="${winver_label}!Windows 10!Windows 11!Windows 8.1!Windows 8!Windows 7!Windows XP!Vista"
-  winver_opts="$(echo "${winver_opts}" | sed 's/Windows 10!Windows 10/Windows 10/')"
+  winver_opts="${winver_opts//Windows 10!Windows 10/Windows 10}"
+  winver_opts="${winver_opts//Windows 11!Windows 11/Windows 11}"
+  winver_opts="${winver_opts//Windows 8.1!Windows 8.1/Windows 8.1}"
+  winver_opts="${winver_opts//Windows 8!Windows 8/Windows 8}"
+  winver_opts="${winver_opts//Windows 7!Windows 7/Windows 7}"
+  winver_opts="${winver_opts//Windows XP!Windows XP/Windows XP}"
+  winver_opts="${winver_opts//Vista!Vista/Vista}"
 
   yad --plug="${yad_key}" --tabnum=1 \
     --form --separator="|" --no-markup \
@@ -971,7 +977,7 @@ _launch_tab_app() {
   fi
 
   # Load app values
-  local winver_cur debug_cur wine_args_cur env_vars_cur app_display_name
+  local winver_cur debug_cur app_display_name
   winver_cur="$(wb_gui_settings_get_app "${app_id}" win_version 2>/dev/null || true)"
   debug_cur="$(wb_gui_settings_get_app "${app_id}" wine_debug 2>/dev/null || true)"
 
@@ -1256,14 +1262,10 @@ _cmd_settings_v2() {
   local prefix_id="${scope_id}"
   local app_id="${scope_id}"
 
-  # For scopes other than the initial one, we defer picker resolution
-  # to when the user actually clicks the corresponding tab.
-  # We track which scopes have been resolved.
-  local dist_resolved=false prefix_resolved=false app_resolved=false
   case "${scope}" in
-    dist)    dist_id="${scope_id}";    dist_resolved=true;;
-    prefix)  prefix_id="${scope_id}";  prefix_resolved=true;;
-    app)     app_id="${scope_id}";     app_resolved=true;;
+    dist)    dist_id="${scope_id}";;
+    prefix)  prefix_id="${scope_id}";;
+    app)     app_id="${scope_id}";;
   esac
 
   # Generate a unique key for this notebook session

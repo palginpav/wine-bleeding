@@ -1,6 +1,41 @@
 # wine-bleeding Runtime Layer Changelog
 
-## [Unreleased] — v1.5.0-dev
+## [1.6.0] — 2026-04-20
+
+### Phase A: generalize games → apps (+4-layer settings + post-install detection)
+
+Large foundational rework. The main window is now app-centric rather than
+game-centric; any Windows program (portable, installer, game) is a first-class
+app. Backing file migrated from `games.json` to `apps.json` on first open
+(idempotent, dual-write shim retained for 24_gui.bats legacy compat).
+
+- **`src/wb-gui-lib/wb-gui-apps.sh`** (new) — apps registry primitives:
+  `wb_gui_apps_add`, `wb_gui_apps_list`, `wb_gui_apps_remove`,
+  `wb_gui_apps_migrate_from_games`. Schema: `share/schemas/wb_apps.schema.json`.
+- **`src/wb-gui-lib/wb-gui-settings.sh`** (new) — 4-layer settings hierarchy
+  (general → dist → prefix → per-app) with `wb_gui_settings_resolve` override
+  resolver. Each layer is a JSON file under `$WB_HOME/settings/`. Schema:
+  `share/schemas/wb_settings.schema.json`.
+- **`src/wb-gui-lib/wb-gui-detection.sh`** (new) — post-install detection via
+  Start Menu `.lnk` snapshot/diff: `wb_detect_snapshot_before`,
+  `wb_detect_diff_after`, `wb_detect_sweep_stale`, `wb_detect_purge`.
+  Parses `.lnk` files via `libexec/wb-lnk-parse.py` (new, Python stdlib only).
+- **`src/wb-gui`** — main window rework: "Add App" button (portable /
+  installer 2-choice flow), "Settings" opens the 4-pane notebook
+  (General / Dist / Prefix / Per-App) on a selected row, "Prefs" opens the
+  notebook at General. Settings dialog is persistent across Save: Save re-
+  enters the notebook; only Close or Escape exit. New `detect <prefix>`
+  sub-command uses a Continue/Cancel question so the user has a clean cancel
+  path that purges the snapshot.
+- **`src/wb-gui-lib/wb-gui-dialogs.sh`** — new `wb_gui_dialog_question`
+  helper for Continue/Cancel question dialogs.
+- **`tests/26_apps_migration.bats`**, **`tests/27_settings_layers.bats`**,
+  **`tests/28_detection.bats`**, **`tests/29_ui_flows.bats`** (new) — 101
+  new bats tests covering the above. All 13 prior `24_gui.bats` cases remain
+  green via the legacy dual-write + settings bridge (the bridge is
+  transitional and scheduled for removal in v1.7.0).
+
+Also in this release:
 
 ### First-run desktop shortcut (parity with PortProton onboarding)
 

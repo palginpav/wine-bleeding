@@ -4,10 +4,10 @@ load "lib/common.bash"
 
 WB="${BATS_TEST_DIRNAME}/../src/wb"
 
-@test "wb --version prints wb 1.5.0-dev" {
+@test "wb --version prints wb 1.6.0" {
   run "${WB}" --version
   [ "${status}" -eq 0 ]
-  [ "${output}" = "wb 1.5.0-dev" ]
+  [ "${output}" = "wb 1.6.0" ]
 }
 
 @test "wb help exits 0 and prints a non-empty line" {
