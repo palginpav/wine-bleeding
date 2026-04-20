@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=wine-bleeding
+Comment=Wine-bleeding runtime GUI
+Exec=wb-gui %U
+Icon=wine-bleeding
+Type=Application
+Categories=Game;Emulator;
+StartupNotify=true

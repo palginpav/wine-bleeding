@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# fake-yad — mock yad for wb-gui tests (M12)
+#
+# Protocol:
+#   $WB_TEST_YAD_RESPONSE — path to a file containing the canned stdout response.
+#                           If absent or empty, yad exits 0 with no output.
+#   $WB_TEST_YAD_RESPONSE_RC — desired exit code (default: 0)
+#   $WB_TEST_YAD_LOG — path where this script appends each invocation (one line per call).
+#
+# The log format is:
+#   <timestamp_utc> ARGV: <space-separated-quoted-args>
+#
+# Tests can then grep the log to assert that wb-gui called yad with the
+# expected arguments.
+set -euo pipefail
+
+# Log the invocation
+if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
+  {
+    printf 'ARGV:'
+    for arg in "$@"; do
+      printf ' %q' "${arg}"
+    done
+    printf '\n'
+  } >> "${WB_TEST_YAD_LOG}"
+fi
+
+# Emit canned response
+if [[ -n "${WB_TEST_YAD_RESPONSE:-}" && -f "${WB_TEST_YAD_RESPONSE}" ]]; then
+  cat "${WB_TEST_YAD_RESPONSE}"
+fi
+
+# Exit with canned exit code
+exit "${WB_TEST_YAD_RESPONSE_RC:-0}"

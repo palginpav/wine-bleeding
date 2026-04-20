@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "wine-bleeding"
+    {
+      "install_path" "."
+      "display_name" "wine-bleeding"
+      "from_oslist"  "windows"
+      "to_oslist"    "linux"
+    }
+  }
+}

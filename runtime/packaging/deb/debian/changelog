@@ -1,0 +1,9 @@
+wine-bleeding-wb (1.5.0~dev-1) unstable; urgency=medium
+
+  * Multi-format packaging: RPM, DEB, AppImage (M packaging milestone)
+  * Add make install target with DESTDIR/PREFIX support
+  * Option A lib fallback: wb resolves libs from /usr/lib/wine-bleeding/wb-lib/
+    when not co-located with wb-lib/ sibling directory
+  * VERSION file at runtime/VERSION for consistent versioning across formats
+
+ -- Pavel Palgin <pavel.palgin@gmail.com>  Sat, 19 Apr 2026 09:00:00 +0000

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# AppRun — AppImage entry point for wine-bleeding-wb
+#
+# The AppDir layout mirrors the system install:
+#   AppDir/usr/bin/wb
+#   AppDir/usr/lib/wine-bleeding/wb-lib/
+#   AppDir/usr/share/wine-bleeding/
+#
+# NOTE: This AppImage does NOT bundle glibc, bash, jq, python3, or flock.
+# Those must be present on the host system. See packaging/README.md.
+# ---------------------------------------------------------------------------
+
+APPDIR="${APPDIR:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"}"
+
+# Prefer the AppImage-bundled wb
+WB="${APPDIR}/usr/bin/wb"
+
+if [[ ! -x "${WB}" ]]; then
+  echo "AppRun: cannot find wb at ${WB}" >&2
+  exit 1
+fi
+
+# Expose wb-lib via the expected fallback path.
+# The Option A resolver in wb checks sibling wb-lib/ first — it exists inside
+# the AppDir, so no extra env var needed. Still export for clarity.
+export WB_APPIMAGE_ROOT="${APPDIR}"
+
+# Forward all arguments to wb (or wb-gui if GUI-flavored invocation)
+WB_GUI="${APPDIR}/usr/bin/wb-gui"
+if [[ "${WB_APPIMAGE_GUI:-0}" == "1" ]] && [[ -x "${WB_GUI}" ]]; then
+  exec "${WB_GUI}" "$@"
+fi
+
+exec "${WB}" "$@"

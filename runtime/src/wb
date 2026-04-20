@@ -1,9 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="1.4.0-dev"
+WB_VERSION="1.5.0-dev"
 
-_WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
+# Resolve lib directory — Option A fallback for system-package installs.
+# When wb lives at /usr/bin/wb, the sibling wb-lib/ doesn't exist there;
+# libs live at /usr/lib/wine-bleeding/wb-lib/ instead.
+#
+# Resolution order:
+#   1. $WB_LIB_DIR env var (testing / DESTDIR overrides)
+#   2. Sibling wb-lib/ next to the wb binary (source-tree layout)
+#   3. /usr/lib/wine-bleeding/wb-lib  (system install, PREFIX=/usr)
+#   4. /usr/local/lib/wine-bleeding/wb-lib  (system install, PREFIX=/usr/local)
+_wb_resolve_lib_dir() {
+  # Allow explicit override (useful for DESTDIR testing and custom prefixes)
+  if [[ -n "${WB_LIB_DIR:-}" ]] && [[ -d "${WB_LIB_DIR}" ]]; then
+    echo "${WB_LIB_DIR}"
+    return 0
+  fi
+  local sibling_lib
+  sibling_lib="$(dirname "${BASH_SOURCE[0]}")/wb-lib"
+  if [[ -d "${sibling_lib}" ]]; then
+    cd "${sibling_lib}" && pwd
+    return 0
+  fi
+  # System-install fallbacks (PREFIX/lib/wine-bleeding/wb-lib)
+  local candidates=(
+    "/usr/lib/wine-bleeding/wb-lib"
+    "/usr/local/lib/wine-bleeding/wb-lib"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -d "${c}" ]]; then
+      echo "${c}"
+      return 0
+    fi
+  done
+  echo "wb: cannot locate wb-lib directory" >&2
+  return 1
+}
+_WB_LIB_DIR="$(_wb_resolve_lib_dir)"
 
 _wb_load_libs() {
   # shellcheck source=wb-lib/wb-paths.sh
@@ -151,6 +187,7 @@ Subcommands:
   import-ppdb <INPUT> [OUT] Convert a legacy bash .ppdb to JSON .wb.ppdb
                             OUT defaults to INPUT.wb.ppdb
   install portproton-plugin Thin wrapper: invokes install.sh --portproton-plugin
+  gui                       Open the wb-gui graphical interface (requires yad)
   pp install                Install wb hook into PortProton user.conf
   pp uninstall              Remove wb hook from PortProton user.conf
   pp status                 Report PP installation state (hook, reapply.sh, .wine_ver)
@@ -2067,6 +2104,18 @@ main() {
     import-ppdb)
       shift
       cmd_import_ppdb "$@"
+      ;;
+    gui)
+      # Exec wb-gui from the same directory as wb
+      local _wb_self_dir
+      _wb_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      local _wb_gui_bin="${_wb_self_dir}/wb-gui"
+      if [[ ! -x "${_wb_gui_bin}" ]]; then
+        echo "wb gui: wb-gui not found at ${_wb_gui_bin}" >&2
+        exit 1
+      fi
+      shift
+      exec "${_wb_gui_bin}" "$@"
       ;;
     "")
       usage

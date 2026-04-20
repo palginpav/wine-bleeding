@@ -32,6 +32,7 @@ DRY_RUN=0
 PURGE=0
 PP_ROOT_OVERRIDE=""
 WB_HOME_OVERRIDE=""
+STEAM_COMPAT_TOOL=0      # --steam-compat-tool: symlink compat tool into Steam
 
 usage() {
   cat <<EOF
@@ -48,6 +49,7 @@ Modes (mutually exclusive):
 Options:
   --prefix PATH           Override \$WB_HOME install location
   --pp-root PATH          Override PortProton root (plugin mode only)
+  --steam-compat-tool     Also symlink compat tool into ~/.steam/root/compatibilitytools.d/
   --purge                 With --uninstall: wipe prefixes/ and profile.conf too
   --dry-run               Print what would happen; write nothing
   --help                  Show this message and exit
@@ -99,6 +101,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pp-root=*)
       PP_ROOT_OVERRIDE="${1#--pp-root=}"
+      shift
+      ;;
+    --steam-compat-tool)
+      STEAM_COMPAT_TOOL=1
       shift
       ;;
     *)
@@ -265,6 +271,9 @@ _do_standalone_install() {
   # 8. Create ~/.local/bin/wb symlink
   _install_wb_symlink
 
+  # M12: Install GUI components
+  _install_gui
+
   # 9. Check PATH
   _check_path_contains_local_bin
 
@@ -384,6 +393,144 @@ _install_wb_symlink() {
   else
     ln -s "${symlink_target}" "${symlink_path}"
     _info "Created ${symlink_path} -> ${symlink_target}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# M12: Install GUI files (wb-gui, wb-gui-lib, icons, .desktop, compat tool)
+# ---------------------------------------------------------------------------
+_install_gui() {
+  _info "Installing GUI components (M12)..."
+
+  # 1. wb-gui binary
+  if [[ -f "${_SRC_DIR}/wb-gui" ]]; then
+    _install_file "${_SRC_DIR}/wb-gui" "${WB_HOME}/bin/wb-gui" 755
+  else
+    _warn "wb-gui not found in source; skipping GUI install."
+    return 0
+  fi
+
+  # 2. wb-gui-lib/ scripts
+  if [[ -d "${_SRC_DIR}/wb-gui-lib" ]]; then
+    if [[ "${DRY_RUN}" -eq 0 ]]; then
+      mkdir -p "${WB_HOME}/bin/wb-gui-lib" || true
+    fi
+    local glib
+    for glib in "${_SRC_DIR}/wb-gui-lib/"*.sh; do
+      [[ -f "${glib}" ]] || continue
+      _install_file "${glib}" "${WB_HOME}/bin/wb-gui-lib/$(basename "${glib}")" 644
+    done
+  fi
+
+  # 3. ~/.local/bin/wb-gui symlink
+  local local_bin="${HOME}/.local/bin"
+  local wb_gui_symlink="${local_bin}/wb-gui"
+  local wb_gui_target="${WB_HOME}/bin/wb-gui"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "  [dry-run] create symlink ${wb_gui_symlink} -> ${wb_gui_target}"
+  else
+    mkdir -p "${local_bin}"
+    if [[ -L "${wb_gui_symlink}" ]]; then
+      local cur
+      cur="$(readlink -f "${wb_gui_symlink}" 2>/dev/null || true)"
+      local want
+      want="$(readlink -f "${wb_gui_target}" 2>/dev/null || true)"
+      if [[ "${cur}" != "${want}" ]]; then
+        ln -sfn "${wb_gui_target}" "${wb_gui_symlink}"
+        _info "Relinked ${wb_gui_symlink} -> ${wb_gui_target}"
+      fi
+    elif [[ ! -e "${wb_gui_symlink}" ]]; then
+      ln -s "${wb_gui_target}" "${wb_gui_symlink}"
+      _info "Created ${wb_gui_symlink} -> ${wb_gui_target}"
+    fi
+  fi
+
+  # 4. .desktop file
+  local apps_dir="${HOME}/.local/share/applications"
+  local desktop_src="${_SHARE_DIR}/applications/wine-bleeding-wb.desktop"
+  if [[ -f "${desktop_src}" ]]; then
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+      echo "  [dry-run] install ${desktop_src} -> ${apps_dir}/wine-bleeding-wb.desktop"
+    else
+      mkdir -p "${apps_dir}"
+      cp -f "${desktop_src}" "${apps_dir}/wine-bleeding-wb.desktop"
+      chmod 644 "${apps_dir}/wine-bleeding-wb.desktop"
+      _info "Installed .desktop file -> ${apps_dir}/wine-bleeding-wb.desktop"
+      # Trigger update if available
+      if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "${apps_dir}" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  # 5. Icon
+  local icon_dir="${HOME}/.local/share/icons/hicolor/scalable/apps"
+  local icon_src="${_SHARE_DIR}/icons/hicolor/scalable/apps/wine-bleeding.svg"
+  if [[ -f "${icon_src}" ]]; then
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+      echo "  [dry-run] install icon -> ${icon_dir}/wine-bleeding.svg"
+    else
+      mkdir -p "${icon_dir}"
+      cp -f "${icon_src}" "${icon_dir}/wine-bleeding.svg"
+      chmod 644 "${icon_dir}/wine-bleeding.svg"
+      _info "Installed icon -> ${icon_dir}/wine-bleeding.svg"
+    fi
+  fi
+
+  # 6. compatibilitytools.d tree (always install into WB_HOME/share/)
+  local compat_src="${_SHARE_DIR}/compatibilitytools.d"
+  if [[ -d "${compat_src}" ]]; then
+    local compat_dst="${WB_HOME}/share/compatibilitytools.d"
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+      echo "  [dry-run] install compat tool tree -> ${compat_dst}"
+    else
+      mkdir -p "${compat_dst}"
+      cp -a "${compat_src}/." "${compat_dst}/"
+      chmod 755 "${compat_dst}/wine-bleeding/wine-bleeding.sh" 2>/dev/null || true
+      _info "Installed compat tool tree -> ${compat_dst}"
+    fi
+  fi
+
+  # 7. Steam compat tool symlink (only if --steam-compat-tool was passed)
+  if [[ "${STEAM_COMPAT_TOOL}" -eq 1 ]]; then
+    _install_steam_compat_tool
+  fi
+}
+
+# Symlink the compat tool tree into Steam's compatibilitytools.d/
+_install_steam_compat_tool() {
+  local steam_compat_dir="${HOME}/.steam/root/compatibilitytools.d"
+  local compat_src="${WB_HOME}/share/compatibilitytools.d/wine-bleeding"
+  local compat_link="${steam_compat_dir}/wine-bleeding"
+
+  if [[ ! -d "${compat_src}" ]] && [[ "${DRY_RUN}" -eq 0 ]]; then
+    _warn "compat tool source not found: ${compat_src}; run standalone install first."
+    return 0
+  fi
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "  [dry-run] create symlink ${compat_link} -> ${compat_src}"
+    return 0
+  fi
+
+  mkdir -p "${steam_compat_dir}"
+
+  if [[ -L "${compat_link}" ]]; then
+    local cur_target
+    cur_target="$(readlink -f "${compat_link}" 2>/dev/null || true)"
+    local want_target
+    want_target="$(readlink -f "${compat_src}" 2>/dev/null || true)"
+    if [[ "${cur_target}" == "${want_target}" ]]; then
+      _info "Steam compat symlink already correct: ${compat_link}"
+      return 0
+    fi
+    ln -sfn "${compat_src}" "${compat_link}"
+    _info "Relinked Steam compat tool: ${compat_link} -> ${compat_src}"
+  elif [[ -e "${compat_link}" ]]; then
+    _warn "${compat_link} exists and is not a symlink; skipping."
+  else
+    ln -s "${compat_src}" "${compat_link}"
+    _info "Created Steam compat symlink: ${compat_link} -> ${compat_src}"
   fi
 }
 

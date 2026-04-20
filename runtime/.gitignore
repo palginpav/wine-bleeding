@@ -1,0 +1,15 @@
+# Build outputs — produced by make dist-*, never committed.
+dist-packages/
+packaging/appimage/AppDir/
+packaging/appimage/appimagetool-x86_64.AppImage
+packaging/deb/*.deb
+packaging/deb/*.buildinfo
+packaging/deb/*.changes
+packaging/rpm/*.rpm
+packaging/rpm/BUILD/
+packaging/rpm/BUILDROOT/
+packaging/rpm/RPMS/
+packaging/rpm/SOURCES/
+packaging/rpm/SPECS/
+packaging/rpm/SRPMS/
+tests/vendor/bats-core/

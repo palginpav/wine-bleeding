@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+# Debian rules file for wine-bleeding-wb
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# Pure shell — nothing to compile.
+
+override_dh_auto_install:
+	# The runtime source is two levels above debian/; go up from packaging/deb/
+	make -C ../../.. install \
+		DESTDIR=$(CURDIR)/debian/wine-bleeding-wb \
+		PREFIX=/usr \
+		LIBDIR=/usr/lib \
+		SHAREDIR=/usr/share
+
+override_dh_auto_test:
+	# Tests require bats-core (git submodule). Skip during package build.
+	# Run 'make -C runtime test' separately.

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=wine-bleeding wb
+GenericName=Wine Runtime Manager
+Comment=Manage Wine prefixes and runtime distributions
+Exec=wb %F
+Icon=wine-bleeding
+Type=Application
+Categories=Utility;Game;
+Terminal=true
+MimeType=application/x-ms-dos-executable;application/x-msi;application/x-msdownload;
+StartupNotify=false
+X-AppImage-Version=1.5.0-dev

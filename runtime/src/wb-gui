@@ -1,0 +1,475 @@
+#!/usr/bin/env bash
+# wb-gui — wine-bleeding GUI launcher (M12)
+#
+# Usage:
+#   wb-gui                          Open main game-library window
+#   wb-gui add-game <exe>           Register a game (used internally by Add Game button)
+#   wb-gui settings <prefix>        Open per-game settings dialog for prefix
+#   wb-gui --version                Print version and exit
+#   wb-gui --help                   Print usage and exit
+#
+# Design:
+#   - Every business operation calls `wb` CLI subcommands. This script NEVER
+#     touches prefix internals or .wb_runtime / .wb_components directly.
+#   - yad is the GUI toolkit. All dialogs go through wb-gui-dialogs.sh wrappers
+#     so the backend can be swapped later.
+#   - games.json registry lives at $WB_HOME/games.json; mutations are atomic.
+set -euo pipefail
+
+WB_GUI_VERSION="1.5.0-dev"
+
+# ---------------------------------------------------------------------------
+# Resolve paths: wb-gui lives next to wb and wb-gui-lib/
+# ---------------------------------------------------------------------------
+_WB_GUI_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_WB_GUI_LIB_DIR="${_WB_GUI_SELF_DIR}/wb-gui-lib"
+_WB_BIN="${_WB_GUI_SELF_DIR}/wb"
+
+# ---------------------------------------------------------------------------
+# Source wb-lib helpers we need (paths, json, log) without importing all of wb.
+# This avoids circular imports: we source only the leaf libraries.
+# ---------------------------------------------------------------------------
+_wb_gui_load_libs() {
+  local wb_lib_dir="${_WB_GUI_SELF_DIR}/wb-lib"
+  # shellcheck source=wb-lib/wb-paths.sh
+  source "${wb_lib_dir}/wb-paths.sh"
+  # shellcheck source=wb-lib/wb-json.sh
+  source "${wb_lib_dir}/wb-json.sh"
+  # shellcheck source=wb-lib/wb-log.sh
+  source "${wb_lib_dir}/wb-log.sh"
+  # GUI-specific libs
+  # shellcheck source=wb-gui-lib/wb-gui-games.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-games.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-dialogs.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh"
+}
+
+# ---------------------------------------------------------------------------
+# Input validation helpers (mirror _wb_validate_path_arg from wb)
+# ---------------------------------------------------------------------------
+_wb_gui_validate_path_arg() {
+  local context="$1"
+  local val="$2"
+  if [[ -z "${val}" ]]; then
+    echo "wb-gui ${context}: PATH/NAME required" >&2
+    exit 1
+  fi
+  if [[ "${val}" == *..* ]]; then
+    echo "wb-gui ${context}: invalid PATH/NAME '${val}' (path traversal via '..' rejected)" >&2
+    exit 1
+  fi
+  local _path_re='^/[-A-Za-z0-9_./\ ]+$'
+  local _name_re='^[A-Za-z0-9_.-]+$'
+  if [[ "${val}" == /* ]]; then
+    if ! [[ "${val}" =~ ${_path_re} ]]; then
+      echo "wb-gui ${context}: invalid PATH '${val}' (expected [-A-Za-z0-9_./ ]+)" >&2
+      exit 1
+    fi
+  else
+    if ! [[ "${val}" =~ ${_name_re} ]]; then
+      echo "wb-gui ${context}: invalid NAME '${val}' (expected [A-Za-z0-9_.-]+)" >&2
+      exit 1
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# resolve WB_HOME
+# ---------------------------------------------------------------------------
+_wb_gui_home() {
+  echo "${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: wb-gui --version
+# ---------------------------------------------------------------------------
+_cmd_version() {
+  echo "wb-gui ${WB_GUI_VERSION}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: wb-gui add-game <exe>
+# Register a game from the command line (also called from Add Game button).
+# Prompts for a prefix name.
+# ---------------------------------------------------------------------------
+_cmd_add_game() {
+  _wb_gui_load_libs
+
+  local exe="${1:-}"
+  if [[ -z "${exe}" ]]; then
+    # No exe given: open file picker
+    exe="$(wb_gui_dialog_file_select "Select Windows .exe")" || {
+      echo "wb-gui add-game: cancelled" >&2
+      exit 0
+    }
+  fi
+
+  # Validate
+  _wb_gui_validate_exe_path "${exe}"
+
+  # Derive default prefix name from EXE basename
+  local default_prefix
+  default_prefix="$(basename "${exe}" .exe)"
+  default_prefix="$(basename "${default_prefix}" .EXE)"
+
+  # Prompt for prefix name
+  local prefix_name
+  prefix_name="$(wb_gui_dialog_entry \
+    "New Game" \
+    "Prefix name (leave blank to use default):" \
+    "${default_prefix}")" || {
+    echo "wb-gui add-game: cancelled" >&2
+    exit 0
+  }
+  [[ -z "${prefix_name}" ]] && prefix_name="${default_prefix}"
+
+  # Add to registry
+  local game_id
+  game_id="$(wb_gui_games_add "${exe}" "${prefix_name}")"
+
+  wb_gui_dialog_info "Game Added" \
+    "Registered '${prefix_name}' (${exe}).\nID: ${game_id}"
+}
+
+# ---------------------------------------------------------------------------
+# cmd: wb-gui settings <prefix>
+# Write a .wb.ppdb next to the exe for the given prefix.
+# ---------------------------------------------------------------------------
+_cmd_settings() {
+  _wb_gui_load_libs
+
+  local prefix="${1:-}"
+  if [[ -z "${prefix}" ]]; then
+    wb_gui_dialog_error "Settings" "No prefix specified."
+    exit 1
+  fi
+  _wb_gui_validate_path_arg "settings" "${prefix}"
+
+  # Find exe for this prefix from games registry
+  local reg
+  reg="$(_wb_gui_games_registry)"
+  if [[ ! -f "${reg}" ]]; then
+    wb_gui_dialog_error "Settings" "No games registered yet."
+    exit 1
+  fi
+
+  local exe
+  exe="$(jq -r --arg p "${prefix}" \
+    '.games[] | select(.prefix == $p) | .exe' "${reg}" | head -1)"
+  if [[ -z "${exe}" ]]; then
+    wb_gui_dialog_error "Settings" "No game found for prefix '${prefix}'."
+    exit 1
+  fi
+
+  # Read existing .wb.ppdb if present
+  local ppdb_path="${exe%.exe}.wb.ppdb"
+  ppdb_path="${ppdb_path%.EXE}.wb.ppdb"
+  # Simpler: place next to the exe
+  ppdb_path="$(dirname "${exe}")/.wb.ppdb"
+
+  local cur_dxvk="TRUE"
+  local cur_vkd3d="FALSE"
+  local cur_nvapi="FALSE"
+  local cur_esync="TRUE"
+  local cur_fsync="FALSE"
+  local cur_dxvk_hud=""
+  local cur_overrides=""
+
+  if [[ -f "${ppdb_path}" ]] && jq empty "${ppdb_path}" 2>/dev/null; then
+    local v
+    v="$(jq -r --arg k WB_DXVK  '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "0" ]] && cur_dxvk="FALSE"
+    v="$(jq -r --arg k WB_VKD3D '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_vkd3d="TRUE"
+    v="$(jq -r --arg k WB_NVAPI '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_nvapi="TRUE"
+    v="$(jq -r --arg k WB_ESYNC '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "0" ]] && cur_esync="FALSE"
+    v="$(jq -r --arg k WB_FSYNC '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_fsync="TRUE"
+    cur_dxvk_hud="$(jq -r --arg k DXVK_HUD          '.env[$k] // empty' "${ppdb_path}")"
+    cur_overrides="$(jq -r --arg k WINEDLLOVERRIDES   '.env[$k] // empty' "${ppdb_path}")"
+  fi
+
+  # Show settings form dialog
+  local form_output
+  form_output="$(wb_gui_dialog_form_settings \
+    "${prefix}" "${exe}" \
+    "${cur_dxvk}" "${cur_vkd3d}" "${cur_nvapi}" \
+    "${cur_esync}" "${cur_fsync}" \
+    "${cur_dxvk_hud}" "${cur_overrides}")" || {
+    echo "wb-gui settings: cancelled" >&2
+    exit 0
+  }
+
+  # Parse pipe-separated output: DXVK|VKD3D|NVAPI|ESYNC|FSYNC|HUD|OVERRIDES
+  IFS='|' read -r -a fields <<< "${form_output}"
+  local dxvk_val="${fields[0]:-TRUE}"
+  local vkd3d_val="${fields[1]:-FALSE}"
+  local nvapi_val="${fields[2]:-FALSE}"
+  local esync_val="${fields[3]:-TRUE}"
+  local fsync_val="${fields[4]:-FALSE}"
+  local hud_val="${fields[5]:-}"
+  local overrides_val="${fields[6]:-}"
+
+  # Convert TRUE/FALSE to 1/0
+  _bool_to_int() { [[ "$1" == "TRUE" ]] && echo "1" || echo "0"; }
+
+  local dxvk_int vkd3d_int nvapi_int esync_int fsync_int
+  dxvk_int="$(_bool_to_int "${dxvk_val}")"
+  vkd3d_int="$(_bool_to_int "${vkd3d_val}")"
+  nvapi_int="$(_bool_to_int "${nvapi_val}")"
+  esync_int="$(_bool_to_int "${esync_val}")"
+  fsync_int="$(_bool_to_int "${fsync_val}")"
+
+  # Build JSON for .wb.ppdb
+  local ppdb_json
+  ppdb_json="$(jq -n \
+    --arg dxvk  "${dxvk_int}" \
+    --arg vkd3d "${vkd3d_int}" \
+    --arg nvapi "${nvapi_int}" \
+    --arg esync "${esync_int}" \
+    --arg fsync "${fsync_int}" \
+    --arg hud   "${hud_val}" \
+    --arg over  "${overrides_val}" \
+    '{
+      "schema": 1,
+      "env": {
+        "WB_DXVK":          $dxvk,
+        "WB_VKD3D":         $vkd3d,
+        "WB_NVAPI":         $nvapi,
+        "WB_ESYNC":         $esync,
+        "WB_FSYNC":         $fsync,
+        "DXVK_HUD":         $hud,
+        "WINEDLLOVERRIDES": $over
+      }
+    }')"
+
+  wb_json_write_atomic "${ppdb_path}" "${ppdb_json}"
+  wb_gui_dialog_info "Settings Saved" "Settings written to:\n${ppdb_path}"
+}
+
+# ---------------------------------------------------------------------------
+# _gui_launch_game <exe> <prefix>
+# Launch a game through `wb run` in a background subshell.
+# ---------------------------------------------------------------------------
+_gui_launch_game() {
+  local exe="${1}"
+  local prefix="${2}"
+  _wb_gui_validate_exe_path "${exe}"
+  _wb_gui_validate_path_arg "launch" "${prefix}"
+  # Run with --wait so we can observe the exit code
+  "${_WB_BIN}" run "${exe}" --prefix "${prefix}" --wait
+}
+
+# ---------------------------------------------------------------------------
+# _gui_remove_game <game_id>
+# Remove a game from the registry. Optionally removes the prefix.
+# ---------------------------------------------------------------------------
+_gui_remove_game() {
+  _wb_gui_load_libs
+  local game_id="${1:-}"
+  if [[ -z "${game_id}" ]]; then
+    return 0
+  fi
+
+  local entry
+  entry="$(wb_gui_games_get "${game_id}" 2>/dev/null)" || {
+    wb_gui_dialog_error "Remove" "Game not found: ${game_id}"
+    return 1
+  }
+  local name prefix
+  name="$(printf '%s' "${entry}" | jq -r '.name')"
+  prefix="$(printf '%s' "${entry}" | jq -r '.prefix')"
+
+  wb_gui_dialog_confirm "Remove Game" \
+    "Remove '${name}' from the registry?\n\nPrefix '${prefix}' will be kept on disk.\nUse 'wb prefix' commands to manage it." || {
+    return 0
+  }
+
+  wb_gui_games_remove "${game_id}"
+  wb_gui_dialog_info "Removed" "Game '${name}' removed from registry."
+}
+
+# ---------------------------------------------------------------------------
+# _gui_build_game_rows
+# Outputs yad --list data rows: NAME\tPREFIX\tRUNTIME\tLAST_PLAYED
+# ---------------------------------------------------------------------------
+_gui_build_game_rows() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  local -a rows=()
+  local id name prefix exe added_utc
+
+  while IFS=$'\t' read -r id name prefix exe added_utc; do
+    [[ -z "${id}" ]] && continue
+
+    # Determine runtime from prefix sentinel if present
+    local runtime="-"
+    local sentinel="${wb_home}/prefixes/${prefix}/.wb_runtime"
+    if [[ -f "${sentinel}" ]] && jq empty "${sentinel}" 2>/dev/null; then
+      runtime="$(jq -r '.dist_name // "-"' "${sentinel}" 2>/dev/null || echo "-")"
+    fi
+
+    # Use added_utc as "last played" placeholder (real play-time tracking is future work)
+    local last_played="${added_utc:-never}"
+
+    rows+=("${name}" "${prefix}" "${runtime}" "${last_played}" "${id}" "${exe}")
+  done < <(wb_gui_games_list)
+
+  # Print rows; each field on its own line (yad --list reads line-by-line)
+  local f
+  for f in "${rows[@]}"; do
+    printf '%s\n' "${f}"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_main_window — the main game library window
+# ---------------------------------------------------------------------------
+_cmd_main_window() {
+  _wb_gui_load_libs
+
+  while true; do
+    # Build game rows for this iteration
+    local -a row_data=()
+    local row
+    while IFS= read -r row; do
+      row_data+=("${row}")
+    done < <(_gui_build_game_rows)
+
+    # If no games, add a placeholder row
+    if [[ "${#row_data[@]}" -eq 0 ]]; then
+      row_data=("No games registered" "" "" "" "" "")
+    fi
+
+    # Show main list window; capture button exit code and selected row.
+    # Columns: NAME | PREFIX | RUNTIME | LAST PLAYED | (hidden) ID | (hidden) EXE
+    local yad_out
+    local yad_rc=0
+    yad_out="$(wb_gui_yad \
+      --list \
+      --title="wine-bleeding — games" \
+      --text="Double-click a game to launch it." \
+      --column="NAME" \
+      --column="PREFIX" \
+      --column="RUNTIME" \
+      --column="LAST PLAYED" \
+      --column="ID:HD" \
+      --column="EXE:HD" \
+      --print-all \
+      --separator="|" \
+      --double-click-action="echo launch" \
+      --button="Add Game!list-add:10" \
+      --button="Launch!media-playback-start:20" \
+      --button="Settings!preferences-system:30" \
+      --button="Remove!list-remove:40" \
+      --button="Refresh!view-refresh:50" \
+      --button="Close!window-close:1" \
+      "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || yad_rc=$?
+
+    case "${yad_rc}" in
+      1|252)
+        # Close or window-manager close
+        break
+        ;;
+      10)
+        # Add Game button
+        _cmd_add_game ""
+        ;;
+      20|0)
+        # Launch button or double-click (exit 0)
+        # Parse first selected row
+        local sel_name sel_prefix _sel_rt _sel_lp sel_id sel_exe
+        IFS='|' read -r sel_name sel_prefix _sel_rt _sel_lp sel_id sel_exe <<< "${yad_out}"
+        if [[ -z "${sel_id}" || "${sel_name}" == "No games registered" ]]; then
+          wb_gui_dialog_info "Launch" "Please select a game first."
+        else
+          _gui_launch_game "${sel_exe}" "${sel_prefix}" || {
+            wb_gui_dialog_error "Launch Failed" \
+              "Wine exited non-zero for '${sel_name}'.\nCheck wb log for details."
+          }
+        fi
+        ;;
+      30)
+        # Settings button
+        IFS='|' read -r _sel_name sel_prefix _sel_rt _sel_lp _sel_id _sel_exe <<< "${yad_out}"
+        if [[ -z "${sel_prefix}" ]]; then
+          wb_gui_dialog_info "Settings" "Please select a game first."
+        else
+          _cmd_settings "${sel_prefix}"
+        fi
+        ;;
+      40)
+        # Remove button
+        IFS='|' read -r _sel_name _sel_prefix _sel_rt _sel_lp sel_id _sel_exe <<< "${yad_out}"
+        if [[ -n "${sel_id}" ]]; then
+          _gui_remove_game "${sel_id}"
+        else
+          wb_gui_dialog_info "Remove" "Please select a game first."
+        fi
+        ;;
+      50)
+        # Refresh — loop again
+        continue
+        ;;
+      *)
+        # Unknown; treat as close
+        break
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# usage
+# ---------------------------------------------------------------------------
+_usage() {
+  cat <<EOF
+wb-gui ${WB_GUI_VERSION} -- wine-bleeding GUI launcher
+
+Usage:
+  wb-gui                      Open main game-library window
+  wb-gui add-game [<exe>]     Register a game (file dialog if exe omitted)
+  wb-gui settings <prefix>    Open per-game settings for a prefix
+  wb-gui --version            Print version
+  wb-gui --help               Show this help
+
+This tool requires yad (install: apt/dnf install yad).
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Main dispatch
+# ---------------------------------------------------------------------------
+main() {
+  local subcommand="${1:-}"
+
+  case "${subcommand}" in
+    --version)
+      _cmd_version
+      ;;
+    --help|-h|help)
+      _usage
+      ;;
+    add-game)
+      shift
+      _cmd_add_game "${1:-}"
+      ;;
+    settings)
+      shift
+      _cmd_settings "${1:-}"
+      ;;
+    "")
+      # No subcommand: open main window
+      if ! command -v yad >/dev/null 2>&1; then
+        echo "wb-gui: yad is not installed. Install with: apt install yad / dnf install yad" >&2
+        exit 1
+      fi
+      _cmd_main_window
+      ;;
+    *)
+      echo "wb-gui: unknown subcommand '${subcommand}'" >&2
+      _usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

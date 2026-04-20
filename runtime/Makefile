@@ -1,6 +1,12 @@
 SHELL := /usr/bin/env bash
 
-PREFIX ?= $(HOME)/.local
+PREFIX     ?= /usr/local
+DESTDIR    ?=
+# Allow callers to override lib and share dirs independently.
+# Default: PREFIX/lib and PREFIX/share (FHS-compliant for multi-arch use
+# set LIBDIR=$(PREFIX)/lib explicitly to avoid lib64).
+LIBDIR     ?= $(PREFIX)/lib
+SHAREDIR   ?= $(PREFIX)/share
 
 RUNTIME_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 SRC_DIR     := $(RUNTIME_DIR)src
@@ -16,8 +22,13 @@ FIXTURE_PLUGIN        := $(TESTS_DIR)/fixtures/runtime-plugins/ge-proton-9-26.js
 FIXTURE_DIST          := $(TESTS_DIR)/fixtures/fake-dist
 FIXTURE_PP_PREFIX     := $(TESTS_DIR)/fixtures/fake-pp-prefix
 
+PACKAGING_DIR := $(RUNTIME_DIR)packaging
+
 SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb \
+  $(SRC_DIR)/wb-gui \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-games.sh \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-dialogs.sh \
   $(SRC_DIR)/wb-diag \
   $(SRC_DIR)/wb-lib/wb-log.sh \
   $(SRC_DIR)/wb-lib/wb-die.sh \
@@ -39,13 +50,19 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-lib/wb-container.sh \
   $(SRC_DIR)/wb-lib/wb-runtimes.sh \
   $(SRC_DIR)/hooks/reapply.sh \
+  $(RUNTIME_DIR)share/compatibilitytools.d/wine-bleeding/wine-bleeding.sh \
   $(RUNTIME_DIR)install.sh \
-  $(RUNTIME_DIR)publish-release-integration.sh
+  $(RUNTIME_DIR)publish-release-integration.sh \
+  $(PACKAGING_DIR)/rpm/build.sh \
+  $(PACKAGING_DIR)/deb/build.sh \
+  $(PACKAGING_DIR)/appimage/build-appimage.sh \
+  $(PACKAGING_DIR)/appimage/AppRun
 
 FLATPAK_DIR      := $(RUNTIME_DIR)flatpak
 FLATPAK_MANIFEST := $(FLATPAK_DIR)/org.wine_bleeding.wb.yaml
 
-.PHONY: test lint install schema-check flatpak-validate flatpak-build
+.PHONY: test lint install schema-check flatpak-validate flatpak-build \
+        dist-rpm dist-deb dist-appimage dist-all
 
 test:
 	@if [[ -x "$(VENDOR_BATS)" ]]; then \
@@ -140,7 +157,68 @@ COMPEOF \
 	fi
 
 install:
-	@echo "install.sh: not yet implemented (lands M7) [PREFIX=$(PREFIX)]"; exit 1
+	@echo "Installing wine-bleeding-wb to $(DESTDIR)$(PREFIX) (LIBDIR=$(LIBDIR))"
+	install -Dm755 $(SRC_DIR)/wb         $(DESTDIR)$(PREFIX)/bin/wb
+	install -Dm755 $(SRC_DIR)/wb-diag    $(DESTDIR)$(PREFIX)/bin/wb-diag
+	@if test -f $(SRC_DIR)/wb-gui; then \
+	  install -Dm755 $(SRC_DIR)/wb-gui   $(DESTDIR)$(PREFIX)/bin/wb-gui; \
+	fi
+	@for f in $(SRC_DIR)/wb-lib/*.sh; do \
+	  install -Dm644 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/wb-lib/$$(basename $$f)"; \
+	done
+	@if ls $(SRC_DIR)/wb-gui-lib/*.sh >/dev/null 2>&1; then \
+	  for f in $(SRC_DIR)/wb-gui-lib/*.sh; do \
+	    install -Dm644 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/wb-gui-lib/$$(basename $$f)"; \
+	  done; \
+	fi
+	@for f in $(SRC_DIR)/hooks/*.sh; do \
+	  install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/hooks/$$(basename $$f)"; \
+	done
+	install -Dm644 $(RUNTIME_DIR)share/defaults.conf \
+	  $(DESTDIR)$(SHAREDIR)/wine-bleeding/defaults.conf
+	@for f in $(RUNTIME_DIR)share/schemas/*.json; do \
+	  install -Dm644 "$$f" "$(DESTDIR)$(SHAREDIR)/wine-bleeding/schemas/$$(basename $$f)"; \
+	done
+	@if test -f $(RUNTIME_DIR)share/applications/wine-bleeding-wb.desktop; then \
+	  install -Dm644 $(RUNTIME_DIR)share/applications/wine-bleeding-wb.desktop \
+	    $(DESTDIR)$(SHAREDIR)/applications/wine-bleeding-wb.desktop; \
+	fi
+	@if test -f $(RUNTIME_DIR)share/icons/hicolor/scalable/apps/wine-bleeding.svg; then \
+	  install -Dm644 $(RUNTIME_DIR)share/icons/hicolor/scalable/apps/wine-bleeding.svg \
+	    $(DESTDIR)$(SHAREDIR)/icons/hicolor/scalable/apps/wine-bleeding.svg; \
+	fi
+	@if test -d $(RUNTIME_DIR)share/steam/compatibilitytools.d/wine-bleeding; then \
+	  mkdir -p "$(DESTDIR)$(SHAREDIR)/steam/compatibilitytools.d"; \
+	  cp -a $(RUNTIME_DIR)share/steam/compatibilitytools.d/wine-bleeding \
+	    $(DESTDIR)$(SHAREDIR)/steam/compatibilitytools.d/wine-bleeding; \
+	fi
+	install -Dm644 $(RUNTIME_DIR)CHANGELOG.md \
+	  $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding/CHANGELOG.md
+	install -Dm644 $(RUNTIME_DIR)README.md \
+	  $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding/README.md
+	@echo "Install complete."
+
+dist-rpm:
+	@if ! command -v rpmbuild >/dev/null 2>&1; then \
+	  echo "SKIP: rpmbuild not found — install rpm-build to build RPMs"; \
+	  exit 0; \
+	fi
+	@bash $(PACKAGING_DIR)/rpm/build.sh
+
+dist-deb:
+	@if ! command -v dpkg-buildpackage >/dev/null 2>&1; then \
+	  echo "SKIP: dpkg-buildpackage not found — install dpkg-dev to build DEBs"; \
+	  exit 0; \
+	fi
+	@bash $(PACKAGING_DIR)/deb/build.sh || { \
+	  echo "SKIP: dist-deb failed (missing build deps — run on Debian/Ubuntu with debhelper installed)"; \
+	  exit 0; \
+	}
+
+dist-appimage:
+	@bash $(PACKAGING_DIR)/appimage/build-appimage.sh
+
+dist-all: dist-rpm dist-deb dist-appimage
 
 # ---------------------------------------------------------------------------
 # Flatpak targets (M14)

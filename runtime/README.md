@@ -81,6 +81,53 @@ or prints a skip message and exits 0 so CI is not broken.
 
     make -C runtime install PREFIX=/path/to/target
 
+## M12 GUI — `wb-gui`
+
+### Launching
+
+```bash
+wb-gui           # Open the main game-library window (requires yad)
+wb gui           # Same, via the wb dispatcher
+wb-gui --help    # Usage
+```
+
+### Adding a game
+
+```bash
+wb-gui add-game /path/to/Game.exe
+# or click "Add Game" in the GUI window
+```
+
+### Per-game settings
+
+Settings are stored as a `.wb.ppdb` JSON file next to the exe. Open via:
+
+```bash
+wb-gui settings <prefix-name>
+# or select a game and click "Settings" in the GUI window
+```
+
+Available toggles: DXVK, VKD3D-Proton, NVAPI, ESYNC, FSYNC, DXVK_HUD, Extra DLL Overrides.
+
+### Steam Compatibility Tool
+
+To register wine-bleeding as a Steam compatibility tool:
+
+```bash
+./install.sh --steam-compat-tool
+```
+
+This symlinks `share/compatibilitytools.d/wine-bleeding/` into
+`~/.steam/root/compatibilitytools.d/wine-bleeding/`. After restarting Steam,
+select "wine-bleeding" in a game's compatibility settings.
+
+### Dependencies (M12)
+
+- **yad** — required for the GUI. Install: `apt install yad` / `dnf install yad`
+- **jq** — already required from M1
+
+---
+
 ## Milestone status
 
 | Milestone | Status | Notes |
@@ -96,8 +143,58 @@ or prints a skip message and exits 0 so CI is not broken.
 | M8 | done | Snapshot/repair, log rotation, wb-diag support bundle, MVP polish |
 | M9 | done | Multi-build / distro-switching (`wb run --runtime NAME`, `wb runtime list --multi`) |
 | M11 | done | Pressure-vessel / SLR container opt-in (`WB_CONTAINER=1`) |
+| M12 | done | GUI (`wb-gui`, yad), Steam compat tool, games registry, .desktop entry |
 | M13 | done | Runtime plugin registry (`wb runtime register/unregister`, external runtimes in list + resolver) |
 | M14 | done | Flatpak packaging (`org.wine_bleeding.wb.yaml`), sandbox-aware PP detection |
+
+## Installing from packages
+
+Pre-built packages let you install `wb` via your distro's package manager
+without cloning the source tree.
+
+### RPM (Fedora / RHEL / openSUSE)
+
+```bash
+sudo dnf install wine-bleeding-wb   # once available in a repo
+wb --version
+```
+
+### DEB (Debian / Ubuntu)
+
+```bash
+sudo apt-get install wine-bleeding-wb   # once available in a repo
+wb --version
+```
+
+### AppImage (any distro)
+
+```bash
+chmod +x wine-bleeding-wb-1.5.0-dev-x86_64.AppImage
+./wine-bleeding-wb-1.5.0-dev-x86_64.AppImage --version
+# Optional: move to PATH
+sudo mv wine-bleeding-wb-1.5.0-dev-x86_64.AppImage /usr/local/bin/wb
+```
+
+The AppImage requires `bash >= 4.4`, `jq >= 1.6`, `flock` (util-linux), and
+`python3` on the host — it does not bundle these system libraries.
+
+### Building packages from source
+
+```bash
+# All formats (skips any whose build tool is absent):
+make -C runtime dist-all
+
+# Individual formats:
+make -C runtime dist-rpm        # needs rpmbuild
+make -C runtime dist-deb        # needs dpkg-buildpackage
+make -C runtime dist-appimage   # downloads appimagetool if absent
+
+# Manual system install:
+sudo make -C runtime install PREFIX=/usr
+```
+
+See `runtime/packaging/README.md` for detailed build instructions and
+troubleshooting.
 
 ## M14 — Flatpak install (advanced / post-MVP)
 

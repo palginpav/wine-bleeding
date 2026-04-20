@@ -12,7 +12,31 @@ set -euo pipefail
 #   - Any auth tokens or secrets
 # ---------------------------------------------------------------------------
 
-_WB_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/wb-lib" && pwd)"
+# Resolve lib directory — Option A fallback for system-package installs.
+# Honour $WB_LIB_DIR env var override for DESTDIR testing / custom prefixes.
+_wb_diag_resolve_lib_dir() {
+  if [[ -n "${WB_LIB_DIR:-}" ]] && [[ -d "${WB_LIB_DIR}" ]]; then
+    echo "${WB_LIB_DIR}"
+    return 0
+  fi
+  local sibling_lib
+  sibling_lib="$(dirname "${BASH_SOURCE[0]}")/wb-lib"
+  if [[ -d "${sibling_lib}" ]]; then
+    cd "${sibling_lib}" && pwd
+    return 0
+  fi
+  local candidates=("/usr/lib/wine-bleeding/wb-lib" "/usr/local/lib/wine-bleeding/wb-lib")
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -d "${c}" ]]; then
+      echo "${c}"
+      return 0
+    fi
+  done
+  echo "wb-diag: cannot locate wb-lib directory" >&2
+  return 1
+}
+_WB_LIB_DIR="$(_wb_diag_resolve_lib_dir)"
 _WB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _WB="${_WB_SCRIPT_DIR}/wb"
 

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Wine glass body -->
+  <path d="M20 8 L44 8 L38 32 Q36 40 32 44 Q28 40 26 32 Z"
+        fill="#c0d8f0" stroke="#4a6fa5" stroke-width="2"/>
+  <!-- Wine glass stem -->
+  <rect x="30" y="44" width="4" height="12"
+        fill="#4a6fa5"/>
+  <!-- Wine glass base -->
+  <rect x="22" y="56" width="20" height="3" rx="1.5"
+        fill="#4a6fa5"/>
+  <!-- Blood drop (red) -->
+  <ellipse cx="42" cy="20" rx="6" ry="8"
+           fill="#c0392b" opacity="0.9"/>
+  <path d="M42 10 Q45 14 48 20 Q48 26 42 28 Q36 26 36 20 Q39 14 42 10 Z"
+        fill="#e74c3c"/>
+  <!-- Wine surface inside glass -->
+  <path d="M24 18 L40 18 L38 32 Q36 38 32 42 Q28 38 26 32 Z"
+        fill="#e74c3c" opacity="0.5"/>
+</svg>

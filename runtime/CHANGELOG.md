@@ -1,5 +1,76 @@
 # wine-bleeding Runtime Layer Changelog
 
+## [Unreleased] — v1.5.0-dev
+
+### M12 — GUI (`wb-gui`) + Steam Compatibility Tool entry
+
+- **`runtime/src/wb-gui`** — bash + yad game-library GUI. Main window lists
+  games from `$WB_HOME/games.json` with NAME | PREFIX | RUNTIME | LAST PLAYED.
+  Buttons: Add Game, Launch, Settings, Remove, Refresh, Close. Subcommand
+  dispatch: `wb-gui add-game <exe>`, `wb-gui settings <prefix>`. Every
+  business operation delegates to `wb` CLI; no prefix-internal writes.
+- **`runtime/src/wb-gui-lib/wb-gui-games.sh`** — atomic games registry helpers:
+  `wb_gui_games_list`, `wb_gui_games_add`, `wb_gui_games_remove`, `wb_gui_games_get`.
+- **`runtime/src/wb-gui-lib/wb-gui-dialogs.sh`** — yad thin wrappers with
+  consistent `--center --window-icon=wine-bleeding --width=600` styling.
+- **`runtime/share/compatibilitytools.d/wine-bleeding/compatibilitytool.vdf`**
+  — Steam compat tool registration (Valve KeyValues format).
+- **`runtime/share/compatibilitytools.d/wine-bleeding/wine-bleeding.sh`** —
+  Steam compat launcher; `run` and `waitforexitandrun` verbs delegate to `wb run`.
+- **`runtime/share/applications/wine-bleeding-wb.desktop`** — XDG desktop entry.
+- **`runtime/share/icons/hicolor/scalable/apps/wine-bleeding.svg`** — placeholder SVG.
+- **`runtime/tests/24_gui.bats`** — 13 bats tests covering games registry,
+  settings dialog, input validation, .desktop key presence, VDF brace balance.
+- **`wb gui` subcommand** — `wb gui` execs `wb-gui` from the same directory.
+- **`runtime/install.sh`** — new `--steam-compat-tool` flag; GUI files, icon,
+  and .desktop file installed to XDG user dirs.
+
+---
+
+### Multi-format packaging (RPM, DEB, AppImage)
+
+- **`runtime/packaging/rpm/wine-bleeding-wb.spec`** — RPM spec for Fedora /
+  RHEL / openSUSE. Invokes `make install DESTDIR=%{buildroot} PREFIX=/usr`
+  in `%install`. `%post` runs `update-desktop-database` / `gtk-update-icon-cache`
+  when available. Changelog entry included.
+- **`runtime/packaging/rpm/build.sh`** — helper that stages a source tree and
+  invokes `rpmbuild -ba`; outputs RPMs + SHA256 to `runtime/dist-packages/`.
+- **`runtime/packaging/deb/debian/`** — Debian packaging directory:
+  `control`, `rules`, `install`, `postinst`, `changelog`, `compat`, `copyright`.
+  `rules` calls `make install DESTDIR=debian/wine-bleeding-wb PREFIX=/usr`.
+  `postinst` runs `update-desktop-database` / `gtk-update-icon-cache`.
+- **`runtime/packaging/deb/build.sh`** — stages source + debian/ and invokes
+  `dpkg-buildpackage -us -uc -b`; outputs `.deb` + SHA256 to `dist-packages/`.
+- **`runtime/packaging/appimage/AppRun`** — AppImage entry point; resolves
+  `wb` relative to `$APPDIR`; supports GUI mode via `WB_APPIMAGE_GUI=1`.
+- **`runtime/packaging/appimage/build-appimage.sh`** — stages AppDir via
+  `make install`, downloads `appimagetool` if absent, builds AppImage and emits
+  SHA256. Skips gracefully when both appimagetool and download tools are absent.
+- **`runtime/packaging/README.md`** — build + install instructions for all
+  three formats with troubleshooting sections.
+- **`runtime/Makefile`** — `install` target replaces stub with a real
+  `install -D` based implementation honouring `DESTDIR` / `PREFIX` (default:
+  `/usr/local`). New targets: `dist-rpm`, `dist-deb`, `dist-appimage`, `dist-all`.
+  New packaging scripts added to `SHELLCHECK_TARGETS`.
+- **`runtime/VERSION`** — single-line version file (`1.5.0-dev`). Authoritative
+  source consumed by packaging scripts and verified by bats test 8.
+- **Option A lib fallback** — `wb` and `wb-diag` now resolve `wb-lib/` via
+  sibling-first, then `/usr/lib/wine-bleeding/wb-lib/`, then
+  `/usr/local/lib/wine-bleeding/wb-lib/`. Enables correct operation after
+  `make install PREFIX=/usr` where libs land in `/usr/lib/`, not `/usr/bin/`.
+- **`runtime/tests/25_packaging.bats`** — 8 packaging-focused bats tests covering
+  DESTDIR layout, installed wb functionality, Option A fallback, RPM spec
+  structure, DEB control structure, AppRun smoke-run, dist-* skip behaviour,
+  and VERSION/wb --version consistency.
+
+### Breaking changes
+
+- `WB_VERSION` bumped from `1.4.0-dev` to `1.5.0-dev`.
+- `Makefile` `PREFIX` default changed from `$(HOME)/.local` to `/usr/local`
+  (standard for system packages; standalone install still uses `install.sh`).
+
+---
+
 ## [Unreleased] — v1.4.0-dev
 
 ### M14 — Flatpak packaging
