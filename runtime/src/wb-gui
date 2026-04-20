@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# wb-gui — wine-bleeding GUI launcher (M12)
+# wb-gui — wine-bleeding GUI launcher (Phase A / v1.6.0)
 #
 # Usage:
-#   wb-gui                          Open main game-library window
-#   wb-gui add-game <exe>           Register a game (used internally by Add Game button)
-#   wb-gui settings <prefix>        Open per-game settings dialog for prefix
-#   wb-gui --version                Print version and exit
-#   wb-gui --help                   Print usage and exit
+#   wb-gui                           Open main app-library window
+#   wb-gui add-app                   Add an app (2-choice dialog)
+#   wb-gui add-portable [<exe>]      Register a portable/pre-installed app
+#   wb-gui detect <prefix>           Run post-install detection for a prefix
+#   wb-gui settings-v2 [<scope> <id>]  Open 4-pane settings dialog
+#   wb-gui add-game [<exe>]          Legacy alias → add-portable (keeps 24_gui.bats green)
+#   wb-gui settings <prefix>         Legacy alias → settings-v2 prefix <prefix>
+#   wb-gui --version                 Print version and exit
+#   wb-gui --help                    Print usage and exit
 #
 # Design:
-#   - Every business operation calls `wb` CLI subcommands. This script NEVER
-#     touches prefix internals or .wb_runtime / .wb_components directly.
-#   - yad is the GUI toolkit. All dialogs go through wb-gui-dialogs.sh wrappers
-#     so the backend can be swapped later.
-#   - games.json registry lives at $WB_HOME/games.json; mutations are atomic.
+#   - Every business operation calls wb CLI subcommands or wb_gui_* library
+#     functions. This script NEVER touches prefix internals directly.
+#   - yad is the GUI toolkit. All dialogs go through wb-gui-dialogs.sh wrappers.
+#   - apps.json registry lives at $WB_HOME/apps.json; mutations are atomic.
 set -euo pipefail
 
-WB_GUI_VERSION="1.5.0-dev"
+WB_GUI_VERSION="1.6.0-dev"
 
 # ---------------------------------------------------------------------------
 # Resolve paths — Option A fallback for system-package installs (mirrors wb).
-# When wb-gui lives at /usr/bin/wb-gui, sibling wb-lib/ and wb-gui-lib/ don't
-# exist there; they're at /usr/lib/wine-bleeding/{wb-lib,wb-gui-lib}/ instead.
-#
 # Resolution order for each lib dir:
 #   1. Explicit env override (WB_LIB_DIR / WB_GUI_LIB_DIR — testing / DESTDIR)
 #   2. Sibling next to the wb-gui binary (source-tree layout)
@@ -64,7 +64,6 @@ _WB_BIN="$(command -v wb 2>/dev/null || echo "${_WB_GUI_SELF_DIR}/wb")"
 
 # ---------------------------------------------------------------------------
 # Source wb-lib helpers we need (paths, json, log) without importing all of wb.
-# This avoids circular imports: we source only the leaf libraries.
 # ---------------------------------------------------------------------------
 _wb_gui_load_libs() {
   # shellcheck source=wb-lib/wb-paths.sh
@@ -73,15 +72,21 @@ _wb_gui_load_libs() {
   source "${_WB_LIB_DIR}/wb-json.sh"
   # shellcheck source=wb-lib/wb-log.sh
   source "${_WB_LIB_DIR}/wb-log.sh"
-  # GUI-specific libs
+  # GUI-specific libs (Phase A: apps.sh is primary; games.sh stays as legacy shim)
+  # shellcheck source=wb-gui-lib/wb-gui-apps.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-apps.sh"
   # shellcheck source=wb-gui-lib/wb-gui-games.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-games.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-detection.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-detection.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-settings.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-settings.sh"
   # shellcheck source=wb-gui-lib/wb-gui-dialogs.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh"
 }
 
 # ---------------------------------------------------------------------------
-# Input validation helpers (mirror _wb_validate_path_arg from wb)
+# Input validation helpers
 # ---------------------------------------------------------------------------
 _wb_gui_validate_path_arg() {
   local context="$1"
@@ -118,10 +123,7 @@ _wb_gui_home() {
 
 # ---------------------------------------------------------------------------
 # _wb_gui_place_desktop_shortcut — drop a launcher on the user's Desktop on
-# first GUI run (mirrors PortProton's onboarding). Controlled by a sentinel
-# file so it's one-shot; skipped entirely if WB_GUI_NO_DESKTOP_SHORTCUT=1.
-# Safe no-op when the system .desktop file, the Desktop directory, or both
-# cannot be located.
+# first GUI run. Controlled by a sentinel file so it's one-shot.
 # ---------------------------------------------------------------------------
 _wb_gui_place_desktop_shortcut() {
   [[ "${WB_GUI_NO_DESKTOP_SHORTCUT:-0}" == "1" ]] && return 0
@@ -129,12 +131,8 @@ _wb_gui_place_desktop_shortcut() {
   local home_dir sentinel
   home_dir="$(_wb_gui_home)"
   sentinel="${home_dir}/.gui-desktop-shortcut-placed"
-  # Sentinel exists → already placed (or user deleted and we should respect that)
   [[ -e "${sentinel}" ]] && return 0
 
-  # Locate the source .desktop — prefer system-installed, fall back to
-  # dev-tree (sibling share/ relative to wb-gui binary), fall back to
-  # user-install. Silently no-op if none found.
   local src_desktop=""
   local candidate
   for candidate in \
@@ -150,8 +148,6 @@ _wb_gui_place_desktop_shortcut() {
   done
   [[ -z "${src_desktop}" ]] && return 0
 
-  # Resolve the user's Desktop directory via xdg-user-dir; fall back to
-  # the two conventional names (en + ru localized).
   local desktop_dir=""
   if command -v xdg-user-dir >/dev/null 2>&1; then
     desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
@@ -167,23 +163,16 @@ _wb_gui_place_desktop_shortcut() {
   fi
 
   local dst="${desktop_dir}/wine-bleeding-wb.desktop"
-  # Don't clobber if the user already has one there.
   if [[ -e "${dst}" ]]; then
     mkdir -p "${home_dir}" && touch "${sentinel}"
     return 0
   fi
 
-  # Copy + make executable (KDE/GNOME require +x to treat the file as a
-  # trusted launcher; otherwise it renders as a text file).
   if cp "${src_desktop}" "${dst}" 2>/dev/null && chmod +x "${dst}" 2>/dev/null; then
-    # KDE Plasma 5.24+ also honours an xattr marking the file as trusted.
-    # Try but don't require success (filesystem may not support xattrs).
     command -v gio >/dev/null 2>&1 && \
       gio set -t string "${dst}" metadata::trusted true 2>/dev/null || true
   fi
 
-  # Always mark placed, even if copy failed — we don't want to retry every
-  # launch. User can delete the sentinel to re-trigger.
   mkdir -p "${home_dir}" && touch "${sentinel}"
 }
 
@@ -195,9 +184,1208 @@ _cmd_version() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd: wb-gui add-game <exe>
-# Register a game from the command line (also called from Add Game button).
-# Prompts for a prefix name.
+# _gui_build_app_rows
+# Outputs yad --list data rows for the main window, one field per line.
+# Columns: NAME | PREFIX | RUNTIME | LAST PLAYED | (hidden) ID | (hidden) EXE
+# ---------------------------------------------------------------------------
+_gui_build_app_rows() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  local -a rows=()
+  local id name prefix exe added_at
+
+  while IFS=$'\t' read -r id name prefix exe added_at _source_field; do
+    [[ -z "${id}" ]] && continue
+
+    # Determine runtime from prefix sentinel if present
+    local runtime="-"
+    local sentinel="${wb_home}/prefixes/${prefix}/.wb_runtime"
+    if [[ -f "${sentinel}" ]] && jq empty "${sentinel}" 2>/dev/null; then
+      runtime="$(jq -r '.dist_name // "-"' "${sentinel}" 2>/dev/null || echo "-")"
+    fi
+
+    # LAST PLAYED: show added_at as a proxy; null/empty shows em-dash (F10 fix)
+    local last_played="—"
+    if [[ -n "${added_at}" && "${added_at}" != "null" ]]; then
+      last_played="${added_at}"
+    fi
+
+    rows+=("${name}" "${prefix}" "${runtime}" "${last_played}" "${id}" "${exe}")
+  done < <(wb_gui_apps_list)
+
+  local f
+  for f in "${rows[@]}"; do
+    printf '%s\n' "${f}"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# _gui_launch_app <exe> <prefix>
+# ---------------------------------------------------------------------------
+_gui_launch_app() {
+  local exe="${1}"
+  local prefix="${2}"
+  _wb_gui_validate_exe_path "${exe}"
+  _wb_gui_validate_path_arg "launch" "${prefix}"
+  "${_WB_BIN}" run "${exe}" --prefix "${prefix}" --wait
+}
+
+# ---------------------------------------------------------------------------
+# _gui_remove_app <app_id>
+# ---------------------------------------------------------------------------
+_gui_remove_app() {
+  local app_id="${1:-}"
+  if [[ -z "${app_id}" ]]; then
+    return 0
+  fi
+
+  local entry
+  entry="$(wb_gui_apps_get "${app_id}" 2>/dev/null)" || {
+    wb_gui_dialog_error "Remove" "App not found: ${app_id}"
+    return 1
+  }
+  local name prefix
+  name="$(printf '%s' "${entry}" | jq -r '.name')"
+  prefix="$(printf '%s' "${entry}" | jq -r '.prefix')"
+
+  wb_gui_dialog_confirm "Remove App" \
+    "Remove '${name}' from the registry?\n\nPrefix '${prefix}' will be kept on disk.\nUse 'wb prefix' commands to manage it." || {
+    return 0
+  }
+
+  wb_gui_apps_remove "${app_id}"
+  wb_gui_dialog_info "Removed" "App '${name}' removed from registry."
+}
+
+# ---------------------------------------------------------------------------
+# _gui_select_prefix
+# Opens a prefix-picker CB dialog. Returns selected prefix name on stdout.
+# If "Create new prefix..." is chosen, prompts for a name.
+# Non-zero return if user cancelled.
+# ---------------------------------------------------------------------------
+_gui_select_prefix() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # Collect existing prefix names
+  local -a prefix_names=()
+  local pdir
+  if [[ -d "${wb_home}/prefixes" ]]; then
+    for pdir in "${wb_home}/prefixes"/*/; do
+      [[ -d "${pdir}" ]] || continue
+      prefix_names+=("$(basename "${pdir}")")
+    done
+  fi
+
+  local create_label="Create new prefix..."
+  local prefix_list="${create_label}"
+  local p
+  for p in "${prefix_names[@]}"; do
+    prefix_list="${p}!${prefix_list}"
+  done
+
+  local out rc=0
+  out="$(wb_gui_yad \
+    --form \
+    --title="Select prefix" \
+    --text="Choose the Wine prefix:" \
+    --no-markup \
+    --separator="|" \
+    --field="Prefix:CB" \
+      "${prefix_list}" \
+    --button="Continue:0" \
+    --button="Cancel:1" 2>/dev/null)" || rc=$?
+
+  if [[ "${rc}" -ne 0 ]]; then
+    return 1
+  fi
+
+  local sel
+  sel="${out%%|*}"
+
+  if [[ "${sel}" == "${create_label}" ]]; then
+    local new_name rc2=0
+    new_name="$(wb_gui_dialog_entry \
+      "New Prefix" \
+      "Enter a name for the new Wine prefix:" \
+      "myprefix")" || rc2=$?
+    if [[ "${rc2}" -ne 0 || -z "${new_name}" ]]; then
+      return 1
+    fi
+    # Validate name
+    local _name_re='^[A-Za-z0-9_.-]+$'
+    if ! [[ "${new_name}" =~ ${_name_re} ]]; then
+      wb_gui_dialog_error "Error" "Invalid prefix name '${new_name}'."
+      return 1
+    fi
+    sel="${new_name}"
+  fi
+
+  printf '%s' "${sel}"
+}
+
+# ===========================================================================
+# FLOW 3B: Register Portable / Pre-Installed App
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _cmd_add_portable [<exe_path>] [--prefix <prefix>]
+# Register a portable/pre-installed app via multi-step form.
+# If exe_path is given, Step P1 is skipped.
+# If --prefix is given, Step P2 is skipped (prefix pre-scoped).
+# ---------------------------------------------------------------------------
+_cmd_add_portable() {
+  _wb_gui_load_libs
+
+  local exe_path=""
+  local pre_prefix=""
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --prefix)
+        pre_prefix="${2:-}"
+        shift 2
+        ;;
+      -*)
+        echo "wb-gui add-portable: unknown option '$1'" >&2
+        exit 1
+        ;;
+      *)
+        exe_path="${1}"
+        shift
+        ;;
+    esac
+  done
+
+  # Step P1: Select executable (if not pre-supplied)
+  if [[ -z "${exe_path}" ]]; then
+    local rc_p1=0
+    exe_path="$(wb_gui_yad \
+      --file \
+      --title="Select app executable (.exe)" \
+      --no-markup \
+      --file-filter="Windows executable|*.exe *.EXE" \
+      --file-filter="All files|*" 2>/dev/null)" || rc_p1=$?
+    if [[ "${rc_p1}" -ne 0 || -z "${exe_path}" ]]; then
+      echo "wb-gui add-portable: cancelled" >&2
+      return 0
+    fi
+  fi
+
+  # Validate exe path
+  _wb_gui_validate_exe_path "${exe_path}" || {
+    wb_gui_dialog_error "Invalid executable" \
+      "The path '${exe_path}' is not a valid executable path."
+    return 1
+  }
+
+  # Step P2: Select target prefix (if not pre-scoped)
+  local prefix_name="${pre_prefix}"
+  if [[ -z "${prefix_name}" ]]; then
+    prefix_name="$(_gui_select_prefix)" || {
+      echo "wb-gui add-portable: cancelled at prefix step" >&2
+      return 0
+    }
+  fi
+
+  # Step P3: Name the app
+  local default_name
+  default_name="$(basename "${exe_path}" | sed -E 's/\.[Ee][Xx][Ee]$//')"
+
+  local display_name rc_p3=0
+  display_name="$(wb_gui_yad \
+    --form \
+    --title="Name this app" \
+    --no-markup \
+    --separator="|" \
+    --field="Display name:TEXT" \
+      "${default_name}" \
+    --button="Next:0" \
+    --button="Cancel:1" 2>/dev/null)" || rc_p3=$?
+
+  if [[ "${rc_p3}" -ne 0 ]]; then
+    echo "wb-gui add-portable: cancelled at name step" >&2
+    return 0
+  fi
+  display_name="${display_name%%|*}"
+  if [[ -z "${display_name}" ]]; then
+    display_name="${default_name}"
+  fi
+
+  # Step P4: Icon (optional)
+  local icon_path="" rc_p4=0
+  local icon_out
+  icon_out="$(wb_gui_yad \
+    --form \
+    --title="App icon (optional)" \
+    --no-markup \
+    --separator="|" \
+    --text="You can select an icon (.png or .ico), or skip — icons can be added later." \
+    --field="Icon file:FL" \
+      "" \
+    --button="Skip:1" \
+    --button="OK:0" 2>/dev/null)" || rc_p4=$?
+
+  if [[ "${rc_p4}" -eq 0 ]]; then
+    icon_path="${icon_out%%|*}"
+  fi
+
+  # Render icon display for confirmation
+  local icon_display="(none)"
+  [[ -n "${icon_path}" ]] && icon_display="${icon_path}"
+
+  # Step P5: Confirm and register
+  local rc_p5=0
+  wb_gui_yad \
+    --form \
+    --title="Register app" \
+    --no-markup \
+    --text="Register this app:\n\n  Name:       ${display_name}\n  Executable: ${exe_path}\n  Prefix:     ${prefix_name}\n  Icon:       ${icon_display}" \
+    --button="Register:0" \
+    --button="Cancel:1" 2>/dev/null || rc_p5=$?
+
+  if [[ "${rc_p5}" -ne 0 ]]; then
+    echo "wb-gui add-portable: cancelled at confirm step" >&2
+    return 0
+  fi
+
+  local new_id
+  new_id="$(wb_gui_apps_add_portable "${exe_path}" "${prefix_name}" "${display_name}")"
+
+  # Set icon if provided
+  if [[ -n "${icon_path}" ]]; then
+    wb_gui_apps_set "${new_id}" "$(jq -cn --arg ip "${icon_path}" '{"icon_path":$ip}')" || true
+  fi
+
+  wb_gui_dialog_info "App Registered" \
+    "Added '${display_name}' to your app library.\nID: ${new_id}"
+}
+
+# ===========================================================================
+# FLOW 3A: Install via Installer
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _cmd_install_flow
+# Run the installer → detection → prompt flow.
+# ---------------------------------------------------------------------------
+_cmd_install_flow() {
+  _wb_gui_load_libs
+
+  # Step B1: Select installer executable
+  local installer_exe rc_b1=0
+  installer_exe="$(wb_gui_yad \
+    --file \
+    --title="Select installer .exe" \
+    --file-filter="Windows installer|*.exe *.EXE" 2>/dev/null)" || rc_b1=$?
+
+  if [[ "${rc_b1}" -ne 0 || -z "${installer_exe}" ]]; then
+    echo "wb-gui install: cancelled" >&2
+    return 0
+  fi
+
+  _wb_gui_validate_exe_path "${installer_exe}" || {
+    wb_gui_dialog_error "Invalid installer" \
+      "The path '${installer_exe}' is not a valid executable path."
+    return 1
+  }
+
+  # Step B2: Select target prefix
+  local prefix_name
+  prefix_name="$(_gui_select_prefix)" || {
+    echo "wb-gui install: cancelled at prefix step" >&2
+    return 0
+  }
+
+  # Step B3: Confirm and install
+  local rc_b3=0
+  wb_gui_yad \
+    --form \
+    --title="Ready to install" \
+    --no-markup \
+    --text="About to run installer in Wine.\n\nInstaller: ${installer_exe}\nPrefix:    ${prefix_name}\n\nwb will detect new apps automatically when the installer exits." \
+    --button="Install:0" \
+    --button="Cancel:1" 2>/dev/null || rc_b3=$?
+
+  if [[ "${rc_b3}" -ne 0 ]]; then
+    echo "wb-gui install: cancelled at confirm step" >&2
+    return 0
+  fi
+
+  # Execute install sequence
+  local before_path
+  before_path="$(wb_detect_snapshot_before "${prefix_name}")"
+
+  # Run installer (ignore non-zero exit — partial installs still caught)
+  "${_WB_BIN}" run "${installer_exe}" --prefix "${prefix_name}" --wait 2>/dev/null || true
+
+  local candidates_json
+  candidates_json="$(wb_detect_diff_after "${prefix_name}" "${before_path}")"
+
+  # Post-install detection prompt (Flow 4)
+  _gui_post_install_prompt "${prefix_name}" "${candidates_json}"
+
+  wb_detect_purge "${prefix_name}" || true
+}
+
+# ===========================================================================
+# FLOW 4: Post-Install Detection Prompt
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _gui_post_install_prompt <prefix_name> <candidates_json>
+# Shows detection results; calls wb_gui_apps_add for each selected entry.
+# ---------------------------------------------------------------------------
+_gui_post_install_prompt() {
+  local prefix_name="${1:-}"
+  local candidates_json="${2:-[]}"
+
+  local count
+  count="$(printf '%s' "${candidates_json}" | jq 'length')"
+
+  # Case N=0: no candidates
+  if [[ "${count}" -eq 0 ]]; then
+    local rc_n0=0
+    wb_gui_yad \
+      --info \
+      --title="Installation complete" \
+      --no-markup \
+      --text="No new apps were detected in the Start Menu or Program Files.\n\nIf the installer placed files elsewhere, use 'Add App' to register the app manually." \
+      --button="Register app manually:10" \
+      --button="OK:0" 2>/dev/null || rc_n0=$?
+
+    if [[ "${rc_n0}" -eq 10 ]]; then
+      # F9 fix: open portable flow pre-scoped to this prefix
+      _cmd_add_portable --prefix "${prefix_name}"
+    fi
+    return 0
+  fi
+
+  # Case N≥1: show checklist
+  # Pre-select rule: N≤3 all checked; N>3 all unchecked (architect confirmed)
+  local precheck="FALSE"
+  if [[ "${count}" -le 3 ]]; then
+    precheck="TRUE"
+  fi
+
+  local -a row_data=()
+  local i exe_path cand_name via_raw via_label
+  for (( i=0; i<count; i++ )); do
+    exe_path="$(printf '%s' "${candidates_json}" | jq -r ".[${i}].exe")"
+    cand_name="$(printf '%s' "${candidates_json}" | jq -r ".[${i}].name")"
+    via_raw="$(printf '%s' "${candidates_json}" | jq -r ".[${i}].via")"
+    if [[ "${via_raw}" == "lnk" ]]; then
+      via_label="Start Menu"
+    else
+      via_label="Program Files"
+    fi
+    local exe_display
+    exe_display="$(basename "${exe_path}")"
+    # CHK | Name | Executable (display) | Detected via | Full path (hidden)
+    row_data+=("${precheck}" "${cand_name}" "${exe_display}" "${via_label}" "${exe_path}")
+  done
+
+  local yad_out rc_det=0
+  yad_out="$(wb_gui_yad \
+    --list \
+    --checklist \
+    --title="Installation complete" \
+    --no-markup \
+    --text="Installation finished. wb found these new apps in prefix '${prefix_name}'.\nSelect which to add to your library:" \
+    --column="Add:CHK" \
+    --column="Name" \
+    --column="Executable" \
+    --column="Detected via" \
+    --column="Full path:HD" \
+    --separator="|" \
+    --print-all \
+    --button="Add Selected:0" \
+    --button="Skip All:1" \
+    --button="Add All:10" \
+    "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || rc_det=$?
+
+  case "${rc_det}" in
+    0)  # Add Selected — filter TRUE rows
+        local chk sel_name _exe_disp _via full_path _trail
+        while IFS="|" read -r chk sel_name _exe_disp _via full_path _trail; do
+          [[ "${chk}" == "TRUE" ]] || continue
+          [[ -z "${full_path}" ]] && continue
+          wb_gui_apps_add "${full_path}" "${prefix_name}" "${sel_name}" installer || {
+            echo "wb-gui: failed to add '${sel_name}'" >&2
+          }
+        done <<< "${yad_out}"
+        ;;
+    10) # Add All — iterate original candidates array
+        for (( i=0; i<count; i++ )); do
+          exe_path="$(printf '%s' "${candidates_json}" | jq -r ".[${i}].exe")"
+          cand_name="$(printf '%s' "${candidates_json}" | jq -r ".[${i}].name")"
+          wb_gui_apps_add "${exe_path}" "${prefix_name}" "${cand_name}" installer || {
+            echo "wb-gui: failed to add '${cand_name}'" >&2
+          }
+        done
+        ;;
+    1|252|*)
+        # Skip All or Escape — no registrations
+        ;;
+  esac
+}
+
+# ===========================================================================
+# FLOW 3 entry: Add App (2-choice dialog)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _cmd_add_app
+# Step 0: show 2-choice dialog; branch to installer flow or portable flow.
+# ---------------------------------------------------------------------------
+_cmd_add_app() {
+  _wb_gui_load_libs
+
+  local choice_out rc_step0=0
+  choice_out="$(wb_gui_yad \
+    --form \
+    --title="Add App" \
+    --text="Choose how to add your app:\n\n  Install via installer: run a setup wizard inside a Wine prefix.\n    wb will detect what gets installed and add it automatically.\n\n  Register app: point to an .exe already on disk (portable or\n    pre-installed). Also use this if detection missed something." \
+    --no-markup \
+    --width=580 \
+    --separator="|" \
+    --field="Method:CB" \
+      "Register app!Install via installer" \
+    --button="Continue:0" \
+    --button="Cancel:1" 2>/dev/null)" || rc_step0=$?
+
+  if [[ "${rc_step0}" -ne 0 ]]; then
+    echo "wb-gui add-app: cancelled" >&2
+    return 0
+  fi
+
+  local choice
+  choice="${choice_out%%|*}"
+
+  case "${choice}" in
+    "Install via installer")
+      _cmd_install_flow
+      ;;
+    "Register app"|*)
+      _cmd_add_portable
+      ;;
+  esac
+}
+
+# ===========================================================================
+# FLOW 2: 4-Pane Settings Dialog (settings-v2)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _settings_gpu_label_to_json <label>
+# Maps display label to JSON enum value.
+# ---------------------------------------------------------------------------
+_settings_gpu_label_to_json() {
+  local label="${1:-}"
+  case "${label}" in
+    "Auto")   echo "auto";;
+    "NVIDIA") echo "nvidia";;
+    "AMD")    echo "amd";;
+    "Intel")  echo "intel";;
+    *)        echo "";;  # inherited / unknown → caller writes null
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _settings_winver_label_to_json <label>
+# ---------------------------------------------------------------------------
+_settings_winver_label_to_json() {
+  local label="${1:-}"
+  case "${label}" in
+    "Windows 10")  echo "win10";;
+    "Windows 11")  echo "win11";;
+    "Windows 8.1") echo "win8.1";;
+    "Windows 8")   echo "win8";;
+    "Windows 7")   echo "win7";;
+    "Windows XP")  echo "winxp";;
+    "Vista")       echo "vista";;
+    *)             echo "";;  # inherited / unknown → caller writes null
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _settings_winver_json_to_label <json_val>
+# ---------------------------------------------------------------------------
+_settings_winver_json_to_label() {
+  local val="${1:-}"
+  case "${val}" in
+    "win10")  echo "Windows 10";;
+    "win11")  echo "Windows 11";;
+    "win8.1") echo "Windows 8.1";;
+    "win8")   echo "Windows 8";;
+    "win7")   echo "Windows 7";;
+    "winxp")  echo "Windows XP";;
+    "vista")  echo "Vista";;
+    *)        echo "";;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _settings_gpu_json_to_label <json_val>
+# ---------------------------------------------------------------------------
+_settings_gpu_json_to_label() {
+  local val="${1:-}"
+  case "${val}" in
+    "auto")   echo "Auto";;
+    "nvidia") echo "NVIDIA";;
+    "amd")    echo "AMD";;
+    "intel")  echo "Intel";;
+    *)        echo "";;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _settings_build_gpu_combo <current_json_val> <inherited_label_or_empty>
+# Builds ! -separated combo string with current value first.
+# If current is empty/null, puts "(inherited: ...)" first.
+# ---------------------------------------------------------------------------
+_settings_build_gpu_combo() {
+  local cur_json="${1:-}"
+  local inherited_label="${2:-auto}"
+
+  local cur_label
+  cur_label="$(_settings_gpu_json_to_label "${cur_json}")"
+
+  if [[ -z "${cur_label}" ]]; then
+    # No override set — put inherited option first
+    echo "(inherited: ${inherited_label})!Auto!NVIDIA!AMD!Intel"
+  else
+    # Override set — put current value first, then inherited option, then rest
+    local opts="Auto!NVIDIA!AMD!Intel"
+    # Remove current from list and rebuild
+    opts="$(echo "${opts}" | sed "s/${cur_label}!//;s/!${cur_label}//")"
+    echo "${cur_label}!(inherited: ${inherited_label})!${opts}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _settings_build_winver_combo <current_json_val> <inherited_label_or_empty>
+# ---------------------------------------------------------------------------
+_settings_build_winver_combo() {
+  local cur_json="${1:-}"
+  local inherited_label="${2:-Windows 10}"
+
+  local cur_label
+  cur_label="$(_settings_winver_json_to_label "${cur_json}")"
+  local all_opts="Windows 10!Windows 11!Windows 8.1!Windows 8!Windows 7!Windows XP!Vista"
+
+  if [[ -z "${cur_label}" ]]; then
+    echo "(inherited: ${inherited_label})!${all_opts}"
+  else
+    local trimmed
+    trimmed="$(echo "${all_opts}" | sed "s/${cur_label}!//;s/!${cur_label}//")"
+    echo "${cur_label}!(inherited: ${inherited_label})!${trimmed}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_settings_tab_general <yad_key>
+# Launch Tab 1 (General) child plug process in background.
+# Stores pipe path for output capture.
+# Outputs: tab1_pid and _TAB1_PIPE set in caller's scope (via eval from subshell is
+# not usable here, so we use a temp file instead).
+# ---------------------------------------------------------------------------
+_launch_tab_general() {
+  local yad_key="${1}"
+  local pipe_file="${2}"  # caller-supplied temp file for output
+
+  # Load current values
+  local gpu_cur winver_cur debug_cur
+  gpu_cur="$(wb_gui_settings_get_general gpu 2>/dev/null || true)"
+  winver_cur="$(wb_gui_settings_get_general win_version 2>/dev/null || true)"
+  debug_cur="$(wb_gui_settings_get_general wine_debug 2>/dev/null || true)"
+
+  local gpu_label
+  gpu_label="$(_settings_gpu_json_to_label "${gpu_cur}")"
+  [[ -z "${gpu_label}" ]] && gpu_label="Auto"
+
+  local winver_label
+  winver_label="$(_settings_winver_json_to_label "${winver_cur}")"
+  [[ -z "${winver_label}" ]] && winver_label="Windows 10"
+
+  local gpu_opts="${gpu_label}!Auto!NVIDIA!AMD!Intel"
+  # Remove duplicate if cur matches a default option
+  gpu_opts="$(echo "${gpu_opts}" | sed 's/Auto!Auto/Auto/;s/NVIDIA!NVIDIA/NVIDIA/;s/AMD!AMD/AMD/;s/Intel!Intel/Intel/')"
+
+  local winver_opts="${winver_label}!Windows 10!Windows 11!Windows 8.1!Windows 8!Windows 7!Windows XP!Vista"
+  winver_opts="$(echo "${winver_opts}" | sed 's/Windows 10!Windows 10/Windows 10/')"
+
+  yad --plug="${yad_key}" --tabnum=1 \
+    --form --separator="|" --no-markup \
+    --field="Default GPU:CB" \
+      "${gpu_opts}" \
+    --field="Default Windows version:CB" \
+      "${winver_opts}" \
+    --field="Default WINEDEBUG (leave blank to inherit):TEXT" \
+      "${debug_cur}" \
+    > "${pipe_file}" 2>/dev/null &
+  echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# _launch_tab_dist <yad_key> <dist_id_or_empty> <pipe_file>
+# Launch Tab 2 (Dist) child plug.
+# ---------------------------------------------------------------------------
+_launch_tab_dist() {
+  local yad_key="${1}"
+  local dist_id="${2:-}"
+  local pipe_file="${3}"
+
+  if [[ -z "${dist_id}" ]]; then
+    # Zero-state (F12 fix): no dist selected or none exist
+    yad --plug="${yad_key}" --tabnum=2 \
+      --form --no-markup \
+      --field="Status:RO" \
+        "No dists available. Add your first app using 'Add App' — wb will detect its runtime automatically." \
+      > "${pipe_file}" 2>/dev/null &
+    echo "$!"
+    return
+  fi
+
+  # Load dist values
+  local dist_name_cur ext_source_cur active_cur last_built_cur gpu_cur
+  dist_name_cur="$(wb_gui_settings_get_dist "${dist_id}" name 2>/dev/null || true)"
+  [[ -z "${dist_name_cur}" ]] && dist_name_cur="${dist_id}"
+  ext_source_cur="$(wb_gui_settings_get_dist "${dist_id}" external_source 2>/dev/null || true)"
+  active_cur="$(wb_gui_settings_get_dist "${dist_id}" active 2>/dev/null || true)"
+  [[ -z "${active_cur}" ]] && active_cur="false"
+  last_built_cur="$(wb_gui_settings_get_dist "${dist_id}" last_built_at 2>/dev/null || true)"
+  [[ -z "${last_built_cur}" ]] && last_built_cur="unknown"
+  gpu_cur="$(wb_gui_settings_get_dist "${dist_id}" gpu 2>/dev/null || true)"
+
+  # Inherited GPU from general (W4 flag 4: dist layer only has gpu)
+  local inherited_gpu
+  inherited_gpu="$(wb_gui_settings_get_general gpu 2>/dev/null || true)"
+  [[ -z "${inherited_gpu}" ]] && inherited_gpu="auto"
+  local inherited_gpu_label
+  inherited_gpu_label="$(_settings_gpu_json_to_label "${inherited_gpu}")"
+  [[ -z "${inherited_gpu_label}" ]] && inherited_gpu_label="Auto"
+
+  local gpu_opts
+  gpu_opts="$(_settings_build_gpu_combo "${gpu_cur}" "${inherited_gpu_label}")"
+
+  yad --plug="${yad_key}" --tabnum=2 \
+    --form --separator="|" --no-markup \
+    --text="Editing dist: ${dist_id}. Leave a field blank to use the inherited value shown above." \
+    --field="Display name:TEXT" \
+      "${dist_name_cur}" \
+    --field="External source:TEXT" \
+      "${ext_source_cur}" \
+    --field="Active:RO" \
+      "${active_cur}" \
+    --field="Last built:RO" \
+      "${last_built_cur}" \
+    --field="  Inherited from general: ${inherited_gpu_label}:RO" \
+      "" \
+    --field="GPU override:CB" \
+      "${gpu_opts}" \
+    > "${pipe_file}" 2>/dev/null &
+  echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# _launch_tab_prefix <yad_key> <prefix_id_or_empty> <pipe_file>
+# Launch Tab 3 (Prefix) child plug.
+# ---------------------------------------------------------------------------
+_launch_tab_prefix() {
+  local yad_key="${1}"
+  local prefix_id="${2:-}"
+  local pipe_file="${3}"
+
+  if [[ -z "${prefix_id}" ]]; then
+    yad --plug="${yad_key}" --tabnum=3 \
+      --form --no-markup \
+      --field="Status:RO" \
+        "No prefixes found. Add your first app using the 'Add App' button — a prefix will be created automatically." \
+      > "${pipe_file}" 2>/dev/null &
+    echo "$!"
+    return
+  fi
+
+  # Load prefix values
+  local winver_cur debug_cur notes_cur
+  winver_cur="$(wb_gui_settings_get_prefix "${prefix_id}" win_version 2>/dev/null || true)"
+  debug_cur="$(wb_gui_settings_get_prefix "${prefix_id}" wine_debug 2>/dev/null || true)"
+  notes_cur="$(wb_gui_settings_get_prefix "${prefix_id}" notes 2>/dev/null || true)"
+
+  # Phase-A inherited hint: from general layer only (F11 note)
+  local inherited_winver inherited_debug
+  inherited_winver="$(wb_gui_settings_get_general win_version 2>/dev/null || true)"
+  [[ -z "${inherited_winver}" ]] && inherited_winver="win10"
+  inherited_debug="$(wb_gui_settings_get_general wine_debug 2>/dev/null || true)"
+
+  local inherited_winver_label
+  inherited_winver_label="$(_settings_winver_json_to_label "${inherited_winver}")"
+  [[ -z "${inherited_winver_label}" ]] && inherited_winver_label="Windows 10"
+
+  local inherited_debug_display="(none)"
+  [[ -n "${inherited_debug}" ]] && inherited_debug_display="${inherited_debug}"
+
+  local winver_opts
+  winver_opts="$(_settings_build_winver_combo "${winver_cur}" "${inherited_winver_label}")"
+
+  # For the TEXT field: if there's a concrete value, show it; otherwise empty (inherit)
+  local debug_field_val="${debug_cur}"
+
+  yad --plug="${yad_key}" --tabnum=3 \
+    --form --separator="|" --no-markup \
+    --text="Editing prefix: ${prefix_id}. Leave a field blank to use the inherited value shown above." \
+    --field="Windows version:CB" \
+      "${winver_opts}" \
+    --field="  Inherited from general: ${inherited_winver_label}:RO" \
+      "" \
+    --field="WINEDEBUG (leave blank to inherit):TEXT" \
+      "${debug_field_val}" \
+    --field="  Inherited from general: ${inherited_debug_display}:RO" \
+      "" \
+    --field="Notes:TXT" \
+      "${notes_cur}" \
+    > "${pipe_file}" 2>/dev/null &
+  echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# _launch_tab_app <yad_key> <app_id_or_empty> <pipe_file>
+# Launch Tab 4 (Per-App) child plug.
+# ---------------------------------------------------------------------------
+_launch_tab_app() {
+  local yad_key="${1}"
+  local app_id="${2:-}"
+  local pipe_file="${3}"
+
+  if [[ -z "${app_id}" ]]; then
+    yad --plug="${yad_key}" --tabnum=4 \
+      --form --no-markup \
+      --field="Status:RO" \
+        "No app selected. Open Settings from a selected app row to edit per-app settings." \
+      > "${pipe_file}" 2>/dev/null &
+    echo "$!"
+    return
+  fi
+
+  # Load app values
+  local winver_cur debug_cur wine_args_cur env_vars_cur app_display_name
+  winver_cur="$(wb_gui_settings_get_app "${app_id}" win_version 2>/dev/null || true)"
+  debug_cur="$(wb_gui_settings_get_app "${app_id}" wine_debug 2>/dev/null || true)"
+
+  # wine_args is stored as JSON array → space-joined for display
+  local wine_args_json
+  wine_args_json="$(wb_gui_settings_get_app "${app_id}" wine_args 2>/dev/null || true)"
+  local wine_args_display=""
+  if [[ -n "${wine_args_json}" && "${wine_args_json}" != "null" && "${wine_args_json}" != "[]" ]]; then
+    wine_args_display="$(printf '%s' "${wine_args_json}" | jq -r 'join(" ")' 2>/dev/null || true)"
+  fi
+
+  # env_vars is stored as JSON object → KEY=VALUE lines for display
+  local env_vars_json
+  env_vars_json="$(wb_gui_settings_get_app "${app_id}" env_vars 2>/dev/null || true)"
+  local env_vars_display=""
+  if [[ -n "${env_vars_json}" && "${env_vars_json}" != "null" && "${env_vars_json}" != "{}" ]]; then
+    env_vars_display="$(printf '%s' "${env_vars_json}" | jq -r 'to_entries[] | "\(.key)=\(.value)"' 2>/dev/null || true)"
+  fi
+
+  # App display name from apps.json
+  local app_entry
+  app_entry="$(wb_gui_apps_get "${app_id}" 2>/dev/null || true)"
+  app_display_name="${app_id}"
+  if [[ -n "${app_entry}" ]]; then
+    app_display_name="$(printf '%s' "${app_entry}" | jq -r '.name // empty')"
+    [[ -z "${app_display_name}" ]] && app_display_name="${app_id}"
+  fi
+
+  # Compute inherited values via resolve_trace (W4 flag 1: parse as JSON)
+  local trace_winver trace_debug
+  trace_winver="$(wb_gui_settings_resolve_trace win_version "${app_id}" 2>/dev/null || echo '{}')"
+  trace_debug="$(wb_gui_settings_resolve_trace wine_debug "${app_id}" 2>/dev/null || echo '{}')"
+
+  local inherited_winver_src inherited_winver_val
+  inherited_winver_src="$(printf '%s' "${trace_winver}" | jq -r '.resolved_from // "general"' 2>/dev/null || echo "general")"
+  inherited_winver_val="$(printf '%s' "${trace_winver}" | jq -r '
+    if .candidates.prefix != null then .candidates.prefix
+    elif .candidates.dist != null then .candidates.dist
+    else (.candidates.general // "win10") end' 2>/dev/null || echo "win10")"
+  local inherited_winver_label
+  inherited_winver_label="$(_settings_winver_json_to_label "${inherited_winver_val}")"
+  [[ -z "${inherited_winver_label}" ]] && inherited_winver_label="Windows 10"
+
+  local inherited_debug_src inherited_debug_val
+  inherited_debug_src="$(printf '%s' "${trace_debug}" | jq -r '.resolved_from // "general"' 2>/dev/null || echo "general")"
+  inherited_debug_val="$(printf '%s' "${trace_debug}" | jq -r '
+    .candidates.prefix // .candidates.dist // .candidates.general // ""' 2>/dev/null || true)"
+  local inherited_debug_display="(none)"
+  [[ -n "${inherited_debug_val}" ]] && inherited_debug_display="${inherited_debug_val}"
+
+  local winver_display="${inherited_winver_label} — from ${inherited_winver_src}"
+  local winver_opts
+  winver_opts="$(_settings_build_winver_combo "${winver_cur}" "${winver_display}")"
+
+  yad --plug="${yad_key}" --tabnum=4 \
+    --form --separator="|" --no-markup \
+    --text="Editing app: ${app_display_name}. Leave a field blank to use the inherited value shown above." \
+    --field="Windows version:CB" \
+      "${winver_opts}" \
+    --field="  Inherited from ${inherited_winver_src}: ${inherited_winver_label}:RO" \
+      "" \
+    --field="WINEDEBUG (leave blank to inherit):TEXT" \
+      "${debug_cur}" \
+    --field="  Inherited from ${inherited_debug_src}: ${inherited_debug_display}:RO" \
+      "" \
+    --field="Extra Wine args (space-separated):TEXT" \
+      "${wine_args_display}" \
+    --field="Env vars (KEY=VALUE, one per line):TXT" \
+      "${env_vars_display}" \
+    > "${pipe_file}" 2>/dev/null &
+  echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# _settings_save_general <pipe_file>
+# Parse tab1 output and persist to general layer.
+# ---------------------------------------------------------------------------
+_settings_save_general() {
+  local pipe_file="${1}"
+  [[ -f "${pipe_file}" ]] || return 0
+
+  local raw_out
+  raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
+  [[ -z "${raw_out}" ]] && return 0
+
+  # stdout: GPU_label|WinVersion_label|WINEDEBUG_string|
+  IFS='|' read -r gpu_label winver_label debug_val _rest <<< "${raw_out}"
+
+  local gpu_json
+  gpu_json="$(_settings_gpu_label_to_json "${gpu_label}")"
+  [[ -n "${gpu_json}" ]] && wb_gui_settings_set_general gpu "${gpu_json}" 2>/dev/null || true
+
+  local winver_json
+  winver_json="$(_settings_winver_label_to_json "${winver_label}")"
+  [[ -n "${winver_json}" ]] && wb_gui_settings_set_general win_version "${winver_json}" 2>/dev/null || true
+
+  # wine_debug: empty means leave blank (inherit at general = built-in default)
+  # At the general layer, empty string is the built-in default — write it as-is
+  wb_gui_settings_set_general wine_debug "${debug_val}" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _settings_save_dist <dist_id> <pipe_file>
+# Parse tab2 output and persist to dist layer.
+# ---------------------------------------------------------------------------
+_settings_save_dist() {
+  local dist_id="${1}"
+  local pipe_file="${2}"
+  [[ -f "${pipe_file}" && -n "${dist_id}" ]] || return 0
+
+  local raw_out
+  raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
+  [[ -z "${raw_out}" ]] && return 0
+
+  # stdout: display_name|external_source|active_ignored|last_built_ignored|inherited_ro_ignored|gpu_selection|
+  IFS='|' read -r display_name _ext_source _active _last_built _inh_ro gpu_sel _rest <<< "${raw_out}"
+
+  [[ -n "${display_name}" ]] && wb_gui_settings_set_dist "${dist_id}" name "${display_name}" 2>/dev/null || true
+
+  # GPU: if starts with "(inherited:", write null (keep dist-level gpu absent)
+  if [[ "${gpu_sel}" == "(inherited:"* ]]; then
+    # Write explicit null to clear any existing override
+    local dist_path
+    dist_path="$(_wb_gui_settings_layer_path dist "${dist_id}")"
+    if [[ -f "${dist_path}" ]]; then
+      local updated
+      updated="$(jq 'del(.gpu)' "${dist_path}" 2>/dev/null || true)"
+      [[ -n "${updated}" ]] && wb_json_write_atomic "${dist_path}" "${updated}" 2>/dev/null || true
+    fi
+  else
+    local gpu_json
+    gpu_json="$(_settings_gpu_label_to_json "${gpu_sel}")"
+    [[ -n "${gpu_json}" ]] && wb_gui_settings_set_dist "${dist_id}" gpu "${gpu_json}" 2>/dev/null || true
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _settings_save_prefix <prefix_id> <pipe_file>
+# Parse tab3 output and persist to prefix layer.
+# ---------------------------------------------------------------------------
+_settings_save_prefix() {
+  local prefix_id="${1}"
+  local pipe_file="${2}"
+  [[ -f "${pipe_file}" && -n "${prefix_id}" ]] || return 0
+
+  local raw_out
+  raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
+  [[ -z "${raw_out}" ]] && return 0
+
+  # stdout: winver_sel|inh_ro1_ignored|debug_val|inh_ro2_ignored|notes_val|
+  IFS='|' read -r winver_sel _inh1 debug_val _inh2 notes_val _rest <<< "${raw_out}"
+
+  if [[ "${winver_sel}" == "(inherited:"* ]]; then
+    # Clear override: remove key from file
+    local prefix_path
+    prefix_path="$(_wb_gui_settings_layer_path prefix "${prefix_id}")"
+    if [[ -f "${prefix_path}" ]]; then
+      local updated
+      updated="$(jq 'del(.win_version)' "${prefix_path}" 2>/dev/null || true)"
+      [[ -n "${updated}" ]] && wb_json_write_atomic "${prefix_path}" "${updated}" 2>/dev/null || true
+    fi
+  else
+    local winver_json
+    winver_json="$(_settings_winver_label_to_json "${winver_sel}")"
+    [[ -n "${winver_json}" ]] && wb_gui_settings_set_prefix "${prefix_id}" win_version "${winver_json}" 2>/dev/null || true
+  fi
+
+  # wine_debug: empty → write null (W4 flag 3: empty string is meaningful)
+  # User left blank = inherit; write null to layer
+  if [[ -z "${debug_val}" ]]; then
+    local prefix_path2
+    prefix_path2="$(_wb_gui_settings_layer_path prefix "${prefix_id}")"
+    if [[ -f "${prefix_path2}" ]]; then
+      local updated2
+      updated2="$(jq 'del(.wine_debug)' "${prefix_path2}" 2>/dev/null || true)"
+      [[ -n "${updated2}" ]] && wb_json_write_atomic "${prefix_path2}" "${updated2}" 2>/dev/null || true
+    fi
+  else
+    wb_gui_settings_set_prefix "${prefix_id}" wine_debug "${debug_val}" 2>/dev/null || true
+  fi
+
+  # notes: always write (even empty string is valid)
+  wb_gui_settings_set_prefix "${prefix_id}" notes "${notes_val}" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _settings_save_app <app_id> <pipe_file>
+# Parse tab4 output and persist to app layer.
+# ---------------------------------------------------------------------------
+_settings_save_app() {
+  local app_id="${1}"
+  local pipe_file="${2}"
+  [[ -f "${pipe_file}" && -n "${app_id}" ]] || return 0
+
+  local raw_out
+  raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
+  [[ -z "${raw_out}" ]] && return 0
+
+  # stdout: winver_sel|inh_ro1|debug_val|inh_ro2|wine_args_str|env_vars_ml|
+  IFS='|' read -r winver_sel _inh1 debug_val _inh2 wine_args_str env_vars_ml _rest <<< "${raw_out}"
+
+  if [[ "${winver_sel}" == "(inherited:"* ]]; then
+    local app_path
+    app_path="$(_wb_gui_settings_layer_path app "${app_id}")"
+    if [[ -f "${app_path}" ]]; then
+      local updated
+      updated="$(jq 'del(.win_version)' "${app_path}" 2>/dev/null || true)"
+      [[ -n "${updated}" ]] && wb_json_write_atomic "${app_path}" "${updated}" 2>/dev/null || true
+    fi
+  else
+    local winver_json
+    winver_json="$(_settings_winver_label_to_json "${winver_sel}")"
+    [[ -n "${winver_json}" ]] && wb_gui_settings_set_app "${app_id}" win_version "${winver_json}" 2>/dev/null || true
+  fi
+
+  # wine_debug: empty → null/remove (W4 flag 3)
+  if [[ -z "${debug_val}" ]]; then
+    local app_path2
+    app_path2="$(_wb_gui_settings_layer_path app "${app_id}")"
+    if [[ -f "${app_path2}" ]]; then
+      local updated2
+      updated2="$(jq 'del(.wine_debug)' "${app_path2}" 2>/dev/null || true)"
+      [[ -n "${updated2}" ]] && wb_json_write_atomic "${app_path2}" "${updated2}" 2>/dev/null || true
+    fi
+  else
+    wb_gui_settings_set_app "${app_id}" wine_debug "${debug_val}" 2>/dev/null || true
+  fi
+
+  # wine_args: split on whitespace → JSON array (W4 flag 2)
+  if [[ -n "${wine_args_str}" ]]; then
+    local wine_args_json
+    wine_args_json="$(jq -cn --arg x "${wine_args_str}" '$x | split(" ") | map(select(length > 0))' 2>/dev/null || echo "[]")"
+    wb_gui_settings_set_app "${app_id}" wine_args "${wine_args_json}" 2>/dev/null || true
+  fi
+
+  # env_vars: parse KEY=VALUE lines → JSON object (W4 flag 2)
+  if [[ -n "${env_vars_ml}" ]]; then
+    local env_json="{}"
+    local line
+    while IFS= read -r line; do
+      [[ -z "${line}" ]] && continue
+      if [[ "${line}" == *=* ]]; then
+        local kk="${line%%=*}"
+        local vv="${line#*=}"
+        env_json="$(printf '%s' "${env_json}" | jq --arg k "${kk}" --arg v "${vv}" '. + {($k): $v}' 2>/dev/null || echo "{}")"
+      fi
+    done <<< "${env_vars_ml}"
+    wb_gui_settings_set_app "${app_id}" env_vars "${env_json}" 2>/dev/null || true
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_settings_v2 [<scope> [<id>]]
+# Opens the 4-pane Settings notebook.
+# scope: general | dist <id> | prefix <id> | app <id>
+# ---------------------------------------------------------------------------
+_cmd_settings_v2() {
+  _wb_gui_load_libs
+
+  local scope="${1:-general}"
+  local scope_id="${2:-}"
+  local initial_tab=1  # 1-based tab index for notebook (General=1)
+
+  # Determine initial tab based on scope
+  case "${scope}" in
+    general) initial_tab=1;;
+    dist)    initial_tab=2;;
+    prefix)  initial_tab=3;;
+    app)     initial_tab=4;;
+    *)
+      echo "wb-gui settings-v2: unknown scope '${scope}'" >&2
+      exit 1
+      ;;
+  esac
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # Pre-select IDs for Dist and Per-App tabs.
+  # These may be resolved by picker dialogs if not already supplied.
+  local dist_id="${scope_id}"
+  local prefix_id="${scope_id}"
+  local app_id="${scope_id}"
+
+  # For scopes other than the initial one, we defer picker resolution
+  # to when the user actually clicks the corresponding tab.
+  # We track which scopes have been resolved.
+  local dist_resolved=false prefix_resolved=false app_resolved=false
+  case "${scope}" in
+    dist)    dist_id="${scope_id}";    dist_resolved=true;;
+    prefix)  prefix_id="${scope_id}";  prefix_resolved=true;;
+    app)     app_id="${scope_id}";     app_resolved=true;;
+  esac
+
+  # Generate a unique key for this notebook session
+  local yad_key=$(( RANDOM * RANDOM ))
+
+  # Temp files for plug stdout capture
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local pipe1="${tmp_dir}/tab1.out"
+  local pipe2="${tmp_dir}/tab2.out"
+  local pipe3="${tmp_dir}/tab3.out"
+  local pipe4="${tmp_dir}/tab4.out"
+  touch "${pipe1}" "${pipe2}" "${pipe3}" "${pipe4}"
+
+  # Launch all child plug processes (Tab 1 always ready; others depend on scope)
+  local tab1_pid tab2_pid tab3_pid tab4_pid
+
+  tab1_pid="$(_launch_tab_general "${yad_key}" "${pipe1}")"
+
+  # For non-yet-resolved tabs, launch zero-state plug initially
+  tab2_pid="$(_launch_tab_dist "${yad_key}" "${dist_id}" "${pipe2}")"
+  tab3_pid="$(_launch_tab_prefix "${yad_key}" "${prefix_id}" "${pipe3}")"
+  tab4_pid="$(_launch_tab_app "${yad_key}" "${app_id}" "${pipe4}")"
+
+  # Track current tab (shell-side tracking per W5 architect note).
+  # yad 14.x notebook emits the active tab index as an integer line on stdout
+  # when the user switches tabs. We read the last such line after each notebook
+  # call to keep current_tab_idx in sync.
+  local current_tab_idx="${initial_tab}"
+
+  # Main dialog loop: re-show the notebook after each Save so the user can
+  # edit multiple tabs without reopening the dialog. Only Close (rc=1) or
+  # Escape (rc=252) breaks out. Any other unexpected rc also breaks.
+  #
+  # Plug processes are launched once above and kept alive across iterations;
+  # yad --notebook re-attaches to the same --plug children via the shared key.
+  # The pipe files retain the last tab output between iterations so a Save on
+  # one tab followed by a Save on another tab both work correctly.
+  local notebook_out notebook_rc last_line
+  while true; do
+    notebook_rc=0
+    notebook_out="$(wb_gui_dialog_notebook "${yad_key}" \
+      "General|Dist|Prefix|Per-App" \
+      2>/dev/null)" || notebook_rc=$?
+
+    # On tab-switch: yad --notebook emits the tab index as an integer line.
+    # We track current_tab_idx from the last line of notebook_out that looks
+    # like a tab-index integer (1-4).
+    last_line="$(printf '%s' "${notebook_out}" | tail -1 2>/dev/null || true)"
+    if [[ "${last_line}" =~ ^[1-4]$ ]]; then
+      current_tab_idx="${last_line}"
+    fi
+
+    case "${notebook_rc}" in
+      10)  # Save this tab — persist, show confirmation, then re-show notebook
+           case "${current_tab_idx}" in
+             1) _settings_save_general "${pipe1}";;
+             2) _settings_save_dist "${dist_id}" "${pipe2}";;
+             3) _settings_save_prefix "${prefix_id}" "${pipe3}";;
+             4) _settings_save_app "${app_id}" "${pipe4}";;
+           esac
+           wb_gui_dialog_info "Saved" "Tab ${current_tab_idx} settings saved."
+           continue
+           ;;
+      1|252)
+           # Close or Escape — user is done; exit the loop
+           break
+           ;;
+      *)
+           # Unexpected rc (e.g. yad not found, pipe closed) — exit cleanly
+           break
+           ;;
+    esac
+  done
+
+  # Kill child plug processes now that the dialog loop has exited
+  for p in "${tab1_pid}" "${tab2_pid}" "${tab3_pid}" "${tab4_pid}"; do
+    kill "${p}" 2>/dev/null || true
+  done
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_detect <prefix>
+# Standalone: run detection against the prefix's current state vs a snapshot.
+# ---------------------------------------------------------------------------
+_cmd_detect() {
+  _wb_gui_load_libs
+
+  local prefix="${1:-}"
+  if [[ -z "${prefix}" ]]; then
+    echo "wb-gui detect: prefix name required" >&2
+    exit 1
+  fi
+  _wb_gui_validate_path_arg "detect" "${prefix}"
+
+  local before_path
+  before_path="$(wb_detect_snapshot_before "${prefix}")"
+
+  # Ask the user to run their installer now. Continue → diff and detect.
+  # Cancel → purge the snapshot and exit cleanly (no partial state left behind).
+  local detect_rc=0
+  wb_gui_dialog_question "Detection — prefix '${prefix}'" \
+    "Run your installer now. When finished, click Continue to scan for new shortcuts.\n\n(Snapshot: ${before_path})" \
+    "Continue" "Cancel" || detect_rc=$?
+
+  if [[ "${detect_rc}" -ne 0 ]]; then
+    wb_detect_purge "${prefix}" || true
+    echo "wb-gui detect: cancelled" >&2
+    exit 0
+  fi
+
+  local candidates_json
+  candidates_json="$(wb_detect_diff_after "${prefix}" "${before_path}")"
+
+  _gui_post_install_prompt "${prefix}" "${candidates_json}"
+  wb_detect_purge "${prefix}" || true
+}
+
+# ---------------------------------------------------------------------------
+# Legacy: cmd: wb-gui add-game <exe>
+# Maps to add-portable (keeps 24_gui.bats tests 5-6 passing).
 # ---------------------------------------------------------------------------
 _cmd_add_game() {
   _wb_gui_load_libs
@@ -205,10 +1393,12 @@ _cmd_add_game() {
   local exe="${1:-}"
   if [[ -z "${exe}" ]]; then
     # No exe given: open file picker
-    exe="$(wb_gui_dialog_file_select "Select Windows .exe")" || {
+    local rc_fg=0
+    exe="$(wb_gui_dialog_file_select "Select Windows .exe")" || rc_fg=$?
+    if [[ "${rc_fg}" -ne 0 || -z "${exe}" ]]; then
       echo "wb-gui add-game: cancelled" >&2
       exit 0
-    }
+    fi
   fi
 
   # Validate
@@ -220,17 +1410,18 @@ _cmd_add_game() {
   default_prefix="$(basename "${default_prefix}" .EXE)"
 
   # Prompt for prefix name
-  local prefix_name
+  local prefix_name rc_pn=0
   prefix_name="$(wb_gui_dialog_entry \
     "New Game" \
     "Prefix name (leave blank to use default):" \
-    "${default_prefix}")" || {
+    "${default_prefix}")" || rc_pn=$?
+  if [[ "${rc_pn}" -ne 0 ]]; then
     echo "wb-gui add-game: cancelled" >&2
     exit 0
-  }
+  fi
   [[ -z "${prefix_name}" ]] && prefix_name="${default_prefix}"
 
-  # Add to registry
+  # Add to registry (dual-write shim for backward compat with 24_gui.bats)
   local game_id
   game_id="$(wb_gui_games_add "${exe}" "${prefix_name}")"
 
@@ -239,8 +1430,9 @@ _cmd_add_game() {
 }
 
 # ---------------------------------------------------------------------------
-# cmd: wb-gui settings <prefix>
-# Write a .wb.ppdb next to the exe for the given prefix.
+# Legacy: cmd: wb-gui settings <prefix>
+# Maps to settings-v2 prefix (keeps 24_gui.bats tests 7-10 passing).
+# The old behavior wrote a .wb.ppdb file; we preserve that for test compat.
 # ---------------------------------------------------------------------------
 _cmd_settings() {
   _wb_gui_load_libs
@@ -252,26 +1444,24 @@ _cmd_settings() {
   fi
   _wb_gui_validate_path_arg "settings" "${prefix}"
 
-  # Find exe for this prefix from games registry
+  # Find exe for this prefix from apps registry (Phase A: apps.json is primary)
   local reg
-  reg="$(_wb_gui_games_registry)"
+  reg="$(_wb_gui_apps_registry)"
   if [[ ! -f "${reg}" ]]; then
-    wb_gui_dialog_error "Settings" "No games registered yet."
+    wb_gui_dialog_error "Settings" "No apps registered yet."
     exit 1
   fi
 
   local exe
   exe="$(jq -r --arg p "${prefix}" \
-    '.games[] | select(.prefix == $p) | .exe' "${reg}" | head -1)"
+    '.apps[] | select(.prefix == $p) | .exe' "${reg}" | head -1)"
   if [[ -z "${exe}" ]]; then
-    wb_gui_dialog_error "Settings" "No game found for prefix '${prefix}'."
+    wb_gui_dialog_error "Settings" "No app found for prefix '${prefix}'."
     exit 1
   fi
 
-  # Read existing .wb.ppdb if present
-  local ppdb_path="${exe%.exe}.wb.ppdb"
-  ppdb_path="${ppdb_path%.EXE}.wb.ppdb"
-  # Simpler: place next to the exe
+  # Legacy .wb.ppdb-based settings dialog (preserves 24_gui.bats test behavior)
+  local ppdb_path
   ppdb_path="$(dirname "${exe}")/.wb.ppdb"
 
   local cur_dxvk="TRUE"
@@ -293,18 +1483,18 @@ _cmd_settings() {
     cur_overrides="$(jq -r --arg k WINEDLLOVERRIDES   '.env[$k] // empty' "${ppdb_path}")"
   fi
 
-  # Show settings form dialog
-  local form_output
+  local form_output rc_sf=0
   form_output="$(wb_gui_dialog_form_settings \
     "${prefix}" "${exe}" \
     "${cur_dxvk}" "${cur_vkd3d}" "${cur_nvapi}" \
     "${cur_esync}" "${cur_fsync}" \
-    "${cur_dxvk_hud}" "${cur_overrides}")" || {
+    "${cur_dxvk_hud}" "${cur_overrides}")" || rc_sf=$?
+
+  if [[ "${rc_sf}" -ne 0 ]]; then
     echo "wb-gui settings: cancelled" >&2
     exit 0
-  }
+  fi
 
-  # Parse pipe-separated output: DXVK|VKD3D|NVAPI|ESYNC|FSYNC|HUD|OVERRIDES
   IFS='|' read -r -a fields <<< "${form_output}"
   local dxvk_val="${fields[0]:-TRUE}"
   local vkd3d_val="${fields[1]:-FALSE}"
@@ -314,7 +1504,6 @@ _cmd_settings() {
   local hud_val="${fields[5]:-}"
   local overrides_val="${fields[6]:-}"
 
-  # Convert TRUE/FALSE to 1/0
   _bool_to_int() { [[ "$1" == "TRUE" ]] && echo "1" || echo "0"; }
 
   local dxvk_int vkd3d_int nvapi_int esync_int fsync_int
@@ -324,7 +1513,6 @@ _cmd_settings() {
   esync_int="$(_bool_to_int "${esync_val}")"
   fsync_int="$(_bool_to_int "${fsync_val}")"
 
-  # Build JSON for .wb.ppdb
   local ppdb_json
   ppdb_json="$(jq -n \
     --arg dxvk  "${dxvk_int}" \
@@ -349,112 +1537,49 @@ _cmd_settings() {
 
   wb_json_write_atomic "${ppdb_path}" "${ppdb_json}"
   wb_gui_dialog_info "Settings Saved" "Settings written to:\n${ppdb_path}"
-}
 
-# ---------------------------------------------------------------------------
-# _gui_launch_game <exe> <prefix>
-# Launch a game through `wb run` in a background subshell.
-# ---------------------------------------------------------------------------
-_gui_launch_game() {
-  local exe="${1}"
-  local prefix="${2}"
-  _wb_gui_validate_exe_path "${exe}"
-  _wb_gui_validate_path_arg "launch" "${prefix}"
-  # Run with --wait so we can observe the exit code
-  "${_WB_BIN}" run "${exe}" --prefix "${prefix}" --wait
-}
-
-# ---------------------------------------------------------------------------
-# _gui_remove_game <game_id>
-# Remove a game from the registry. Optionally removes the prefix.
-# ---------------------------------------------------------------------------
-_gui_remove_game() {
-  _wb_gui_load_libs
-  local game_id="${1:-}"
-  if [[ -z "${game_id}" ]]; then
-    return 0
+  # TODO: remove after v1.6.0 — GAP-2 transitional bridge (path 2).
+  # Also open settings-v2 for this app so per-app settings flow through the
+  # 4-layer store as well. The legacy ppdb write above keeps 24_gui.bats compat.
+  local app_id_v2
+  app_id_v2="$(jq -r --arg p "${prefix}" \
+    '.apps[] | select(.prefix == $p) | .id' "${reg}" | head -1)"
+  if [[ -n "${app_id_v2}" ]]; then
+    _cmd_settings_v2 app "${app_id_v2}" || true
   fi
-
-  local entry
-  entry="$(wb_gui_games_get "${game_id}" 2>/dev/null)" || {
-    wb_gui_dialog_error "Remove" "Game not found: ${game_id}"
-    return 1
-  }
-  local name prefix
-  name="$(printf '%s' "${entry}" | jq -r '.name')"
-  prefix="$(printf '%s' "${entry}" | jq -r '.prefix')"
-
-  wb_gui_dialog_confirm "Remove Game" \
-    "Remove '${name}' from the registry?\n\nPrefix '${prefix}' will be kept on disk.\nUse 'wb prefix' commands to manage it." || {
-    return 0
-  }
-
-  wb_gui_games_remove "${game_id}"
-  wb_gui_dialog_info "Removed" "Game '${name}' removed from registry."
 }
 
 # ---------------------------------------------------------------------------
-# _gui_build_game_rows
-# Outputs yad --list data rows: NAME\tPREFIX\tRUNTIME\tLAST_PLAYED
-# ---------------------------------------------------------------------------
-_gui_build_game_rows() {
-  local wb_home
-  wb_home="$(_wb_gui_home)"
-
-  local -a rows=()
-  local id name prefix exe added_utc
-
-  while IFS=$'\t' read -r id name prefix exe added_utc; do
-    [[ -z "${id}" ]] && continue
-
-    # Determine runtime from prefix sentinel if present
-    local runtime="-"
-    local sentinel="${wb_home}/prefixes/${prefix}/.wb_runtime"
-    if [[ -f "${sentinel}" ]] && jq empty "${sentinel}" 2>/dev/null; then
-      runtime="$(jq -r '.dist_name // "-"' "${sentinel}" 2>/dev/null || echo "-")"
-    fi
-
-    # Use added_utc as "last played" placeholder (real play-time tracking is future work)
-    local last_played="${added_utc:-never}"
-
-    rows+=("${name}" "${prefix}" "${runtime}" "${last_played}" "${id}" "${exe}")
-  done < <(wb_gui_games_list)
-
-  # Print rows; each field on its own line (yad --list reads line-by-line)
-  local f
-  for f in "${rows[@]}"; do
-    printf '%s\n' "${f}"
-  done
-}
-
-# ---------------------------------------------------------------------------
-# _cmd_main_window — the main game library window
+# _cmd_main_window — the main app library window (Phase A rework)
 # ---------------------------------------------------------------------------
 _cmd_main_window() {
   _wb_gui_load_libs
+  # Phase A: migrate games.json → apps.json on first run (idempotent)
+  wb_gui_apps_migrate_from_games >/dev/null 2>&1 || true
+  # Phase A: purge stale detection snapshot dirs (crash recovery)
+  wb_detect_sweep_stale 24 >/dev/null 2>&1 || true
   _wb_gui_place_desktop_shortcut
 
   while true; do
-    # Build game rows for this iteration
+    # Build app rows for this iteration
     local -a row_data=()
     local row
     while IFS= read -r row; do
       row_data+=("${row}")
-    done < <(_gui_build_game_rows)
+    done < <(_gui_build_app_rows)
 
-    # If no games, add a placeholder row
+    # Placeholder when no apps registered
     if [[ "${#row_data[@]}" -eq 0 ]]; then
-      row_data=("No games registered" "" "" "" "" "")
+      row_data=("No apps registered" "" "" "" "" "")
     fi
 
-    # Show main list window; capture button exit code and selected row.
+    # Main list window
     # Columns: NAME | PREFIX | RUNTIME | LAST PLAYED | (hidden) ID | (hidden) EXE
-    local yad_out
-    local yad_rc=0
+    local yad_out yad_rc=0
     yad_out="$(wb_gui_yad \
       --list \
-      --title="wine-bleeding — games" \
-      --text="Double-click a game to launch it." \
+      --title="wine-bleeding — apps" \
+      --text="Double-click an app to launch it." \
       --column="NAME" \
       --column="PREFIX" \
       --column="RUNTIME" \
@@ -463,12 +1588,12 @@ _cmd_main_window() {
       --column="EXE:HD" \
       --print-all \
       --separator="|" \
-      --double-click-action="echo launch" \
-      --button="Add Game!list-add:10" \
-      --button="Launch!media-playback-start:20" \
-      --button="Settings!preferences-system:30" \
+      --button="Add App!list-add:10" \
+      --button="Run!media-playback-start:20" \
+      --button="Settings!document-properties:30" \
       --button="Remove!list-remove:40" \
       --button="Refresh!view-refresh:50" \
+      --button="Prefs!preferences-system:60" \
       --button="Close!window-close:1" \
       "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || yad_rc=$?
 
@@ -478,44 +1603,49 @@ _cmd_main_window() {
         break
         ;;
       10)
-        # Add Game button
-        _cmd_add_game ""
+        # Add App button
+        _cmd_add_app
         ;;
       20|0)
-        # Launch button or double-click (exit 0)
-        # Parse first selected row
+        # Run button or double-click (exit 0)
         local sel_name sel_prefix _sel_rt _sel_lp sel_id sel_exe
         IFS='|' read -r sel_name sel_prefix _sel_rt _sel_lp sel_id sel_exe <<< "${yad_out}"
-        if [[ -z "${sel_id}" || "${sel_name}" == "No games registered" ]]; then
-          wb_gui_dialog_info "Launch" "Please select a game first."
+        if [[ -z "${sel_id}" || "${sel_name}" == "No apps registered" ]]; then
+          wb_gui_dialog_info "Run" "Please select an app first."
         else
-          _gui_launch_game "${sel_exe}" "${sel_prefix}" || {
+          _gui_launch_app "${sel_exe}" "${sel_prefix}" || {
             wb_gui_dialog_error "Launch Failed" \
               "Wine exited non-zero for '${sel_name}'.\nCheck wb log for details."
           }
         fi
         ;;
       30)
-        # Settings button
-        IFS='|' read -r _sel_name sel_prefix _sel_rt _sel_lp _sel_id _sel_exe <<< "${yad_out}"
-        if [[ -z "${sel_prefix}" ]]; then
-          wb_gui_dialog_info "Settings" "Please select a game first."
+        # Settings button (per-row → Per-App tab)
+        local _sel_n sel_pfx _sel_rt2 _sel_lp2 sel_id2 _sel_exe2
+        IFS='|' read -r _sel_n sel_pfx _sel_rt2 _sel_lp2 sel_id2 _sel_exe2 <<< "${yad_out}"
+        if [[ -z "${sel_id2}" || "${sel_pfx}" == "" ]]; then
+          wb_gui_dialog_info "Settings" "Please select an app first."
         else
-          _cmd_settings "${sel_prefix}"
+          _cmd_settings_v2 app "${sel_id2}"
         fi
         ;;
       40)
         # Remove button
-        IFS='|' read -r _sel_name _sel_prefix _sel_rt _sel_lp sel_id _sel_exe <<< "${yad_out}"
-        if [[ -n "${sel_id}" ]]; then
-          _gui_remove_game "${sel_id}"
+        local _n2 _p2 _r2 _l2 sel_id3 _e3
+        IFS='|' read -r _n2 _p2 _r2 _l2 sel_id3 _e3 <<< "${yad_out}"
+        if [[ -n "${sel_id3}" && "${_n2}" != "No apps registered" ]]; then
+          _gui_remove_app "${sel_id3}"
         else
-          wb_gui_dialog_info "Remove" "Please select a game first."
+          wb_gui_dialog_info "Remove" "Please select an app first."
         fi
         ;;
       50)
         # Refresh — loop again
         continue
+        ;;
+      60)
+        # Prefs button → 4-pane dialog at General tab
+        _cmd_settings_v2 general
         ;;
       *)
         # Unknown; treat as close
@@ -533,11 +1663,16 @@ _usage() {
 wb-gui ${WB_GUI_VERSION} -- wine-bleeding GUI launcher
 
 Usage:
-  wb-gui                      Open main game-library window
-  wb-gui add-game [<exe>]     Register a game (file dialog if exe omitted)
-  wb-gui settings <prefix>    Open per-game settings for a prefix
-  wb-gui --version            Print version
-  wb-gui --help               Show this help
+  wb-gui                         Open main app-library window
+  wb-gui add-app                 Add an app (2-choice dialog)
+  wb-gui add-portable [<exe>]    Register a portable/pre-installed app
+  wb-gui detect <prefix>         Run post-install detection for a prefix
+  wb-gui settings-v2 [<scope> <id>]  Open 4-pane settings dialog
+                                 scope: general | dist <id> | prefix <id> | app <id>
+  wb-gui add-game [<exe>]        Legacy alias: register a game (add-portable)
+  wb-gui settings <prefix>       Legacy alias: per-prefix settings
+  wb-gui --version               Print version
+  wb-gui --help                  Show this help
 
 This tool requires yad (install: apt/dnf install yad).
 EOF
@@ -556,6 +1691,23 @@ main() {
     --help|-h|help)
       _usage
       ;;
+    add-app)
+      shift
+      _cmd_add_app "$@"
+      ;;
+    add-portable)
+      shift
+      _cmd_add_portable "$@"
+      ;;
+    detect)
+      shift
+      _cmd_detect "${1:-}"
+      ;;
+    settings-v2)
+      shift
+      _cmd_settings_v2 "${1:-general}" "${2:-}"
+      ;;
+    # Legacy aliases — preserved for 24_gui.bats backward compat
     add-game)
       shift
       _cmd_add_game "${1:-}"

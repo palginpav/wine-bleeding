@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
-# wb-gui-games.sh — games registry helpers for wb-gui (M12)
+# wb-gui-games.sh — LEGACY SHIM. Do not add new code here. See wb-gui-apps.sh.
+#
+# This file exists solely to keep the 13 existing bats tests in
+# runtime/tests/24_gui.bats passing without modification. These tests write
+# and read games.json (schema v1) using the wb_gui_games_* function names.
+#
+# Every public function here forwards to its wb_gui_apps_* counterpart in
+# wb-gui-apps.sh. Additionally, wb_gui_games_add maintains a parallel write
+# to games.json (schema v1) so that legacy tests that inspect games.json
+# directly continue to pass during Phase A. This dual-write is removed in
+# Phase D once the legacy bats tests are updated.
+#
+# History: This was the original games registry (M12). Replaced in Phase A
+# (v1.6.0) by wb-gui-apps.sh which generalises the registry to any Windows app.
+# DEPRECATED — all shims here will be removed after Phase D.
+#
 # Sourced by wb-gui; never executed directly.
-#
-# Registry: $WB_HOME/games.json
-# Schema:
-#   { "schema": 1, "games": [ { "id": UUID, "name": STR, "exe": PATH,
-#                                "prefix": STR, "added_utc": ISO8601 } ] }
-#
-# All mutations are atomic via wb_json_write_atomic (sourced by caller).
 set -euo pipefail
 
+# Locate and source wb-gui-apps.sh relative to this file.
+_WB_GUI_GAMES_SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=wb-gui-lib/wb-gui-apps.sh
+source "${_WB_GUI_GAMES_SHIM_DIR}/wb-gui-apps.sh"
+
 # ---------------------------------------------------------------------------
-# Internal: resolve registry path
+# _wb_gui_games_registry — legacy internal: returns the games.json path.
+# Used by tests and the _cmd_settings fallback.
 # ---------------------------------------------------------------------------
 _wb_gui_games_registry() {
   local wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
@@ -19,29 +33,8 @@ _wb_gui_games_registry() {
 }
 
 # ---------------------------------------------------------------------------
-# Internal: generate a UUID v4 with uuidgen or a fallback
-# ---------------------------------------------------------------------------
-_wb_gui_games_uuid() {
-  if command -v uuidgen >/dev/null 2>&1; then
-    uuidgen | tr '[:upper:]' '[:lower:]'
-  else
-    # Fallback 2: /proc/sys/kernel/random/uuid (Linux kernel ≥ 2.6)
-    if [[ -r /proc/sys/kernel/random/uuid ]]; then
-      cat /proc/sys/kernel/random/uuid
-    else
-      # Fallback 3: 16 bytes from /dev/urandom as 128-bit hex, formatted as UUID-like.
-      # Provides full 128-bit entropy; replaces the former $RANDOM-based fallback
-      # which had at most 96 bits of entropy and used a non-cryptographic source.
-      local hex
-      hex="$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-      printf '%s-%s-%s-%s-%s' \
-        "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
-    fi
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Internal: load registry JSON; emit empty-list skeleton if absent
+# _wb_gui_games_load_json — legacy internal: load games.json (schema v1).
+# Mirrors the original implementation so tests that expect schema v1 format work.
 # ---------------------------------------------------------------------------
 _wb_gui_games_load_json() {
   local reg
@@ -50,12 +43,10 @@ _wb_gui_games_load_json() {
     printf '{"schema":1,"games":[]}'
     return 0
   fi
-  # Validate JSON is parseable
   if ! jq empty "${reg}" 2>/dev/null; then
     echo "wb-gui: games.json is malformed — cannot parse" >&2
     return 1
   fi
-  # Validate schema version
   local schema_ver
   schema_ver="$(jq -r '.schema // empty' "${reg}")"
   if [[ "${schema_ver}" != "1" ]]; then
@@ -66,69 +57,63 @@ _wb_gui_games_load_json() {
 }
 
 # ---------------------------------------------------------------------------
-# wb_gui_games_list
-# Outputs a tab-separated table: ID\tNAME\tPREFIX\tEXE\tADDED
-# ---------------------------------------------------------------------------
-wb_gui_games_list() {
-  local json
-  json="$(_wb_gui_games_load_json)"
-  # jq: iterate games array; output TSV
-  printf '%s' "${json}" | jq -r \
-    '.games[] | [.id, .name, .prefix, .exe, .added_utc] | @tsv' 2>/dev/null || true
-}
-
-# ---------------------------------------------------------------------------
 # wb_gui_games_add <exe_path> <prefix_name>
-# Adds a game entry. Errors if exe path fails validation or prefix_name is empty.
+# LEGACY SHIM: forwards to wb_gui_apps_add AND maintains a parallel write
+# to games.json (schema v1) for backward compatibility with 24_gui.bats tests.
+# DEPRECATED — remove after Phase D.
 # ---------------------------------------------------------------------------
 wb_gui_games_add() {
   local exe="${1:-}"
   local prefix="${2:-}"
 
-  if [[ -z "${exe}" ]]; then
-    echo "wb_gui_games_add: exe path required" >&2
-    return 1
-  fi
-  if [[ -z "${prefix}" ]]; then
-    echo "wb_gui_games_add: prefix name required" >&2
-    return 1
-  fi
+  # Forward to primary registry (apps.json) and capture the new UUID
+  local app_id
+  app_id="$(wb_gui_apps_add "${exe}" "${prefix}")"
 
-  # SECURITY: validate exe path using same rules as _wb_validate_path_arg
-  _wb_gui_validate_exe_path "${exe}"
+  # Also maintain games.json (schema v1) for backward compat with existing tests.
+  # This dual-write is the price of keeping 24_gui.bats green in Phase A.
+  local existing_json
+  existing_json="$(_wb_gui_games_load_json)"
 
-  local id
-  id="$(_wb_gui_games_uuid)"
   local now_utc
   now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "1970-01-01T00:00:00Z")"
 
-  # Derive a human name from the exe basename if name not specified
   local name
   name="$(basename "${exe}" .exe)"
   name="$(basename "${name}" .EXE)"
 
-  local existing_json
-  existing_json="$(_wb_gui_games_load_json)"
-
-  # Build new entry via jq
-  local new_json
-  new_json="$(printf '%s' "${existing_json}" | jq \
-    --arg id "${id}" \
-    --arg name "${name}" \
-    --arg exe "${exe}" \
-    --arg prefix "${prefix}" \
-    --arg added_utc "${now_utc}" \
+  local games_json
+  games_json="$(printf '%s' "${existing_json}" | jq \
+    --arg id         "${app_id}" \
+    --arg name       "${name}" \
+    --arg exe        "${exe}" \
+    --arg prefix     "${prefix}" \
+    --arg added_utc  "${now_utc}" \
     '.games += [{"id": $id, "name": $name, "exe": $exe, "prefix": $prefix, "added_utc": $added_utc}]')"
 
   local reg
   reg="$(_wb_gui_games_registry)"
-  wb_json_write_atomic "${reg}" "${new_json}"
-  echo "${id}"
+  wb_json_write_atomic "${reg}" "${games_json}"
+
+  echo "${app_id}"
 }
 
 # ---------------------------------------------------------------------------
-# wb_gui_games_remove <id>
-# Removes a game entry by ID.
+# wb_gui_games_list — LEGACY SHIM.
+# Reads from games.json (schema v1) to match the format expected by 24_gui.bats.
+# DEPRECATED — remove after Phase D.
+# ---------------------------------------------------------------------------
+wb_gui_games_list() {
+  local json
+  json="$(_wb_gui_games_load_json)"
+  printf '%s' "${json}" | jq -r \
+    '.games[] | [.id, .name, .prefix, .exe, .added_utc] | @tsv' 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_games_remove <id> — LEGACY SHIM.
+# Removes from both games.json and apps.json.
+# DEPRECATED — remove after Phase D.
 # ---------------------------------------------------------------------------
 wb_gui_games_remove() {
   local id="${1:-}"
@@ -137,21 +122,24 @@ wb_gui_games_remove() {
     return 1
   fi
 
+  # Remove from primary registry (apps.json)
+  wb_gui_apps_remove "${id}"
+
+  # Also remove from legacy games.json
   local existing_json
   existing_json="$(_wb_gui_games_load_json)"
-
   local new_json
   new_json="$(printf '%s' "${existing_json}" | jq --arg id "${id}" \
     '.games |= map(select(.id != $id))')"
-
   local reg
   reg="$(_wb_gui_games_registry)"
   wb_json_write_atomic "${reg}" "${new_json}"
 }
 
 # ---------------------------------------------------------------------------
-# wb_gui_games_get <id>
-# Prints the JSON object for a given game ID, or exits 1 if not found.
+# wb_gui_games_get <id> — LEGACY SHIM.
+# Reads from games.json (schema v1) to return the expected shape.
+# DEPRECATED — remove after Phase D.
 # ---------------------------------------------------------------------------
 wb_gui_games_get() {
   local id="${1:-}"
@@ -169,43 +157,4 @@ wb_gui_games_get() {
     return 1
   fi
   printf '%s\n' "${entry}"
-}
-
-# ---------------------------------------------------------------------------
-# _wb_gui_validate_exe_path <path>
-# Rejects paths with '..' traversal or shell-metacharacter injection.
-# Same logic as _wb_validate_path_arg in wb for absolute paths.
-# ---------------------------------------------------------------------------
-_wb_gui_validate_exe_path() {
-  local path="${1:-}"
-  if [[ -z "${path}" ]]; then
-    echo "wb-gui: exe path required" >&2
-    return 1
-  fi
-  if [[ "${path}" == *..* ]]; then
-    echo "wb-gui: invalid exe path '${path}' (path traversal via '..' rejected)" >&2
-    return 1
-  fi
-  # Reject characters that are dangerous in shell contexts: ; & | ` $ ( ) < > { } NL
-  # Use printf with escape sequences to construct the regex without putting bare
-  # $ or ` in any quoted string (avoids shellcheck SC2016 info warning).
-  # \x60 = backtick, \x24 = dollar sign. Result: [;|&`$()<>{}]
-  local _sc_re
-  _sc_re="$(printf '[;|&\x60\x24()<>{}]')"
-  if [[ "${path}" =~ ${_sc_re} ]]; then
-    echo "wb-gui: invalid exe path '${path}' (shell metacharacters rejected)" >&2
-    return 1
-  fi
-  # Must be absolute path with safe characters (letters, digits, _ . / space -)
-  # Hyphen placed first in the character class to avoid range interpretation.
-  local _path_re='^/[-A-Za-z0-9_./\ ]+$'
-  if [[ "${path}" == /* ]]; then
-    if ! [[ "${path}" =~ ${_path_re} ]]; then
-      echo "wb-gui: invalid exe path '${path}' (only [-A-Za-z0-9_./ ] allowed)" >&2
-      return 1
-    fi
-  else
-    echo "wb-gui: exe path must be absolute (starts with /)" >&2
-    return 1
-  fi
 }

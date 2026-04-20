@@ -93,6 +93,22 @@ wb_gui_dialog_confirm() {
 }
 
 # ---------------------------------------------------------------------------
+# wb_gui_dialog_question <title> <text> <continue_label> <cancel_label>
+# Show a question dialog with two buttons: continue (rc=0) and cancel (rc=1).
+# Returns 0 if the user clicked continue, non-zero if they clicked cancel or
+# dismissed the dialog (rc=252 Escape).
+# ---------------------------------------------------------------------------
+wb_gui_dialog_question() {
+  local title="${1:-Confirm}"
+  local text="${2:-}"
+  local continue_label="${3:-Continue}"
+  local cancel_label="${4:-Cancel}"
+  wb_gui_yad --title="${title}" --text="${text}" --no-markup \
+    --button="${continue_label}:0" --button="${cancel_label}:1" \
+    --image=dialog-question
+}
+
+# ---------------------------------------------------------------------------
 # wb_gui_dialog_file_select [title]
 # Open a file-chooser dialog. Prints selected path to stdout.
 # Returns non-zero if user cancelled.
@@ -159,4 +175,85 @@ wb_gui_dialog_list() {
   local title="${1:-Games}"
   shift
   wb_gui_yad --list --title="${title}" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_checklist <title> <text> <columns_csv> [row_data...]
+#
+# Wraps yad --list --checklist with consistent styling and column structure.
+# The first column is always "Add:CHK". columns_csv is a pipe-separated
+# list of additional column names (e.g. "Name|Executable|Detected via").
+# Remaining arguments are the row data (pre-pended with TRUE/FALSE per row).
+# stdout: pipe-separated rows (all rows, with CHK column for filtering).
+# rc: 0=OK, 1=Cancel/Skip, 10=Add All (if applicable), 252=Escape.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_checklist() {
+  local title="${1:-Select}"
+  local text="${2:-}"
+  local columns_csv="${3:-}"
+  shift 3
+  local -a col_args=("--column=Add:CHK")
+  local -a col_names_arr
+  IFS='|' read -ra col_names_arr <<< "${columns_csv}"
+  local col
+  for col in "${col_names_arr[@]}"; do
+    [[ -n "${col}" ]] && col_args+=("--column=${col}")
+  done
+  wb_gui_yad --list --checklist \
+    --title="${title}" --text="${text}" --no-markup \
+    --separator="|" --print-all \
+    "${col_args[@]}" \
+    "$@"
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_notebook <key> <tab_labels_csv> [extra_yad_args...]
+#
+# Wraps yad --notebook (parent container). The caller must launch child
+# --plug processes BEFORE calling this.
+#   key: shared integer key for --plug children
+#   tab_labels_csv: pipe-separated tab names (e.g. "General|Dist|Prefix|Per-App")
+# Standard buttons: "Save this tab" (rc=10) and "Close" (rc=1) per F4 fix.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_notebook() {
+  local key="${1:-}"
+  local tabs_csv="${2:-}"
+  shift 2
+  local -a tab_args=()
+  local -a tab_names_arr
+  IFS='|' read -ra tab_names_arr <<< "${tabs_csv}"
+  local tab
+  for tab in "${tab_names_arr[@]}"; do
+    [[ -n "${tab}" ]] && tab_args+=("--tab=${tab}")
+  done
+  wb_gui_yad --notebook \
+    --key="${key}" \
+    "${tab_args[@]}" \
+    --width=700 --height=450 \
+    --button="Save this tab:10" \
+    --button="Close:1" \
+    "$@"
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_picker_single <title> <text> [items...]
+#
+# Small single-column yad --list picker (F5 fix — pre-select pattern).
+# Used to pick a dist or app before the notebook renders that tab.
+# stdout: selected item name on rc=0; empty on rc=1/252.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_picker_single() {
+  local title="${1:-Select}"
+  local text="${2:-}"
+  shift 2
+  wb_gui_yad --list \
+    --title="${title}" \
+    --text="${text}" \
+    --no-markup \
+    --column="Name" \
+    --separator="|" \
+    --print-column=1 \
+    --button="Select:0" \
+    --button="Cancel:1" \
+    "$@"
 }

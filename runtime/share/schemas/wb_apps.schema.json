@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_apps.schema.json",
+  "title": "apps",
+  "description": "Registry of Windows apps managed by wb-gui. Replaces games.json (schema 1).",
+  "type": "object",
+  "required": ["schema", "apps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "type": "integer", "const": 2 },
+    "generated_by": { "type": "string" },
+    "updated_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "apps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/appEntry" }
+    }
+  },
+  "$defs": {
+    "appEntry": {
+      "type": "object",
+      "required": [
+        "id", "name", "exe", "prefix", "dist",
+        "added_at", "last_played", "icon_path", "category",
+        "wine_args", "env_vars", "source", "notes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "name":    { "type": "string", "minLength": 1, "maxLength": 200 },
+        "exe":     { "type": "string", "pattern": "^/[-A-Za-z0-9_./ ]+$" },
+        "prefix":  { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+        "dist":    { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "added_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "last_played": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+            { "type": "null" }
+          ]
+        },
+        "icon_path": {
+          "oneOf": [
+            { "type": "string", "pattern": "^/[-A-Za-z0-9_./ ]+$" },
+            { "type": "null" }
+          ]
+        },
+        "category": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["Games", "Utility", "Productivity", "Graphics", "Media", "Development", "Other"]
+            },
+            { "type": "null" }
+          ]
+        },
+        "wine_args": { "type": "array", "items": { "type": "string" } },
+        "env_vars": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "source": { "type": "string", "enum": ["installer", "portable", "detected"] },
+        "notes": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "overlay_profile": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "compat_profile":  { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "steam_compat_id": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "run_count":       { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

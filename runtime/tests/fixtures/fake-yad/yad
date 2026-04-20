@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-# fake-yad — mock yad for wb-gui tests (M12)
+# fake-yad — mock yad for wb-gui tests (M12 + Phase A extension)
 #
-# Protocol:
-#   $WB_TEST_YAD_RESPONSE — path to a file containing the canned stdout response.
-#                           If absent or empty, yad exits 0 with no output.
-#   $WB_TEST_YAD_RESPONSE_RC — desired exit code (default: 0)
-#   $WB_TEST_YAD_LOG — path where this script appends each invocation (one line per call).
+# Single-response protocol (original, unchanged):
+#   $WB_TEST_YAD_RESPONSE     — path to file with canned stdout; if absent/empty, no output.
+#   $WB_TEST_YAD_RESPONSE_RC  — desired exit code (default: 0)
+#   $WB_TEST_YAD_LOG          — path where this script appends each invocation (one ARGV: line).
 #
-# The log format is:
-#   <timestamp_utc> ARGV: <space-separated-quoted-args>
+# Multi-response protocol (Phase A extension — for multi-yad flows):
+#   $WB_TEST_YAD_RESPONSES_DIR — path to a directory containing per-invocation files:
+#       <n>        — stdout for invocation n  (n is zero-padded to 3 digits: 001, 002, …)
+#       <n>.rc     — exit code for invocation n (optional; default 0)
+#     A counter file "<dir>/.counter" tracks the current invocation index (starts at 1).
+#     Counter reads/increments are protected by flock to handle concurrent plug processes.
+#     If a per-invocation file is absent, falls back to WB_TEST_YAD_RESPONSE / RC.
+#   When WB_TEST_YAD_RESPONSES_DIR is set it takes precedence over the single-response vars
+#   for both stdout content and exit code.
 #
-# Tests can then grep the log to assert that wb-gui called yad with the
-# expected arguments.
+# Log format (appended per call):
+#   ARGV: <space-separated-quoted-args>
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
 # Log the invocation
+# ---------------------------------------------------------------------------
 if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
   {
     printf 'ARGV:'
@@ -25,10 +33,56 @@ if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
   } >> "${WB_TEST_YAD_LOG}"
 fi
 
+# ---------------------------------------------------------------------------
+# Determine response (multi-response takes priority)
+# ---------------------------------------------------------------------------
+_yad_response=""
+_yad_rc="${WB_TEST_YAD_RESPONSE_RC:-0}"
+
+if [[ -n "${WB_TEST_YAD_RESPONSES_DIR:-}" && -d "${WB_TEST_YAD_RESPONSES_DIR}" ]]; then
+  local_counter_file="${WB_TEST_YAD_RESPONSES_DIR}/.counter"
+  local_lock_file="${WB_TEST_YAD_RESPONSES_DIR}/.lock"
+
+  # Atomically read and increment counter using flock
+  # flock is used to prevent concurrent plug processes from racing.
+  idx=0
+  (
+    flock -x 200
+    if [[ -f "${local_counter_file}" ]]; then
+      idx="$(cat "${local_counter_file}" 2>/dev/null || echo 1)"
+    else
+      idx=1
+    fi
+    echo $(( idx + 1 )) > "${local_counter_file}"
+    echo "${idx}"
+  ) 200>"${local_lock_file}" > /tmp/fake_yad_idx_$$ 2>/dev/null || true
+  idx="$(cat /tmp/fake_yad_idx_$$ 2>/dev/null || echo 1)"
+  rm -f /tmp/fake_yad_idx_$$ 2>/dev/null || true
+
+  padded="$(printf '%03d' "${idx}")"
+  resp_file="${WB_TEST_YAD_RESPONSES_DIR}/${padded}"
+  rc_file="${WB_TEST_YAD_RESPONSES_DIR}/${padded}.rc"
+
+  if [[ -f "${resp_file}" ]]; then
+    _yad_response="${resp_file}"
+  elif [[ -n "${WB_TEST_YAD_RESPONSE:-}" && -f "${WB_TEST_YAD_RESPONSE}" ]]; then
+    _yad_response="${WB_TEST_YAD_RESPONSE}"
+  fi
+
+  if [[ -f "${rc_file}" ]]; then
+    _yad_rc="$(cat "${rc_file}")"
+  fi
+else
+  # Original single-response protocol
+  if [[ -n "${WB_TEST_YAD_RESPONSE:-}" && -f "${WB_TEST_YAD_RESPONSE}" ]]; then
+    _yad_response="${WB_TEST_YAD_RESPONSE}"
+  fi
+fi
+
 # Emit canned response
-if [[ -n "${WB_TEST_YAD_RESPONSE:-}" && -f "${WB_TEST_YAD_RESPONSE}" ]]; then
-  cat "${WB_TEST_YAD_RESPONSE}"
+if [[ -n "${_yad_response}" ]]; then
+  cat "${_yad_response}"
 fi
 
 # Exit with canned exit code
-exit "${WB_TEST_YAD_RESPONSE_RC:-0}"
+exit "${_yad_rc}"
