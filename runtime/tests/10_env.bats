@@ -239,3 +239,105 @@ _compose() {
   [ "${status}" -eq 0 ]
   echo "${output}" | grep -qE 'd3d12=n'
 }
+
+# ---------------------------------------------------------------------------
+# LD_LIBRARY_PATH tests (W1)
+# ---------------------------------------------------------------------------
+
+# 22. Happy path: dist with all four candidate dirs, no parent LD_LIBRARY_PATH →
+#     emits colon-joined dist paths only, in candidate order.
+@test "env: LD_LIBRARY_PATH emits all four dist dirs when all exist" {
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  local full_dist
+  full_dist="$(mktemp -d)"
+  mkdir -p \
+    "${full_dist}/lib64" \
+    "${full_dist}/lib" \
+    "${full_dist}/lib/wine/x86_64-unix" \
+    "${full_dist}/lib/wine/i386-unix"
+  run _compose "${TEST_PFX}" "${full_dist}"
+  rm -rf "${full_dist}"
+  [ "${status}" -eq 0 ]
+  local expected="${full_dist}/lib64:${full_dist}/lib:${full_dist}/lib/wine/x86_64-unix:${full_dist}/lib/wine/i386-unix"
+  echo "${output}" | grep -qF "LD_LIBRARY_PATH=${expected}"
+}
+
+# 23. Preservation: parent LD_LIBRARY_PATH=/opt/cuda/lib64 → appended at tail
+#     after dist-provided paths.
+@test "env: LD_LIBRARY_PATH appends pre-existing parent value at tail" {
+  export LD_LIBRARY_PATH="/opt/cuda/lib64"
+  local full_dist
+  full_dist="$(mktemp -d)"
+  mkdir -p \
+    "${full_dist}/lib64" \
+    "${full_dist}/lib" \
+    "${full_dist}/lib/wine/x86_64-unix" \
+    "${full_dist}/lib/wine/i386-unix"
+  run _compose "${TEST_PFX}" "${full_dist}"
+  rm -rf "${full_dist}"
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  [ "${status}" -eq 0 ]
+  # Dist paths must come first; /opt/cuda/lib64 must be at tail
+  echo "${output}" | grep -qE '^LD_LIBRARY_PATH=.*:/opt/cuda/lib64$'
+  # Verify dist paths are present before the user path
+  echo "${output}" | grep -qF "${full_dist}/lib64:/opt/cuda/lib64" || \
+    echo "${output}" | grep -qE "^LD_LIBRARY_PATH=.*${full_dist}/lib64.*:/opt/cuda/lib64"
+}
+
+# 24. Partial layout: only lib64 exists → only lib64 emitted (no trailing colon,
+#     no absent dirs).
+@test "env: LD_LIBRARY_PATH emits only existing dirs (partial layout)" {
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  local partial_dist
+  partial_dist="$(mktemp -d)"
+  mkdir -p "${partial_dist}/lib64"
+  # Intentionally omit lib, lib/wine/x86_64-unix, lib/wine/i386-unix
+  run _compose "${TEST_PFX}" "${partial_dist}"
+  rm -rf "${partial_dist}"
+  [ "${status}" -eq 0 ]
+  echo "${output}" | grep -qE "^LD_LIBRARY_PATH=${partial_dist}/lib64$"
+}
+
+# 25. Empty layout + empty parent → LD_LIBRARY_PATH key NOT emitted at all.
+@test "env: LD_LIBRARY_PATH not emitted when no dist dirs exist and parent unset" {
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  local empty_dist
+  empty_dist="$(mktemp -d)"
+  # No candidate dirs created under empty_dist
+  run _compose "${TEST_PFX}" "${empty_dist}"
+  rm -rf "${empty_dist}"
+  [ "${status}" -eq 0 ]
+  ! echo "${output}" | grep -qE '^LD_LIBRARY_PATH='
+}
+
+# 26. Parent-only: no dist dirs exist but LD_LIBRARY_PATH is set → pre-existing
+#     value still emitted (user paths always preserved).
+@test "env: LD_LIBRARY_PATH emitted with parent value even when no dist dirs exist" {
+  export LD_LIBRARY_PATH="/usr/local/lib"
+  local empty_dist
+  empty_dist="$(mktemp -d)"
+  run _compose "${TEST_PFX}" "${empty_dist}"
+  rm -rf "${empty_dist}"
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  [ "${status}" -eq 0 ]
+  echo "${output}" | grep -qE '^LD_LIBRARY_PATH=/usr/local/lib$'
+}
+
+# 27. Determinism: two back-to-back calls with LD_LIBRARY_PATH set produce
+#     byte-identical output.
+@test "env: LD_LIBRARY_PATH output is deterministic across two calls" {
+  export LD_LIBRARY_PATH="/opt/cuda/lib64"
+  local full_dist
+  full_dist="$(mktemp -d)"
+  mkdir -p \
+    "${full_dist}/lib64" \
+    "${full_dist}/lib" \
+    "${full_dist}/lib/wine/x86_64-unix" \
+    "${full_dist}/lib/wine/i386-unix"
+  local out1 out2
+  out1="$(_compose "${TEST_PFX}" "${full_dist}")"
+  out2="$(_compose "${TEST_PFX}" "${full_dist}")"
+  rm -rf "${full_dist}"
+  unset LD_LIBRARY_PATH 2>/dev/null || true
+  [ "${out1}" = "${out2}" ]
+}

@@ -84,6 +84,44 @@ wb_env_compose() {
   # We emit both unconditionally (Wine ignores absent dirs).
   _emit "WINEDLLPATH" "${dist_path}/lib/wine/x86_64-unix:${dist_path}/lib/wine/i386-unix"
 
+  # LD_LIBRARY_PATH — for the dynamic linker loading ELF libs' own dependencies.
+  # Distinct from WINEDLLPATH which is Wine-internal ELF lib resolution.
+  # Candidate dirs prepended in order; only existing dirs are included.
+  # Any pre-existing LD_LIBRARY_PATH is appended verbatim (user paths preserved).
+  local _ld_parts=()
+  local _ld_candidate
+  for _ld_candidate in \
+      "${dist_path}/lib64" \
+      "${dist_path}/lib" \
+      "${dist_path}/lib/wine/x86_64-unix" \
+      "${dist_path}/lib/wine/i386-unix"; do
+    [[ -d "${_ld_candidate}" ]] && _ld_parts+=("${_ld_candidate}")
+  done
+
+  # Build the colon-joined value; append pre-existing LD_LIBRARY_PATH if non-empty.
+  local _ld_value=""
+  local _ld_i
+  for (( _ld_i=0; _ld_i<${#_ld_parts[@]}; _ld_i++ )); do
+    if [[ "${_ld_i}" -eq 0 ]]; then
+      _ld_value="${_ld_parts[${_ld_i}]}"
+    else
+      _ld_value="${_ld_value}:${_ld_parts[${_ld_i}]}"
+    fi
+  done
+
+  if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+    if [[ -n "${_ld_value}" ]]; then
+      _ld_value="${_ld_value}:${LD_LIBRARY_PATH}"
+    else
+      _ld_value="${LD_LIBRARY_PATH}"
+    fi
+  fi
+
+  # Emit only when value is non-empty (avoids noise for empty-layout + unset parent).
+  if [[ -n "${_ld_value}" ]]; then
+    _emit "LD_LIBRARY_PATH" "${_ld_value}"
+  fi
+
   # --- WINEDEBUG ----------------------------------------------------------
   _emit "WINEDEBUG" "${WB_DEBUG_WINE:--all}"
 

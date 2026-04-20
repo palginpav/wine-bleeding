@@ -236,3 +236,47 @@ teardown() {
   WB_VER="${output#wb }"
   [ "${FILE_VERSION}" = "${WB_VER}" ]
 }
+
+# ---------------------------------------------------------------------------
+# Tests 11–13: .desktop i18n — locale keys present in both files (W2)
+# ---------------------------------------------------------------------------
+
+# Helper: assert that locale keys Name[xx], GenericName[xx], Comment[xx]
+# are all present in a given .desktop file.
+_assert_desktop_locale() {
+  local file="$1" locale="$2"
+  run grep -q "^Name\[${locale}\]=" "${file}"
+  [ "${status}" -eq 0 ]
+  run grep -q "^GenericName\[${locale}\]=" "${file}"
+  [ "${status}" -eq 0 ]
+  run grep -q "^Comment\[${locale}\]=" "${file}"
+  [ "${status}" -eq 0 ]
+}
+
+@test "desktop i18n: share/applications/wine-bleeding-wb.desktop has all 4 locale entries" {
+  local f="${RUNTIME_DIR}/share/applications/wine-bleeding-wb.desktop"
+  [ -f "${f}" ]
+  for locale in ru es de zh_CN; do
+    _assert_desktop_locale "${f}" "${locale}"
+  done
+}
+
+@test "desktop i18n: packaging/appimage/wine-bleeding-wb.desktop has all 4 locale entries" {
+  local f="${RUNTIME_DIR}/packaging/appimage/wine-bleeding-wb.desktop"
+  [ -f "${f}" ]
+  for locale in ru es de zh_CN; do
+    _assert_desktop_locale "${f}" "${locale}"
+  done
+}
+
+@test "desktop i18n: desktop-file-validate passes on both .desktop files" {
+  if ! command -v desktop-file-validate >/dev/null 2>&1; then
+    skip "desktop-file-validate not installed"
+  fi
+  run desktop-file-validate \
+    "${RUNTIME_DIR}/share/applications/wine-bleeding-wb.desktop"
+  [ "${status}" -eq 0 ]
+  run desktop-file-validate \
+    "${RUNTIME_DIR}/packaging/appimage/wine-bleeding-wb.desktop"
+  [ "${status}" -eq 0 ]
+}

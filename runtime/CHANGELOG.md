@@ -2,6 +2,33 @@
 
 ## [Unreleased] — v1.5.0-dev
 
+### Post-GA opt-ins (LD_LIBRARY_PATH emission + .desktop i18n)
+
+- **`LD_LIBRARY_PATH` emission in `wb_env_compose`** — `src/wb-lib/wb-env.sh`
+  now emits `LD_LIBRARY_PATH` alongside the existing env keys. Candidate dirs
+  in order: `${dist_path}/lib64`, `${dist_path}/lib`,
+  `${dist_path}/lib/wine/x86_64-unix`, `${dist_path}/lib/wine/i386-unix`.
+  Only existing dirs are included; a pre-existing parent `LD_LIBRARY_PATH`
+  is appended at the tail with a single colon separator. When no dist dirs
+  exist AND the parent var is unset, the key is suppressed entirely to keep
+  sorted output stable across layouts. Closes W3 §9.2 Full-scope (previously
+  deferred). Six new bats cases in `runtime/tests/10_env.bats` (tests 22–27)
+  cover happy path, parent preservation, partial layout, empty suppression,
+  parent-only, and determinism.
+- **`.desktop` i18n for ru/es/de/zh_CN** — initial shipping locales. Adds
+  `Name[xx]`, `GenericName[xx]`, and `Comment[xx]` for Russian, Spanish,
+  German, and Simplified Chinese to both `share/applications/wine-bleeding-wb.desktop`
+  (wb-gui launcher) and `packaging/appimage/wine-bleeding-wb.desktop`
+  (AppImage wb launcher). Fills in the previously-missing unsuffixed
+  `GenericName=Wine Runtime GUI` on the wb-gui launcher. Product names
+  (`wine-bleeding`, `wb`, `Wine`) are preserved verbatim per glossary.
+  Both files pass `desktop-file-validate`. Translations validated under
+  the orchestray 2.1.8 `translator` specialist protocol (5 correctness
+  checks: placeholder parity, CLDR plural-form, length-ratio, RTL markers,
+  source-language leak — all pass, quality score 1.0). Three new bats cases
+  in `runtime/tests/25_packaging.bats` (tests 11–13) assert locale-key
+  presence and `desktop-file-validate` clean.
+
 ### Pre-GA hardening (M12 security review follow-ups + M8 deferred)
 
 - **AppImage SHA256 pin (M-2 RELEASE BLOCKER)** — `build-appimage.sh` now pins

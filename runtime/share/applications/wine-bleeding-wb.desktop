@@ -1,6 +1,19 @@
 [Desktop Entry]
 Name=wine-bleeding
+Name[ru]=wine-bleeding
+Name[es]=wine-bleeding
+Name[de]=wine-bleeding
+Name[zh_CN]=wine-bleeding
+GenericName=Wine Runtime GUI
+GenericName[ru]=Графический интерфейс Wine
+GenericName[es]=Interfaz gráfica de Wine
+GenericName[de]=Wine-Laufzeit-GUI
+GenericName[zh_CN]=Wine 运行时图形界面
 Comment=Wine-bleeding runtime GUI
+Comment[ru]=Графический интерфейс wine-bleeding
+Comment[es]=Interfaz gráfica de wine-bleeding
+Comment[de]=wine-bleeding-Laufzeit-GUI
+Comment[zh_CN]=wine-bleeding 运行时图形界面
 Exec=wb-gui %f
 Icon=wine-bleeding
 Type=Application

@@ -1,7 +1,19 @@
 [Desktop Entry]
 Name=wine-bleeding wb
+Name[ru]=wine-bleeding wb
+Name[es]=wine-bleeding wb
+Name[de]=wine-bleeding wb
+Name[zh_CN]=wine-bleeding wb
 GenericName=Wine Runtime Manager
+GenericName[ru]=Менеджер среды выполнения Wine
+GenericName[es]=Gestor de entornos Wine
+GenericName[de]=Wine-Laufzeitverwaltung
+GenericName[zh_CN]=Wine 运行时管理器
 Comment=Manage Wine prefixes and runtime distributions
+Comment[ru]=Управление префиксами Wine и дистрибутивами среды выполнения
+Comment[es]=Administra prefijos de Wine y distribuciones de entorno
+Comment[de]=Wine-Prefixe und Laufzeitdistributionen verwalten
+Comment[zh_CN]=管理 Wine 前缀与运行时分发
 Exec=wb %F
 Icon=wine-bleeding
 Type=Application
