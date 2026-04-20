@@ -178,81 +178,10 @@ _source_gui_libs() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. wb-gui settings writes .wb.ppdb next to the exe with correct toggles
+# Tests 7 & 8 removed in v1.7.0 with GAP-2 bridge removal: `wb-gui settings
+# <prefix>` no longer writes the legacy .wb.ppdb file — it routes to
+# settings-v2 app <id>. Coverage lives in 29_ui_flows.bats tests 7-9 and 16.
 # ---------------------------------------------------------------------------
-@test "wb-gui settings writes .wb.ppdb with form values" {
-  # Register a game first
-  local exe_dir="${TEST_DIR}/games"
-  mkdir -p "${exe_dir}"
-  local exe="${exe_dir}/MyGame.exe"
-  touch "${exe}"
-
-  # Add game to registry
-  bash -c "
-    export WB_HOME='${WB_HOME}'
-    source '${WB_LIB}/wb-paths.sh'
-    source '${WB_LIB}/wb-json.sh'
-    source '${WB_LIB}/wb-log.sh'
-    source '${WB_GUI_LIB}/wb-gui-games.sh'
-    wb_gui_games_add '${exe}' 'MyGame'
-  "
-
-  # Fake-yad returns form output (pipe-separated: DXVK|VKD3D|NVAPI|ESYNC|FSYNC|HUD|OVERRIDES)
-  printf 'TRUE|FALSE|FALSE|TRUE|FALSE||' > "${WB_TEST_YAD_RESPONSE}"
-  export WB_TEST_YAD_RESPONSE_RC=0
-
-  run bash -c "
-    export WB_HOME='${WB_HOME}'
-    export PATH='${WB_TEST_PATH}'
-    export WB_TEST_YAD_RESPONSE='${WB_TEST_YAD_RESPONSE}'
-    export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
-    export WB_TEST_YAD_RESPONSE_RC=0
-    '${WB_GUI}' settings MyGame
-  "
-  [ "${status}" -eq 0 ]
-  local ppdb="${exe_dir}/.wb.ppdb"
-  [ -f "${ppdb}" ]
-  run jq empty "${ppdb}"
-  [ "${status}" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# 8. DXVK off -> .wb.ppdb has "WB_DXVK": "0" in env
-# ---------------------------------------------------------------------------
-@test "DXVK off: .wb.ppdb env.WB_DXVK is 0" {
-  local exe_dir="${TEST_DIR}/games2"
-  mkdir -p "${exe_dir}"
-  local exe="${exe_dir}/NoD3D.exe"
-  touch "${exe}"
-
-  bash -c "
-    export WB_HOME='${WB_HOME}'
-    source '${WB_LIB}/wb-paths.sh'
-    source '${WB_LIB}/wb-json.sh'
-    source '${WB_LIB}/wb-log.sh'
-    source '${WB_GUI_LIB}/wb-gui-games.sh'
-    wb_gui_games_add '${exe}' 'NoD3D'
-  "
-
-  # DXVK=FALSE in form output
-  printf 'FALSE|FALSE|FALSE|TRUE|FALSE||' > "${WB_TEST_YAD_RESPONSE}"
-  export WB_TEST_YAD_RESPONSE_RC=0
-
-  bash -c "
-    export WB_HOME='${WB_HOME}'
-    export PATH='${WB_TEST_PATH}'
-    export WB_TEST_YAD_RESPONSE='${WB_TEST_YAD_RESPONSE}'
-    export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
-    export WB_TEST_YAD_RESPONSE_RC=0
-    '${WB_GUI}' settings NoD3D
-  "
-
-  local ppdb="${exe_dir}/.wb.ppdb"
-  [ -f "${ppdb}" ]
-  run jq -r '.env.WB_DXVK' "${ppdb}"
-  [ "${status}" -eq 0 ]
-  [ "${output}" = "0" ]
-}
 
 # ---------------------------------------------------------------------------
 # 9. Malformed EXE path (contains `;`) is rejected

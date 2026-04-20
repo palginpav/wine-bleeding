@@ -738,81 +738,11 @@ _run_wb_gui() {
 }
 
 # ===========================================================================
-# 18. Legacy alias — settings <prefix>: writes .wb.ppdb (24_gui.bats contract)
+# Tests 18 & 19 removed in v1.7.0 with GAP-2 bridge removal: `wb-gui settings
+# <prefix>` no longer writes .wb.ppdb — it routes to settings-v2 app <id>.
+# Coverage lives in tests 7-9 (settings-v2 general/Save/app-scope) and 16
+# (notebook active-tab tracking).
 # ===========================================================================
-@test "legacy settings: wb-gui settings <prefix> writes .wb.ppdb next to exe" {
-  local exe_dir="${TEST_DIR}/legacygame"
-  mkdir -p "${exe_dir}"
-  local exe="${exe_dir}/LegacyGame.exe"
-  touch "${exe}"
-
-  # Register via games shim so the prefix lookup works
-  run bash -c "
-    export WB_HOME='${WB_HOME}'
-    source '${WB_LIB}/wb-paths.sh'
-    source '${WB_LIB}/wb-json.sh'
-    source '${WB_LIB}/wb-log.sh'
-    source '${WB_GUI_LIB}/wb-gui-apps.sh'
-    wb_gui_apps_add '${exe}' 'legacypfx' 'LegacyGame' 'portable'
-  "
-  [ "${status}" -eq 0 ]
-
-  printf 'TRUE|FALSE|FALSE|TRUE|FALSE||' > "${WB_TEST_YAD_RESPONSE}"
-  export WB_TEST_YAD_RESPONSE_RC="0"
-
-  run bash -c "
-    export WB_HOME='${WB_HOME}'
-    export PATH='${WB_TEST_PATH}'
-    export WB_TEST_YAD_RESPONSE='${WB_TEST_YAD_RESPONSE}'
-    export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
-    export WB_TEST_YAD_RESPONSE_RC=0
-    export WB_GUI_NO_DESKTOP_SHORTCUT=1
-    '${WB_GUI}' settings legacypfx
-  "
-  [ "${status}" -eq 0 ]
-  local ppdb="${exe_dir}/.wb.ppdb"
-  [ -f "${ppdb}" ]
-  run jq empty "${ppdb}"
-  [ "${status}" -eq 0 ]
-}
-
-# ===========================================================================
-# 19. Legacy settings: DXVK=FALSE produces WB_DXVK=0 in .wb.ppdb
-# ===========================================================================
-@test "legacy settings: DXVK off sets .wb.ppdb env.WB_DXVK to '0'" {
-  local exe_dir="${TEST_DIR}/dxvktest"
-  mkdir -p "${exe_dir}"
-  local exe="${exe_dir}/NoDxvk.exe"
-  touch "${exe}"
-
-  run bash -c "
-    export WB_HOME='${WB_HOME}'
-    source '${WB_LIB}/wb-paths.sh'
-    source '${WB_LIB}/wb-json.sh'
-    source '${WB_LIB}/wb-log.sh'
-    source '${WB_GUI_LIB}/wb-gui-apps.sh'
-    wb_gui_apps_add '${exe}' 'dxvkpfx' 'NoDxvk' 'portable'
-  "
-  [ "${status}" -eq 0 ]
-
-  printf 'FALSE|FALSE|FALSE|TRUE|FALSE||' > "${WB_TEST_YAD_RESPONSE}"
-  export WB_TEST_YAD_RESPONSE_RC="0"
-
-  run bash -c "
-    export WB_HOME='${WB_HOME}'
-    export PATH='${WB_TEST_PATH}'
-    export WB_TEST_YAD_RESPONSE='${WB_TEST_YAD_RESPONSE}'
-    export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
-    export WB_TEST_YAD_RESPONSE_RC=0
-    export WB_GUI_NO_DESKTOP_SHORTCUT=1
-    '${WB_GUI}' settings dxvkpfx
-  "
-  [ "${status}" -eq 0 ]
-  local ppdb="${exe_dir}/.wb.ppdb"
-  run jq -r '.env.WB_DXVK' "${ppdb}"
-  [ "${status}" -eq 0 ]
-  [ "${output}" = "0" ]
-}
 
 # ===========================================================================
 # 20. add-portable: cancel at exe picker exits 0 (no apps.json pollution)

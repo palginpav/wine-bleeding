@@ -1,5 +1,18 @@
 # wine-bleeding Runtime Layer Changelog
 
+## [Unreleased] — v1.7.0-dev
+
+### Removed — GAP-2 transitional bridge
+
+- **`src/wb-gui` `_cmd_settings`** — removed the v1.6.0 transitional
+  `.wb.ppdb` write path. `wb-gui settings <prefix>` now resolves the prefix
+  to an app-id via `apps.json` and dispatches directly to
+  `_cmd_settings_v2 app <id>`, so per-app settings flow exclusively through
+  the 4-layer store. Obsolete `.wb.ppdb` assertions dropped from
+  `tests/24_gui.bats` (tests 7-8) and `tests/29_ui_flows.bats` (tests 18-19);
+  coverage of the settings-v2 dispatch lives in `tests/29_ui_flows.bats`
+  tests 7-9 and 16.
+
 ## [1.6.0] — 2026-04-20
 
 ### Phase A: generalize games → apps (+4-layer settings + post-install detection)

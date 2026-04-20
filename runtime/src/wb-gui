@@ -19,7 +19,7 @@
 #   - apps.json registry lives at $WB_HOME/apps.json; mutations are atomic.
 set -euo pipefail
 
-WB_GUI_VERSION="1.6.0"
+WB_GUI_VERSION="1.7.0-dev"
 
 # ---------------------------------------------------------------------------
 # Resolve paths — Option A fallback for system-package installs (mirrors wb).
@@ -1432,9 +1432,10 @@ _cmd_add_game() {
 }
 
 # ---------------------------------------------------------------------------
-# Legacy: cmd: wb-gui settings <prefix>
-# Maps to settings-v2 prefix (keeps 24_gui.bats tests 7-10 passing).
-# The old behavior wrote a .wb.ppdb file; we preserve that for test compat.
+# Legacy alias: cmd: wb-gui settings <prefix>
+# Resolves <prefix> → app-id via apps.json and dispatches to settings-v2
+# scoped at the Per-App tab. The v1.6.0 transitional .wb.ppdb bridge has
+# been removed in v1.7.0.
 # ---------------------------------------------------------------------------
 _cmd_settings() {
   _wb_gui_load_libs
@@ -1446,7 +1447,6 @@ _cmd_settings() {
   fi
   _wb_gui_validate_path_arg "settings" "${prefix}"
 
-  # Find exe for this prefix from apps registry (Phase A: apps.json is primary)
   local reg
   reg="$(_wb_gui_apps_registry)"
   if [[ ! -f "${reg}" ]]; then
@@ -1454,101 +1454,15 @@ _cmd_settings() {
     exit 1
   fi
 
-  local exe
-  exe="$(jq -r --arg p "${prefix}" \
-    '.apps[] | select(.prefix == $p) | .exe' "${reg}" | head -1)"
-  if [[ -z "${exe}" ]]; then
+  local app_id
+  app_id="$(jq -r --arg p "${prefix}" \
+    '.apps[] | select(.prefix == $p) | .id' "${reg}" | head -1)"
+  if [[ -z "${app_id}" ]]; then
     wb_gui_dialog_error "Settings" "No app found for prefix '${prefix}'."
     exit 1
   fi
 
-  # Legacy .wb.ppdb-based settings dialog (preserves 24_gui.bats test behavior)
-  local ppdb_path
-  ppdb_path="$(dirname "${exe}")/.wb.ppdb"
-
-  local cur_dxvk="TRUE"
-  local cur_vkd3d="FALSE"
-  local cur_nvapi="FALSE"
-  local cur_esync="TRUE"
-  local cur_fsync="FALSE"
-  local cur_dxvk_hud=""
-  local cur_overrides=""
-
-  if [[ -f "${ppdb_path}" ]] && jq empty "${ppdb_path}" 2>/dev/null; then
-    local v
-    v="$(jq -r --arg k WB_DXVK  '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "0" ]] && cur_dxvk="FALSE"
-    v="$(jq -r --arg k WB_VKD3D '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_vkd3d="TRUE"
-    v="$(jq -r --arg k WB_NVAPI '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_nvapi="TRUE"
-    v="$(jq -r --arg k WB_ESYNC '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "0" ]] && cur_esync="FALSE"
-    v="$(jq -r --arg k WB_FSYNC '.env[$k] // empty' "${ppdb_path}")"; [[ "${v}" == "1" ]] && cur_fsync="TRUE"
-    cur_dxvk_hud="$(jq -r --arg k DXVK_HUD          '.env[$k] // empty' "${ppdb_path}")"
-    cur_overrides="$(jq -r --arg k WINEDLLOVERRIDES   '.env[$k] // empty' "${ppdb_path}")"
-  fi
-
-  local form_output rc_sf=0
-  form_output="$(wb_gui_dialog_form_settings \
-    "${prefix}" "${exe}" \
-    "${cur_dxvk}" "${cur_vkd3d}" "${cur_nvapi}" \
-    "${cur_esync}" "${cur_fsync}" \
-    "${cur_dxvk_hud}" "${cur_overrides}")" || rc_sf=$?
-
-  if [[ "${rc_sf}" -ne 0 ]]; then
-    echo "wb-gui settings: cancelled" >&2
-    exit 0
-  fi
-
-  IFS='|' read -r -a fields <<< "${form_output}"
-  local dxvk_val="${fields[0]:-TRUE}"
-  local vkd3d_val="${fields[1]:-FALSE}"
-  local nvapi_val="${fields[2]:-FALSE}"
-  local esync_val="${fields[3]:-TRUE}"
-  local fsync_val="${fields[4]:-FALSE}"
-  local hud_val="${fields[5]:-}"
-  local overrides_val="${fields[6]:-}"
-
-  _bool_to_int() { [[ "$1" == "TRUE" ]] && echo "1" || echo "0"; }
-
-  local dxvk_int vkd3d_int nvapi_int esync_int fsync_int
-  dxvk_int="$(_bool_to_int "${dxvk_val}")"
-  vkd3d_int="$(_bool_to_int "${vkd3d_val}")"
-  nvapi_int="$(_bool_to_int "${nvapi_val}")"
-  esync_int="$(_bool_to_int "${esync_val}")"
-  fsync_int="$(_bool_to_int "${fsync_val}")"
-
-  local ppdb_json
-  ppdb_json="$(jq -n \
-    --arg dxvk  "${dxvk_int}" \
-    --arg vkd3d "${vkd3d_int}" \
-    --arg nvapi "${nvapi_int}" \
-    --arg esync "${esync_int}" \
-    --arg fsync "${fsync_int}" \
-    --arg hud   "${hud_val}" \
-    --arg over  "${overrides_val}" \
-    '{
-      "schema": 1,
-      "env": {
-        "WB_DXVK":          $dxvk,
-        "WB_VKD3D":         $vkd3d,
-        "WB_NVAPI":         $nvapi,
-        "WB_ESYNC":         $esync,
-        "WB_FSYNC":         $fsync,
-        "DXVK_HUD":         $hud,
-        "WINEDLLOVERRIDES": $over
-      }
-    }')"
-
-  wb_json_write_atomic "${ppdb_path}" "${ppdb_json}"
-  wb_gui_dialog_info "Settings Saved" "Settings written to:\n${ppdb_path}"
-
-  # TODO: remove after v1.6.0 — GAP-2 transitional bridge (path 2).
-  # Also open settings-v2 for this app so per-app settings flow through the
-  # 4-layer store as well. The legacy ppdb write above keeps 24_gui.bats compat.
-  local app_id_v2
-  app_id_v2="$(jq -r --arg p "${prefix}" \
-    '.apps[] | select(.prefix == $p) | .id' "${reg}" | head -1)"
-  if [[ -n "${app_id_v2}" ]]; then
-    _cmd_settings_v2 app "${app_id_v2}" || true
-  fi
+  _cmd_settings_v2 app "${app_id}"
 }
 
 # ---------------------------------------------------------------------------
