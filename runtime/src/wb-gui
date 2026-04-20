@@ -19,24 +19,60 @@ set -euo pipefail
 WB_GUI_VERSION="1.5.0-dev"
 
 # ---------------------------------------------------------------------------
-# Resolve paths: wb-gui lives next to wb and wb-gui-lib/
+# Resolve paths — Option A fallback for system-package installs (mirrors wb).
+# When wb-gui lives at /usr/bin/wb-gui, sibling wb-lib/ and wb-gui-lib/ don't
+# exist there; they're at /usr/lib/wine-bleeding/{wb-lib,wb-gui-lib}/ instead.
+#
+# Resolution order for each lib dir:
+#   1. Explicit env override (WB_LIB_DIR / WB_GUI_LIB_DIR — testing / DESTDIR)
+#   2. Sibling next to the wb-gui binary (source-tree layout)
+#   3. /usr/lib/wine-bleeding/<dir>      (system install, PREFIX=/usr)
+#   4. /usr/local/lib/wine-bleeding/<dir> (system install, PREFIX=/usr/local)
 # ---------------------------------------------------------------------------
 _WB_GUI_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_WB_GUI_LIB_DIR="${_WB_GUI_SELF_DIR}/wb-gui-lib"
-_WB_BIN="${_WB_GUI_SELF_DIR}/wb"
+
+_wb_gui_resolve_dir() {
+  local name="$1"          # "wb-lib" or "wb-gui-lib"
+  local env_override="$2"  # WB_LIB_DIR or WB_GUI_LIB_DIR
+  if [[ -n "${env_override}" ]] && [[ -d "${env_override}" ]]; then
+    echo "${env_override}"
+    return 0
+  fi
+  local sibling="${_WB_GUI_SELF_DIR}/${name}"
+  if [[ -d "${sibling}" ]]; then
+    echo "${sibling}"
+    return 0
+  fi
+  local candidates=(
+    "/usr/lib/wine-bleeding/${name}"
+    "/usr/local/lib/wine-bleeding/${name}"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -d "${c}" ]]; then
+      echo "${c}"
+      return 0
+    fi
+  done
+  echo "wb-gui: cannot locate ${name} directory" >&2
+  return 1
+}
+
+_WB_LIB_DIR="$(_wb_gui_resolve_dir wb-lib "${WB_LIB_DIR:-}")"
+_WB_GUI_LIB_DIR="$(_wb_gui_resolve_dir wb-gui-lib "${WB_GUI_LIB_DIR:-}")"
+_WB_BIN="$(command -v wb 2>/dev/null || echo "${_WB_GUI_SELF_DIR}/wb")"
 
 # ---------------------------------------------------------------------------
 # Source wb-lib helpers we need (paths, json, log) without importing all of wb.
 # This avoids circular imports: we source only the leaf libraries.
 # ---------------------------------------------------------------------------
 _wb_gui_load_libs() {
-  local wb_lib_dir="${_WB_GUI_SELF_DIR}/wb-lib"
   # shellcheck source=wb-lib/wb-paths.sh
-  source "${wb_lib_dir}/wb-paths.sh"
+  source "${_WB_LIB_DIR}/wb-paths.sh"
   # shellcheck source=wb-lib/wb-json.sh
-  source "${wb_lib_dir}/wb-json.sh"
+  source "${_WB_LIB_DIR}/wb-json.sh"
   # shellcheck source=wb-lib/wb-log.sh
-  source "${wb_lib_dir}/wb-log.sh"
+  source "${_WB_LIB_DIR}/wb-log.sh"
   # GUI-specific libs
   # shellcheck source=wb-gui-lib/wb-gui-games.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-games.sh"

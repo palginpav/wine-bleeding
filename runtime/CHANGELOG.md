@@ -2,19 +2,35 @@
 
 ## [Unreleased] — v1.5.0-dev
 
-### Pre-install RPM packaging fixes
+### Post-install GUI launch fixes
 
+- **`wb-gui` Option A lib-dir fallback (system-install crash fix)** —
+  `src/wb-gui` hardcoded `${_WB_GUI_SELF_DIR}/wb-lib` as the library source
+  path. After system install that resolved to `/usr/bin/wb-lib/` (wrong —
+  libs live at `/usr/lib/wine-bleeding/wb-lib/`) and `wb-gui` crashed on
+  startup with `/usr/bin/wb-lib/wb-paths.sh: No such file or directory`.
+  Added the same Option A resolver `src/wb` already has: check
+  `WB_LIB_DIR`/`WB_GUI_LIB_DIR` env overrides → sibling → `/usr/lib/wine-bleeding`
+  → `/usr/local/lib/wine-bleeding`. Resolves both `wb-lib/` and `wb-gui-lib/`
+  independently. `_WB_BIN` now prefers `command -v wb` over a sibling guess.
+- **Placeholder scalable SVG icon removed** — `share/icons/hicolor/scalable/apps/wine-bleeding.svg`
+  was an 822-byte hand-coded wine-glass-plus-blood-drop stub. FDO
+  IconThemeSpec prefers scalable over PNG, so DEs rendered the stub instead
+  of the real 256/512/1024 PNG artwork. Deleted the placeholder and the now-empty
+  `scalable/` directory; DEs fall back to the PNGs. AppImage already prefers
+  the 512 PNG (`build-appimage.sh:135-137`) so the AppImage `.DirIcon` is
+  unaffected.
 - **wb-gui, `.desktop`, and icons now ship in the RPM payload (was: empty
   `%ghost` paths)** — `packaging/rpm/wine-bleeding-wb.spec` marked the wb-gui
-  binary, `wb-gui-lib/`, the `.desktop` launcher, and all four icon sizes
-  with `%ghost`, a leftover from the pre-M12 era when wb-gui was a dangling
+  binary, `wb-gui-lib/`, the `.desktop` launcher, and all icon sizes with
+  `%ghost`, a leftover from the pre-M12 era when wb-gui was a dangling
   optional deliverable. `%ghost` makes rpm OWN the path without installing
   the file content, so `rpm -Uvh` left the user with `/usr/bin/wb` + libs
   only — no GUI binary, no menu entry in the Apps → Games category, no
   icons. Since M12 these files are shipped unconditionally from the source
   tree, so the spec now lists them as real `%files` entries. A fresh install
   now places `/usr/bin/wb-gui`, `/usr/share/applications/wine-bleeding-wb.desktop`,
-  and the 4 icon files (scalable SVG + 256/512/1024 PNG) on disk.
+  and the three PNG icons (256/512/1024) on disk.
 - **Steam Compatibility Tool files now packaged in `%files`** — `packaging/rpm/wine-bleeding-wb.spec`
   previously omitted `/usr/share/steam/compatibilitytools.d/wine-bleeding/*`
   from the `%files` list, producing an "Installed (but unpackaged) file(s)"
