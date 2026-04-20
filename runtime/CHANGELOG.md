@@ -2,6 +2,26 @@
 
 ## [Unreleased] — v1.5.0-dev
 
+### Pre-install RPM packaging fixes
+
+- **Steam Compatibility Tool files now packaged in `%files`** — `packaging/rpm/wine-bleeding-wb.spec`
+  previously omitted `/usr/share/steam/compatibilitytools.d/wine-bleeding/*`
+  from the `%files` list, producing an "Installed (but unpackaged) file(s)"
+  rpmbuild warning. Permissive on ALT, hard-failure on strict rpmbuild
+  policy (Fedora/RHEL). Added `%{_datadir}/steam/compatibilitytools.d/wine-bleeding/`
+  to `%files` so the two Steam compat files (`compatibilitytool.vdf`,
+  `wine-bleeding.sh`) are now owned by the RPM and removed on `rpm -e`.
+- **Bogus auto-generated `Requires: gtk4-update-icon-cache` suppressed** —
+  ALT rpm's `find-scriptlet-requires` scanner auto-detected
+  `gtk-update-icon-cache` in `%post` and resolved it to the ALT-specific
+  package name `gtk4-update-icon-cache`, producing a cross-distro-broken
+  Requires (on Fedora/openSUSE the same binary lives in `gtk4` or
+  `gtk3-tools`). The scriptlet body already probes with `command -v ... || :`
+  so the tool is genuinely optional. Fixed by `%global __find_scriptlet_requires
+  %{nil}` to disable the auto-generator, plus an explicit `Requires:
+  desktop-file-utils` (universal package name across distros) so users still
+  get the desktop-db refresh tool installed as a hard dep.
+
 ### Post-GA opt-ins (LD_LIBRARY_PATH emission + .desktop i18n)
 
 - **`LD_LIBRARY_PATH` emission in `wb_env_compose`** — `src/wb-lib/wb-env.sh`

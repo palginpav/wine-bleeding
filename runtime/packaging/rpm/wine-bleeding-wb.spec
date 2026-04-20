@@ -25,6 +25,20 @@ Requires:       gzip
 Requires:       python3
 # Recommends: yad  (weak dep — uncomment for RPM >= 4.12 / dnf-based distros)
 
+# ALT Linux rpm scans the %post scriptlet for command tokens and auto-adds
+# them as Requires(post), resolving the binary name to the packager-specific
+# package name. On ALT, `gtk-update-icon-cache` resolves to the package
+# `gtk4-update-icon-cache`; on Fedora/openSUSE the same binary lives in
+# `gtk4` or `gtk3-tools`, so an ALT-built package declaring this name as a
+# hard Requires would fail dependency resolution on those distros. Since the
+# %post scriptlet probes with `command -v ... || :` and the refresh is purely
+# cosmetic (no icon refresh is not a broken install), we disable the
+# scriptlet-requires auto-generator entirely — the main package Requires
+# remain intact. `desktop-file-utils` (the universal name across distros) is
+# an explicit Requires below so users still get the desktop-db refresh tool.
+%global __find_scriptlet_requires %{nil}
+Requires:       desktop-file-utils
+
 %description
 wine-bleeding-wb provides the wb runtime dispatcher, wb-diag diagnostic helper,
 shell library modules (wb-lib), hook infrastructure, configuration schemas, and
@@ -54,6 +68,9 @@ make install \
 /usr/lib/wine-bleeding/hooks/
 %{_datadir}/wine-bleeding/
 %{_datadir}/doc/wine-bleeding/
+# Steam Compatibility Tool registration — installed unconditionally by the
+# Makefile `install:` target when the source tree has the directory.
+%{_datadir}/steam/compatibilitytools.d/wine-bleeding/
 # wb-gui and related files are installed when present (optional W1 deliverables)
 %ghost %{_bindir}/wb-gui
 %ghost /usr/lib/wine-bleeding/wb-gui-lib/
