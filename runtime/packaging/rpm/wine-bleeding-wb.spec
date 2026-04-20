@@ -71,14 +71,18 @@ make install \
 # Steam Compatibility Tool registration — installed unconditionally by the
 # Makefile `install:` target when the source tree has the directory.
 %{_datadir}/steam/compatibilitytools.d/wine-bleeding/
-# wb-gui and related files are installed when present (optional W1 deliverables)
-%ghost %{_bindir}/wb-gui
-%ghost /usr/lib/wine-bleeding/wb-gui-lib/
-%ghost %{_datadir}/applications/wine-bleeding-wb.desktop
-%ghost %{_datadir}/icons/hicolor/scalable/apps/wine-bleeding.svg
-%ghost %{_datadir}/icons/hicolor/256x256/apps/wine-bleeding.png
-%ghost %{_datadir}/icons/hicolor/512x512/apps/wine-bleeding.png
-%ghost %{_datadir}/icons/hicolor/1024x1024/apps/wine-bleeding.png
+# wb-gui: shipped unconditionally since M12. Previously marked %ghost (a
+# leftover from the pre-M12 "optional W1 deliverable" era) which caused rpm
+# to own the paths but leave the files out of the payload — resulting in
+# an installed RPM with no wb-gui binary, no .desktop entry in the apps
+# menu, and no icons. Listed as real %files entries now.
+%{_bindir}/wb-gui
+/usr/lib/wine-bleeding/wb-gui-lib/
+%{_datadir}/applications/wine-bleeding-wb.desktop
+%{_datadir}/icons/hicolor/scalable/apps/wine-bleeding.svg
+%{_datadir}/icons/hicolor/256x256/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/512x512/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/1024x1024/apps/wine-bleeding.png
 
 %post
 # Update desktop database if available

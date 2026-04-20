@@ -4,6 +4,17 @@
 
 ### Pre-install RPM packaging fixes
 
+- **wb-gui, `.desktop`, and icons now ship in the RPM payload (was: empty
+  `%ghost` paths)** — `packaging/rpm/wine-bleeding-wb.spec` marked the wb-gui
+  binary, `wb-gui-lib/`, the `.desktop` launcher, and all four icon sizes
+  with `%ghost`, a leftover from the pre-M12 era when wb-gui was a dangling
+  optional deliverable. `%ghost` makes rpm OWN the path without installing
+  the file content, so `rpm -Uvh` left the user with `/usr/bin/wb` + libs
+  only — no GUI binary, no menu entry in the Apps → Games category, no
+  icons. Since M12 these files are shipped unconditionally from the source
+  tree, so the spec now lists them as real `%files` entries. A fresh install
+  now places `/usr/bin/wb-gui`, `/usr/share/applications/wine-bleeding-wb.desktop`,
+  and the 4 icon files (scalable SVG + 256/512/1024 PNG) on disk.
 - **Steam Compatibility Tool files now packaged in `%files`** — `packaging/rpm/wine-bleeding-wb.spec`
   previously omitted `/usr/share/steam/compatibilitytools.d/wine-bleeding/*`
   from the `%files` list, producing an "Installed (but unpackaged) file(s)"
