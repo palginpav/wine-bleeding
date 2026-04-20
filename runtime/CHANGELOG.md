@@ -2,6 +2,48 @@
 
 ## [Unreleased] — v1.7.0-dev
 
+### Phase B: dist management UI + component builder
+
+Dist Manager and a Component Builder that wraps `tools/full-build.sh` into
+per-component rebuilds (DXVK / VKD3D-Proton / DXVK-NVAPI). gstreamer is
+**deferred** to Phase C (no clean source-build path exists today —
+`build-full-wine-deps.sh` ingests system `libgst*.so`).
+
+- **`src/wb-gui-lib/wb-gui-dist.sh`** (new) — dist registry library with a
+  derived-view refresh pattern (registry is rebuilt from `.wb_dist_meta` +
+  `plugins/runtimes.d/` rather than stored as a source-of-truth to avoid
+  drift). JSON storage at `$WB_HOME/dists.json`.
+  Schema: `share/schemas/wb_dists.schema.json`.
+- **`tools/build-component.sh`** (new) — component-granular builder with a
+  `PROGRESS:/LOG:/WARN:/ERROR:` event protocol on `--progress-fd=<N>`.
+  Builds to a sibling directory and performs an atomic `mv -T` swap so the
+  user's currently-active dist is never blocked during rebuild.
+  Hard-kill cancellation: SIGTERM → 5s watchdog → SIGKILL to the process
+  group (required because meson/ninja grandchildren ignore plain SIGTERM).
+- **`tools/lib/build-common.sh`** (new) — shared helpers extracted from
+  `full-build.sh` Step 1-2 of the decomposition plan. Steps 3-4 (routing
+  `full-build.sh` through `build-component.sh` in a loop) are **deferred**
+  pending a real MinGW+network build verification of byte-identical dist
+  output. Existing `full-build.sh` CLI parity preserved unchanged.
+- **`src/wb-gui`** — new `[Dists]` button on the main window (rc=70) opens
+  the Dist Manager. `_cmd_dist_manager` implements the list + Add External +
+  Activate + Build Components + Remove flows. `_cmd_build_component`
+  implements the 3-stage Component Builder (form → live log tail → result),
+  routing each `build-component.sh` exit code to a specific result dialog.
+- **`src/wb-gui-lib/wb-gui-dialogs.sh`** — new `wb_gui_dialog_log_tail`
+  helper (yad `--text-info --tail --filename`) for live build output.
+- **Tests** (+30) — `30_dist_registry.bats`, `31_dist_manager.bats`,
+  `32_build_component.bats`. Full suite 409 → 439, all green.
+
+Known limitations (polish follow-ups for v1.7.x):
+
+- Stage 2 log-tail window does not auto-close when the builder exits — the
+  user clicks Cancel to advance to Stage 3. A `kill-yad-after-wait` fix is
+  tracked as a v1.7.x polish item.
+- Stage 1 "Current version" field is static (shows DXVK at open time);
+  `yad --form` does not support live field refresh on `CB` change.
+- `full-build.sh` decomposition Steps 3-4 are deferred (see above).
+
 ### Removed — GAP-2 transitional bridge
 
 - **`src/wb-gui` `_cmd_settings`** — removed the v1.6.0 transitional

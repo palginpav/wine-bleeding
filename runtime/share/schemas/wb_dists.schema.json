@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_dists.schema.json",
+  "title": "wb_dists",
+  "description": "Registry of Wine dists visible to wb-gui. Derived view of $WB_HOME/dist/* and $WB_HOME/plugins/runtimes.d/*.",
+  "type": "object",
+  "required": ["schema", "generated_utc", "active", "dists"],
+  "additionalProperties": false,
+  "properties": {
+    "schema":        { "type": "integer", "const": 1 },
+    "generated_utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "active":        { "oneOf": [{ "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }, { "type": "null" }] },
+    "dists":         { "type": "array", "items": { "$ref": "#/$defs/dist_entry" } }
+  },
+  "$defs": {
+    "dist_entry": {
+      "type": "object",
+      "required": ["name", "path", "source", "active"],
+      "additionalProperties": false,
+      "properties": {
+        "name":   { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "path":   { "type": "string", "pattern": "^/" },
+        "source": { "enum": ["native", "external", "unknown"] },
+        "active": { "type": "boolean" },
+        "built_by": {
+          "oneOf": [
+            { "type": "string", "enum": ["full-build.sh", "build-component.sh", "external", "unknown"] },
+            { "type": "null" }
+          ]
+        },
+        "built_utc": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+            { "type": "null" }
+          ]
+        },
+        "last_built_at": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+            { "type": "null" }
+          ]
+        },
+        "wine_version": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "components_included": {
+          "type": "array",
+          "items": { "enum": ["dxvk", "vkd3d", "nvapi", "mono", "icu"] },
+          "uniqueItems": true
+        },
+        "component_versions": {
+          "type": "object",
+          "additionalProperties": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+          "properties": {
+            "dxvk":  { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+            "vkd3d": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+            "nvapi": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+            "mono":  { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+            "icu":   { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+          }
+        },
+        "build_profile": {
+          "oneOf": [{ "enum": ["minimal", "standard", "full"] }, { "type": "null" }]
+        },
+        "external_source": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "broken":          { "type": "boolean" },
+        "broken_reason":   { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    }
+  }
+}

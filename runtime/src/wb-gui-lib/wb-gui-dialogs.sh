@@ -178,6 +178,36 @@ wb_gui_dialog_list() {
 }
 
 # ---------------------------------------------------------------------------
+# wb_gui_dialog_log_tail <title> <log_file>
+# Open a yad --text-info --tail window reading <log_file>.
+# Returns 0 when the window closes naturally (builder exits and caller
+# closes the window), 1 when the user clicks the Cancel button (rc=1/252).
+#
+# The caller is responsible for:
+#   - starting the background build process before calling this function
+#   - closing this window when the build exits naturally (not needed; yad
+#     blocks until the user clicks Cancel or it is killed)
+#
+# The Cancel button is rc=1; window-close (Escape / X) gives rc=252 — both
+# are treated as cancellation by the caller.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_log_tail() {
+  local title="${1:-Building}"
+  local log_file="${2:-}"
+  local rc=0
+  wb_gui_yad \
+    --text-info \
+    --tail \
+    --filename="${log_file}" \
+    --title="${title}" \
+    --width=800 \
+    --height=500 \
+    --no-markup \
+    --button="Cancel:1" 2>/dev/null || rc=$?
+  return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
 # wb_gui_dialog_checklist <title> <text> <columns_csv> [row_data...]
 #
 # Wraps yad --list --checklist with consistent styling and column structure.

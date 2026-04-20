@@ -83,6 +83,8 @@ _wb_gui_load_libs() {
   source "${_WB_GUI_LIB_DIR}/wb-gui-settings.sh"
   # shellcheck source=wb-gui-lib/wb-gui-dialogs.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-dist.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dist.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -1465,6 +1467,753 @@ _cmd_settings() {
   _cmd_settings_v2 app "${app_id}"
 }
 
+# ===========================================================================
+# PHASE B: Dist Manager + Component Builder (W4)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _dist_build_rows <dists_json_array>
+# Render yad --list row data from a dists JSON array (from wb_gui_dist_registry_list).
+# Each row: ACTIVE | NAME | SOURCE | WINE | LAST BUILT | PATH:HD | BROKEN:HD
+# ACTIVE marker: ">" for active, "!" for broken, blank otherwise.
+# ---------------------------------------------------------------------------
+_dist_build_rows() {
+  local dists_json="${1:-[]}"
+  local count
+  count="$(printf '%s' "${dists_json}" | jq 'length')"
+  local i
+  for (( i=0; i<count; i++ )); do
+    local entry active broken source name path wine_ver last_built broken_reason
+    entry="$(printf '%s' "${dists_json}" | jq -c ".[${i}]")"
+    active="$(printf '%s' "${entry}" | jq -r '.active')"
+    broken="$(printf '%s' "${entry}" | jq -r '.broken')"
+    source="$(printf '%s' "${entry}" | jq -r '.source')"
+    name="$(printf '%s' "${entry}" | jq -r '.name')"
+    path="$(printf '%s' "${entry}" | jq -r '.path')"
+    wine_ver="$(printf '%s' "${entry}" | jq -r '.wine_version // empty')"
+    [[ -z "${wine_ver}" ]] && wine_ver="?"
+    broken_reason="$(printf '%s' "${entry}" | jq -r '.broken_reason // empty')"
+
+    # LAST BUILT: ISO date from last_built_at or built_utc; em-dash for external/null
+    local last_built="—"
+    local lb_raw
+    lb_raw="$(printf '%s' "${entry}" | jq -r '.last_built_at // empty')"
+    if [[ -n "${lb_raw}" && "${lb_raw}" != "null" ]]; then
+      # Truncate to YYYY-MM-DD
+      last_built="${lb_raw:0:10}"
+    fi
+
+    # ACTIVE marker
+    local active_marker=""
+    if [[ "${broken}" == "true" ]]; then
+      active_marker="!"
+    elif [[ "${active}" == "true" ]]; then
+      active_marker=">"
+    fi
+
+    printf '%s\n' "${active_marker}" "${name}" "${source}" "${wine_ver}" \
+      "${last_built}" "${path}" "${broken}"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# _dist_get_selected_fields <yad_out>
+# Parse a yad --list output line (separator "|") into dist fields.
+# Outputs: name|source|path|broken|active (one per line for easy read)
+# ---------------------------------------------------------------------------
+_dist_get_selected_fields() {
+  local yad_out="${1:-}"
+  # Row: ACTIVE|NAME|SOURCE|WINE|LAST_BUILT|PATH|BROKEN_FLAG
+  local _active name source _wine _lb path broken _trail
+  IFS='|' read -r _active name source _wine _lb path broken _trail <<< "${yad_out}"
+  printf '%s\n' "${name}" "${source}" "${path}" "${broken}"
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_build_component <dist_name> <dist_path>
+# 3-stage Component Builder dialog per W2 spec.
+# Calls tools/build-component.sh with --progress-fd 3 for event parsing.
+# Cancel: SIGTERM to process group → 5s watchdog → SIGKILL (W2 OQ-4).
+# ---------------------------------------------------------------------------
+_cmd_build_component() {
+  local dist_name="${1:-}"
+  local dist_path="${2:-}"
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # -------------------------------------------------------------------------
+  # Stage 1 loop — keep form open across pre-flight guard failures
+  # -------------------------------------------------------------------------
+  while true; do
+    # Read current component versions from dists.json for display
+    local reg_file="${wb_home}/dists.json"
+    local current_ver_dxvk="—"
+    if [[ -r "${reg_file}" ]]; then
+      local comp_versions
+      comp_versions="$(jq -c --arg n "${dist_name}" \
+        '.dists[] | select(.name == $n) | .component_versions // {}' \
+        "${reg_file}" 2>/dev/null | head -1 || true)"
+      if [[ -n "${comp_versions}" ]]; then
+        local v
+        v="$(printf '%s' "${comp_versions}" | jq -r '.dxvk // empty')"
+        [[ -n "${v}" ]] && current_ver_dxvk="${v}"
+      fi
+    fi
+    # Show current DXVK version as form default (read-only display field)
+    local current_ver_or_em_dash="${current_ver_dxvk}"
+
+    # Stage 1: component selection form (S1–S8)
+    local s1_out rc_s1=0
+    s1_out="$(wb_gui_yad \
+      --form \
+      --title="Build Components — ${dist_name}" \
+      --text="Rebuild a single component. The dist stays usable during the build; the new component is atomically swapped in on success." \
+      --no-markup \
+      --separator="|" \
+      --field="Component:CB"                     "DXVK!VKD3D-Proton!DXVK-NVAPI" \
+      --field="Target dist:RO"                   "${dist_name}" \
+      --field="Current version:RO"               "${current_ver_or_em_dash}" \
+      --field="Force rebuild (ignore cache):CHK" "FALSE" \
+      --field="Note: gstreamer is bundled from your system's gstreamer-1.0 install. To refresh it, re-run tools/full-build.sh or update your system's gstreamer packages.:LBL" "" \
+      --button="Cancel:1" \
+      --button="Start build:0" 2>/dev/null)" || rc_s1=$?
+
+    case "${rc_s1}" in
+      1|252)
+        # User cancelled Stage 1 — return to [LIST] (no refresh)
+        return 0
+        ;;
+      0)
+        : # proceed to parse + pre-flight
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+
+    # Parse Stage 1 stdout: <component_display>|<dist_ro>|<ver_ro>|<force_chk>|
+    local component_display force_rebuild_flag
+    component_display="$(printf '%s' "${s1_out}" | cut -d'|' -f1)"
+    force_rebuild_flag="$(printf '%s' "${s1_out}" | cut -d'|' -f4)"
+
+    # Map display name to CLI arg
+    local component_arg
+    case "${component_display}" in
+      DXVK)         component_arg="dxvk" ;;
+      VKD3D-Proton) component_arg="vkd3d" ;;
+      DXVK-NVAPI)   component_arg="nvapi" ;;
+      *)            component_arg="dxvk" ;;
+    esac
+
+    # Pre-flight guard 1: dist still exists
+    if [[ ! -d "${dist_path}" ]]; then
+      wb_gui_dialog_error "Dist Not Found" \
+        "The selected dist no longer exists. Refreshing the list."
+      wb_gui_dist_registry_refresh
+      return 0
+    fi
+
+    # Pre-flight guard 2: bin/wine still present
+    if [[ ! -x "${dist_path}/bin/wine" ]]; then
+      wb_gui_dialog_error "Dist Broken" \
+        "This dist appears broken (bin/wine is missing). Refreshing the list."
+      wb_gui_dist_registry_refresh
+      return 0
+    fi
+
+    # Pre-flight guard 3: build lock not already held
+    local build_lock_file="${wb_home}/.build-lock"
+    if flock -n "${build_lock_file}" true 2>/dev/null; then
+      : # lock is available — proceed
+    else
+      wb_gui_dialog_error "Build Already in Progress" \
+        "Another build is already running. Wait for it to finish or cancel it from the other window."
+      # Loop back to Stage 1 (guard failure — form stays open)
+      continue
+    fi
+
+    # All guards passed — proceed to Stage 2
+    break
+  done  # Stage 1 loop
+
+  # -------------------------------------------------------------------------
+  # Stage 2 — Live Progress + Log Tail
+  # -------------------------------------------------------------------------
+
+  # Set up temp files and named pipe
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local log_file="${tmp_dir}/wb-build-log.txt"
+  local raw_out="${log_file}.rawout"
+  local event_pipe="${tmp_dir}/wb-build-events"
+  mkfifo "${event_pipe}"
+
+  # Write N-2 fix header (always topmost line in log tail)
+  printf 'Building %s on %s\n' "${component_display}" "${dist_name}" > "${log_file}"
+
+  # Force-rebuild flag
+  local force_flag=""
+  [[ "${force_rebuild_flag}" == "TRUE" ]] && force_flag="--force-rebuild"
+
+  # Locate build-component.sh
+  local build_script
+  build_script="$(command -v build-component.sh 2>/dev/null || true)"
+  if [[ -z "${build_script}" ]]; then
+    # Try relative to wb-gui's own directory
+    local candidate="${_WB_GUI_SELF_DIR}/../../tools/build-component.sh"
+    if [[ -x "${candidate}" ]]; then
+      build_script="$(realpath -m "${candidate}")"
+    fi
+  fi
+  if [[ -z "${build_script}" || ! -x "${build_script}" ]]; then
+    wb_gui_dialog_error "Build Error" \
+      "Cannot locate tools/build-component.sh. Make sure the wine-bleeding build tools are installed."
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  # Start event reader in background (reads named pipe → formats to log_file)
+  # W3 open item 5: use || true after each read to handle pipe closed early
+  _wb_gui_dist_event_reader() {
+    local pipe="${1}"
+    local lf="${2}"
+    local line prefix_tok rest pct_str
+    while IFS= read -r line || true; do
+      [[ -z "${line}" ]] && continue
+      prefix_tok="${line%%: *}"
+      rest="${line#*: }"
+      case "${prefix_tok}" in
+        PROGRESS)
+          # "PROGRESS: N msg" — rest is "N msg"
+          pct_str="${rest%% *}"
+          local msg_part="${rest#* }"
+          # Validate integer — ignore malformed lines
+          if [[ "${pct_str}" =~ ^[0-9]+$ ]]; then
+            printf '[%3d%%] %s\n' "${pct_str}" "${msg_part}" >> "${lf}" || true
+          fi
+          ;;
+        LOG)
+          printf '        %s\n' "${rest}" >> "${lf}" || true
+          ;;
+        WARN)
+          printf '  WARN  %s\n' "${rest}" >> "${lf}" || true
+          ;;
+        ERROR)
+          printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true
+          ;;
+        *)
+          # Unrecognised — silently ignore per spec
+          ;;
+      esac
+    done < "${pipe}" || true
+  }
+  export -f _wb_gui_dist_event_reader
+  _wb_gui_dist_event_reader "${event_pipe}" "${log_file}" &
+  local reader_pid=$!
+
+  # Start build-component.sh in its own process group, progress-fd=3 → event_pipe
+  # Open event_pipe for writing on fd 3 before exec so the builder can write to it
+  (
+    set -euo pipefail
+    exec 3>"${event_pipe}"
+    exec "${build_script}" \
+      --component "${component_arg}" \
+      --target-dist "${dist_path}" \
+      --progress-fd 3 \
+      ${force_flag} \
+      >"${raw_out}" 2>&1
+  ) &
+  local builder_pid=$!
+
+  # Stage 2 yad --text-info --tail (blocks until user clicks Cancel or builder exits)
+  local yad_tail_rc=0
+  wb_gui_dialog_log_tail \
+    "Building ${component_display} — ${dist_name}" \
+    "${log_file}" || yad_tail_rc=$?
+
+  # yad returned — either user clicked Cancel (rc=1/252) or we kill it when builder exits
+  # Handle cancel: SIGTERM → 5s watchdog → SIGKILL (W2 OQ-4)
+  if [[ "${yad_tail_rc}" -ne 0 ]]; then
+    # User clicked Cancel
+    if kill -0 "${builder_pid}" 2>/dev/null; then
+      kill -TERM -- "-${builder_pid}" 2>/dev/null || true
+      local watchdog_secs=5
+      local elapsed=0
+      while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt "${watchdog_secs}" ]]; do
+        sleep 1
+        (( elapsed++ )) || true
+      done
+      if kill -0 "${builder_pid}" 2>/dev/null; then
+        kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  # Wait for builder to finish (get exit code)
+  local builder_exit=0
+  wait "${builder_pid}" 2>/dev/null || builder_exit=$?
+
+  # Kill event reader (pipe may already be closed)
+  kill "${reader_pid}" 2>/dev/null || true
+  wait "${reader_pid}" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # Stage 3 — Post-Build Result
+  # -------------------------------------------------------------------------
+  # Read tail of rawout for error dialogs
+  _wb_gui_dist_rawout_tail() {
+    local f="${1}"
+    local lines="${2:-20}"
+    if [[ -r "${f}" ]]; then
+      tail -n "${lines}" "${f}"
+    fi
+  }
+
+  local stage3_return_to_stage1=0
+
+  case "${builder_exit}" in
+    0)
+      # Success — refresh registry, read new version, show success dialog
+      wb_gui_dist_registry_refresh
+      local new_version="—"
+      if [[ -r "${wb_home}/dists.json" ]]; then
+        local nv
+        nv="$(jq -r --arg n "${dist_name}" --arg c "${component_arg}" \
+          '.dists[] | select(.name == $n) | .component_versions[$c] // empty' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+        [[ -n "${nv}" ]] && new_version="${nv}"
+      fi
+      wb_gui_dialog_info "Build complete" \
+        "${component_display} was rebuilt successfully.
+
+Dist:         ${dist_name}
+New version:  ${new_version}"
+      ;;
+    2)
+      # User cancelled — builder already did cleanup
+      wb_gui_dialog_info "Build cancelled" \
+        "The build was cancelled. No changes were applied to ${dist_name}."
+      ;;
+    71)
+      # Build lock held by another process — return to Stage 1
+      wb_gui_dialog_error "Build already in progress" \
+        "Another build is already running.
+
+Wait for it to finish, or cancel it from the window where it is running,
+then try again."
+      stage3_return_to_stage1=1
+      ;;
+    65)
+      wb_gui_dialog_error "Invalid dist path" \
+        "The build was rejected because the dist path is invalid or outside
+the expected location. This should not normally happen.
+
+Refresh the Dist Manager and try again."
+      ;;
+    66)
+      local tail66
+      tail66="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
+      wb_gui_dialog_error "Build environment incomplete" \
+        "A required build tool is missing (meson, ninja, glslang, or MinGW).
+
+Install the missing tools and try again. See the log below for details.
+
+${tail66}"
+      ;;
+    67)
+      local tail67
+      tail67="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
+      wb_gui_dialog_error "Source download failed" \
+        "Could not fetch the ${component_display} source code.
+
+This usually means a network issue or a missing build-deps checkout.
+Check your network connection and try again.
+
+${tail67}"
+      ;;
+    68)
+      local tail68
+      tail68="$(_wb_gui_dist_rawout_tail "${raw_out}" 30)"
+      wb_gui_dialog_error "Build failed" \
+        "${component_display} did not compile successfully.
+
+This is usually a toolchain or source mismatch. The log below shows
+the last lines of meson/ninja output. Running 'tools/build-component.sh'
+directly from a terminal may give more context.
+
+${tail68}"
+      ;;
+    69)
+      wb_gui_dialog_error "Build output incomplete" \
+        "The build finished but not all expected DLL files were produced.
+No changes were applied to ${dist_name}.
+
+Running 'tools/build-component.sh' directly from a terminal will show
+which files are missing."
+      ;;
+    70)
+      wb_gui_dialog_error "Swap into dist failed" \
+        "The build succeeded but could not be moved into the dist cleanly.
+${dist_name} may be in an inconsistent state.
+
+Click Refresh in the Dist Manager to attempt automatic recovery.
+If the problem persists, re-run the build."
+      ;;
+    *)
+      local tail_unk
+      tail_unk="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
+      wb_gui_dialog_error "Build failed" \
+        "The build exited with an unexpected error (code ${builder_exit}).
+
+${tail_unk}"
+      ;;
+  esac
+
+  # Cleanup temp files
+  rm -f "${event_pipe}" "${log_file}" "${raw_out}" 2>/dev/null || true
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+
+  # For all non-success, non-lock-busy exits: refresh registry so [LIST] is current
+  if [[ "${builder_exit}" -ne 0 ]]; then
+    wb_gui_dist_registry_refresh 2>/dev/null || true
+  fi
+
+  # If exit 71 (lock busy), caller should re-open Stage 1 — signal via return code
+  if [[ "${stage3_return_to_stage1}" -eq 1 ]]; then
+    # Re-enter Stage 1 by tail-calling ourselves
+    _cmd_build_component "${dist_name}" "${dist_path}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_dist_manager — Dist Manager dialog (Phase B main flow).
+# Opened from main window button Dists (rc=70).
+# Loops: Add External / Activate / Build Components / Remove / Refresh / Close.
+# ---------------------------------------------------------------------------
+_cmd_dist_manager() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # Always refresh before showing the list (Flow 1)
+  wb_gui_dist_registry_refresh 2>/dev/null || true
+
+  while true; do
+    # Build row data from registry
+    local dists_json
+    dists_json="$(wb_gui_dist_registry_list)"
+    local -a row_data=()
+    local row
+    while IFS= read -r row; do
+      row_data+=("${row}")
+    done < <(_dist_build_rows "${dists_json}")
+
+    # Placeholder when no dists registered
+    if [[ "${#row_data[@]}" -eq 0 ]]; then
+      row_data=(
+        "" "No dists registered" "" "" "" "" "false"
+      )
+    fi
+
+    local yad_out rc_dm=0
+    yad_out="$(wb_gui_yad \
+      --list \
+      --title="wine-bleeding — Dists" \
+      --text="Manage Wine distributions known to wb-gui." \
+      --no-markup \
+      --column="ACTIVE" \
+      --column="NAME" \
+      --column="SOURCE" \
+      --column="WINE" \
+      --column="LAST BUILT" \
+      --column="PATH:HD" \
+      --column="BROKEN:HD" \
+      --print-all \
+      --separator="|" \
+      --button="Add External!list-add:10" \
+      --button="Activate!emblem-default:20" \
+      --button="Build Components!applications-development:30" \
+      --button="Remove!list-remove:40" \
+      --button="Refresh!view-refresh:50" \
+      --button="Close!window-close:1" \
+      "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || rc_dm=$?
+
+    case "${rc_dm}" in
+      # ------------------------------------------------------------------
+      1|252)
+        # Close / Escape — back to main window
+        break
+        ;;
+      # ------------------------------------------------------------------
+      10)
+        # Add External Dist — folder picker + name form
+        # B-2 fix: form loops on validation failure (never closes on error)
+        local ae_path="" ae_name=""
+        while true; do
+          local ae_out rc_ae=0
+          ae_out="$(wb_gui_yad \
+            --form \
+            --title="Add External Dist" \
+            --text="Register a Wine build that lives outside \$WB_HOME/dist/. wb will validate it and add it to the registry." \
+            --no-markup \
+            --separator="|" \
+            --field="Path to Wine root:DIR"  "${ae_path}" \
+            --field="Display name:TEXT"      "${ae_name}" \
+            --field="Expected: <path>/bin/wine must exist and be executable.:LBL" "" \
+            --button="Cancel:1" \
+            --button="Register:0" 2>/dev/null)" || rc_ae=$?
+
+          if [[ "${rc_ae}" -ne 0 ]]; then
+            break  # Cancel — back to [LIST]
+          fi
+
+          ae_path="$(printf '%s' "${ae_out}" | cut -d'|' -f1)"
+          ae_name="$(printf '%s' "${ae_out}" | cut -d'|' -f2)"
+
+          # Auto-fill name from path basename if empty
+          if [[ -z "${ae_name}" && -n "${ae_path}" ]]; then
+            ae_name="$(basename "${ae_path}")"
+          fi
+
+          # Validation: path non-empty and absolute
+          if [[ -z "${ae_path}" ]] || [[ "${ae_path}" != /* ]]; then
+            wb_gui_dialog_error "No path entered" \
+              "No path entered. Enter the full path to the Wine build root."
+            continue
+          fi
+
+          # Validation: path must exist and be a directory
+          if [[ ! -d "${ae_path}" ]]; then
+            wb_gui_dialog_error "Path not found" \
+              "That path does not exist or is not a folder. Check the path and try again."
+            continue
+          fi
+
+          # Validation: name must match allowed pattern
+          if [[ ! "${ae_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            wb_gui_dialog_error "Invalid name" \
+              "Display name can only contain letters, digits, dots, hyphens, and underscores. Edit the name and try again."
+            continue
+          fi
+
+          # Validation: bin/wine must exist and be executable
+          if [[ ! -x "${ae_path}/bin/wine" ]]; then
+            wb_gui_dialog_error "No Wine executable" \
+              "No Wine executable found at ${ae_path}/bin/wine. Make sure the path points to a Wine build root, not a prefix or game folder."
+            continue
+          fi
+
+          # Validation: name not already registered
+          local reg_file="${wb_home}/dists.json"
+          if [[ -r "${reg_file}" ]]; then
+            local already
+            already="$(jq -r --arg n "${ae_name}" \
+              '.dists[] | select(.name == $n) | .name' "${reg_file}" 2>/dev/null | head -1 || true)"
+            if [[ -n "${already}" ]]; then
+              wb_gui_dialog_error "Name already registered" \
+                "A dist named '${ae_name}' is already registered. Choose a different display name."
+              continue
+            fi
+          fi
+
+          # All pre-validation passed — call backend (canonical security gate)
+          local add_err
+          add_err="$(wb_gui_dist_add_external "${ae_path}" "${ae_name}" 2>&1)" || {
+            wb_gui_dialog_error "Registration failed" \
+              "Registration failed: ${add_err}. Check the path and try again."
+            continue
+          }
+
+          wb_gui_dialog_info "Registered" \
+            "Registered '${ae_name}' successfully."
+          break
+        done
+        # Refresh already done by wb_gui_dist_add_external on success; loop
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      20)
+        # Activate
+        # Row: ACTIVE|NAME|SOURCE|WINE|LAST_BUILT|PATH|BROKEN
+        local a_name="" a_broken=""
+        local _am="" _an="" _as="" _aw="" _alb="" _ap="" _ab="" _trail=""
+        IFS='|' read -r _am _an _as _aw _alb _ap _ab _trail <<< "${yad_out}"
+        a_name="${_an}"; a_broken="${_ab}"
+
+        if [[ -z "${a_name}" || "${a_name}" == "No dists registered" ]]; then
+          wb_gui_dialog_info "Activate" "Select a dist row first."
+          continue
+        fi
+
+        # Guard: already active
+        # Check from registry
+        local a_is_active
+        a_is_active="$(jq -r --arg n "${a_name}" \
+          '.dists[] | select(.name == $n) | .active' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+        if [[ "${a_is_active}" == "true" ]]; then
+          wb_gui_dialog_info "Already active" \
+            "${a_name} is already the active dist."
+          continue
+        fi
+
+        # Guard: broken
+        if [[ "${a_broken}" == "true" ]]; then
+          local br_reason
+          br_reason="$(jq -r --arg n "${a_name}" \
+            '.dists[] | select(.name == $n) | .broken_reason // "unknown"' \
+            "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+          wb_gui_dialog_error "Cannot Activate" \
+            "${a_name} cannot be activated because it is broken: ${br_reason}.
+
+Fix or remove this dist, then try again."
+          continue
+        fi
+
+        # Activate
+        local act_err
+        act_err="$(wb_gui_dist_activate "${a_name}" 2>&1)" || {
+          wb_gui_dialog_error "Activate Failed" \
+            "Failed to activate '${a_name}': ${act_err}."
+        }
+        # Registry already refreshed by wb_gui_dist_activate on success
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      30)
+        # Build Components
+        local _bm bn bs _bw _blb bp bb _btrail
+        IFS='|' read -r _bm bn bs _bw _blb bp bb _btrail <<< "${yad_out}"
+
+        if [[ -z "${bn}" || "${bn}" == "No dists registered" ]]; then
+          wb_gui_dialog_info "Build Components" "Select a dist row first."
+          continue
+        fi
+
+        # Guard: external dist
+        if [[ "${bs}" == "external" ]]; then
+          wb_gui_dialog_error "Not a native dist" \
+            "Component builds only work on native dists built by full-build.sh.
+
+This dist was registered externally — its file layout may differ. To rebuild components, use a native dist."
+          continue
+        fi
+
+        # Guard: broken dist
+        if [[ "${bb}" == "true" ]]; then
+          local bld_br_reason
+          bld_br_reason="$(jq -r --arg n "${bn}" \
+            '.dists[] | select(.name == $n) | .broken_reason // "unknown"' \
+            "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+          wb_gui_dialog_error "Dist is broken" \
+            "${bn} is broken: ${bld_br_reason}.
+
+Fix or remove this dist before attempting a component build."
+          continue
+        fi
+
+        # Open Component Builder (blocks until all 3 stages complete)
+        _cmd_build_component "${bn}" "${bp}"
+
+        # Refresh registry after builder exits (Flow 5 spec: always refresh)
+        wb_gui_dist_registry_refresh 2>/dev/null || true
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      40)
+        # Remove
+        local _rm="" rn="" rs="" _rw="" _rlb="" rp="" _rb="" _rtrail=""
+        IFS='|' read -r _rm rn rs _rw _rlb rp _rb _rtrail <<< "${yad_out}"
+
+        if [[ -z "${rn}" || "${rn}" == "No dists registered" ]]; then
+          wb_gui_dialog_info "Remove" "Select a dist row first."
+          continue
+        fi
+
+        # Guard: active dist (B-1 fix: name the dist, give next action)
+        local r_is_active
+        r_is_active="$(jq -r --arg n "${rn}" \
+          '.dists[] | select(.name == $n) | .active' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+        if [[ "${r_is_active}" == "true" ]]; then
+          wb_gui_dialog_error "Cannot Remove Active Dist" \
+            "${rn} is currently active.
+
+Activate a different dist first, then remove this one."
+          continue
+        fi
+
+        # App count for confirmation dialog
+        local r_app_count
+        r_app_count="$(wb_gui_dist_apps_count "${rn}" 2>/dev/null || echo 0)"
+        local r_apps_line
+        if [[ "${r_app_count}" -eq 0 ]]; then
+          r_apps_line="No apps are attached to this dist."
+        else
+          r_apps_line="Apps:    ${r_app_count}  (they will need a runtime reassigned before they can run)"
+        fi
+
+        # Source-specific confirmation dialog
+        local rc_confirm=0
+        if [[ "${rs}" == "native" ]]; then
+          wb_gui_yad \
+            --title="Remove Dist" \
+            --no-markup \
+            --image=dialog-warning \
+            --text="You are about to permanently delete this distribution:
+
+  Name:    ${rn}
+  Path:    ${rp}
+  ${r_apps_line}
+
+The dist files will be deleted from disk. Your apps and their prefixes
+are not affected, but they will need a new runtime selected before
+you can launch them." \
+            --button="Cancel:1" \
+            --button="Delete permanently:0" 2>/dev/null || rc_confirm=$?
+        else
+          wb_gui_yad \
+            --title="Unregister External Dist" \
+            --no-markup \
+            --image=dialog-question \
+            --text="Remove this external distribution from wb's registry?
+
+  Name:    ${rn}
+  Path:    ${rp}
+  ${r_apps_line}
+
+The files at that path are NOT deleted — only the registry entry is
+removed. You can re-add this dist later from the same path." \
+            --button="Cancel:1" \
+            --button="Unregister:0" 2>/dev/null || rc_confirm=$?
+        fi
+
+        if [[ "${rc_confirm}" -ne 0 ]]; then
+          continue  # Cancelled — back to [LIST]
+        fi
+
+        # Perform removal
+        local rem_err
+        rem_err="$(wb_gui_dist_remove "${rn}" 2>&1)" || {
+          wb_gui_dialog_error "Remove Failed" \
+            "Could not remove '${rn}': ${rem_err}."
+        }
+        # Registry already refreshed by wb_gui_dist_remove
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      50)
+        # Refresh
+        wb_gui_dist_registry_refresh 2>/dev/null || true
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      *)
+        break
+        ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------------------
 # _cmd_main_window — the main app library window (Phase A rework)
 # ---------------------------------------------------------------------------
@@ -1510,6 +2259,7 @@ _cmd_main_window() {
       --button="Remove!list-remove:40" \
       --button="Refresh!view-refresh:50" \
       --button="Prefs!preferences-system:60" \
+      --button="Dists!drive-harddisk:70" \
       --button="Close!window-close:1" \
       "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || yad_rc=$?
 
@@ -1563,6 +2313,10 @@ _cmd_main_window() {
         # Prefs button → 4-pane dialog at General tab
         _cmd_settings_v2 general
         ;;
+      70)
+        # Dists button → Dist Manager dialog (Phase B)
+        _cmd_dist_manager
+        ;;
       *)
         # Unknown; treat as close
         break
@@ -1589,6 +2343,9 @@ Usage:
   wb-gui settings <prefix>       Legacy alias: per-prefix settings
   wb-gui --version               Print version
   wb-gui --help                  Show this help
+
+Phase B (v1.7.0):
+  Main window [Dists] button     Open Dist Manager (rc=70)
 
 This tool requires yad (install: apt/dnf install yad).
 EOF
