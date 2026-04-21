@@ -19,7 +19,7 @@
 #   - apps.json registry lives at $WB_HOME/apps.json; mutations are atomic.
 set -euo pipefail
 
-WB_GUI_VERSION="1.8.0-dev"
+WB_GUI_VERSION="1.7.0"
 
 # ---------------------------------------------------------------------------
 # Resolve paths — Option A fallback for system-package installs (mirrors wb).

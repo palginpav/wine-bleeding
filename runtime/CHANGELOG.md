@@ -1,196 +1,173 @@
 # wine-bleeding Runtime Layer Changelog
 
-## [Unreleased] — v1.7.0-dev
+## [Unreleased] — v1.8.0-dev
 
-### Phase D: prefix deep customization (winetricks, DLL overrides, registry editor, per-prefix components)
+## [1.7.0] — 2026-04-21
 
-Final roadmapped phase. The Prefix tab of `_cmd_settings_v2` now carries
-four stacked `:FL` collapsible panels: **Components** (default-expanded),
-**DLL Overrides**, **Winetricks**, **Registry** — all layered on top of
-Phase A's 4-layer settings store and Phase B's component-builder event
-protocol.
+v1.7.0 turns wb-gui into a full-fledged Wine prefix manager. Where v1.6.0
+was about registering and launching apps, v1.7.0 is about **building,
+bundling, and customizing the Wine dist and prefix they run against** —
+with the same UI surface and no new moving pieces outside the main window.
 
-- **`src/wb-gui-lib/wb-gui-prefix.sh`** (new) — backend library. Exports
-  `wb_gui_prefix_save_env_bake`, `wb_gui_prefix_winetricks_list`,
-  `wb_gui_prefix_winetricks_available`, `wb_gui_prefix_winetricks_install`,
-  `wb_gui_prefix_reg_read` / `reg_write` / `reg_undo`,
-  `wb_gui_prefix_dll_set` / `dll_remove`, `wb_gui_prefix_component_toggle`.
-  Path B (per Phase C): bakes `WB_DXVK` / `WB_VKD3D` / `WB_NVAPI` +
-  `WB_EXTRA_DLLOVERRIDES` into `<prefix_path>/wb.conf` atomically, preserving
-  user-set keys bit-identical; managed keys tracked via
-  `_wb_prefix_managed_wbconf_keys`. `component_toggle` accepts a 3-way
-  `ON / OFF / INHERIT` — INHERIT removes the key from `wb.conf` so the
-  dist-level default (Phase B) takes over.
-- **`tools/run-winetricks.sh`** (new) — winetricks wrapper emitting the
-  Phase-B `PROGRESS: / LOG: / WARN: / ERROR:` event protocol on
-  `--progress-fd=<N>`. Reuses `tools/lib/build-common.sh`. Cancellation:
-  SIGTERM → 5s watchdog → SIGKILL on the process group.
-  **Winetricks verb-uninstall is intentionally NOT exposed** — winetricks
-  itself has no generic uninstall; the GUI surfaces this honestly with a
-  "Remove not supported" badge and manual cleanup hints.
-- **Wine registry editor** — safe-zone whitelist enforced in two layers
-  (UI greys out the Write button outside the zone; the backend rejects
-  any write regardless). Writable zones: `HKCU\Software\Wine\*`,
-  `HKCU\Environment`, `HKCU\Control Panel\{Desktop,International}`,
-  `HKLM\System\CurrentControlSet\Services\Wine`, `HKLM\Software\Wine`.
-  Every write goes through a modal **diff-preview** before apply.
-  Bounded last-10 **undo stack** per prefix — values are restored via
-  `wine reg add/delete`, never through direct `.reg` edits.
-- **DLL overrides** — structured prefix-level store (`dll_overrides` array
-  in prefix settings JSON), separate from `env_vars.WINEDLLOVERRIDES`
-  (user-owned), composed into launch via the existing
-  `WB_EXTRA_DLLOVERRIDES` hook in `wb-env.sh`. 15 preset common DLLs plus
-  custom-entry rows.
-- **`src/wb-gui`** — `_launch_tab_prefix` extended with the 4-panel
-  stacked-expander layout (Components default-open). 14 new dispatch +
-  dialog-render functions. Winetricks install uses
-  `wb_gui_dialog_log_tail` with the Phase B P1 auto-close pattern.
-  Category-tabbed verb picker (All / dlls / fonts / settings / apps /
-  benchmarks) with search.
-- **`share/schemas/wb_settings.schema.json`** — prefix `$defs` tightened
-  for the new `dll_overrides`, `wine_registry_patches`, and
-  `_wb_prefix_managed_wbconf_keys` fields.
-- **Tests** (+67) — `36_prefix_customization.bats` (41) backend coverage,
-  `37_prefix_panel.bats` (26) GUI integration. Suite 487 → 554, all green.
-  Winetricks stubbed via `WB_TEST_WT_FIXTURE`; wine `reg` stubbed via
-  `WB_TEST_WINE_REG_FIXTURE` — CI runs fully offline.
-- **`runtime/Makefile`** — `SHELLCHECK_TARGETS` extended to cover the new
-  Phase D (and previously uncovered Phase B/C) library files.
+Three headline features:
 
-Known limitations (polish follow-ups for v1.9.x):
+- **Dist Manager** — add your own Wine distributions, switch between them,
+  and rebuild individual components (DXVK, VKD3D-Proton, DXVK-NVAPI)
+  without nuking the whole dist.
+- **Overlay bundling** — enable MangoHud, VKBasalt, or OptiScaler per app,
+  pull the version you want straight from GitHub, and flip between the
+  bundled build and your distro's system copy.
+- **Prefix deep customization** — install winetricks verbs, manage DLL
+  overrides, browse and edit the Wine registry safely, and override
+  dist-global component defaults per prefix.
 
-- "Add custom DLL" button not wired in the first cut — preset DLL rows
-  work; brand-new custom DLL entry deferred.
-- Registry browser uses a flat list view when `yad --tree` is unavailable
-  on the target yad build. Detection present at startup.
-- A DLL-vs-component conflict warning on Apply (e.g. user sets
-  `d3d11=native` while DXVK is on) is queued for v1.9.1.
+### Dist Manager (new `[Dists]` button on the main window)
 
-### Phase C: per-app overlay bundling (MangoHud, VKBasalt, OptiScaler)
+- **Add / remove / activate dists** from a single list. External dists
+  (pre-built dists you already have on disk) coexist with dists built
+  through this UI. You can't accidentally remove the dist you're
+  currently using — the Remove button refuses with a clear error telling
+  you which dist is active.
+- **Component Builder** rebuilds DXVK / VKD3D-Proton / DXVK-NVAPI
+  individually, showing a live build log. **Builds land in a sibling
+  directory and atomically swap in**, so the dist you're running against
+  is never blocked during a rebuild.
+- **Hard-kill cancel** — meson/ninja workers don't honour plain SIGTERM,
+  so Cancel sends SIGTERM to the whole process group, waits 5 seconds,
+  then sends SIGKILL.
+- **Live log auto-closes** when the build exits cleanly — you go straight
+  to the result screen instead of dismissing the log window first.
+- `tools/full-build.sh` keeps its existing CLI unchanged; the Dist
+  Manager calls a new per-component driver (`tools/build-component.sh`).
 
-Per-app overlay enable/disable + "bundled vs system libs" toggle (PortProton
-parity), GitHub-sourced updates, and rebuild-separately via Phase B's
-`build-component.sh`. **GStreamer re-deferred** to Phase E (no single-artifact
-GitHub upstream; bundled path needs a source-build subsystem out of scope).
-**OptiScaler is enable-only** (Windows DLL replacement; no Linux system
-counterpart, so no `bundled/system` toggle).
+### Per-app overlay bundling (PortProton-style bundled-vs-system toggle)
 
-- **`src/wb-gui-lib/wb-gui-overlays.sh`** (new) — overlay registry library
-  using the Phase-B registry-as-view pattern. Derived from filesystem state
-  at `$WB_HOME/overlays/<name>/<version>/` plus per-app settings; no
-  source-of-truth drift. Public API: `wb_gui_overlays_registry_refresh`,
-  `wb_gui_overlays_list`, `wb_gui_overlays_check_updates`,
-  `wb_gui_overlays_install`, `wb_gui_overlays_save_env_bake`.
-  Schema: `share/schemas/wb_overlays.schema.json`.
-- **`tools/fetch-overlay.sh`** (new) — GitHub release fetcher. CLI:
-  `--overlay <name> --version <tag|latest> --dest <path>` plus
-  `--progress-fd <N>` emitting the same `PROGRESS:/LOG:/WARN:/ERROR:`
-  protocol as Phase B's `build-component.sh`. sha256 verification, archive
-  formats `.tar.gz` / `.tar.xz` / `.zip` / `.7z`, 10-min on-demand cache,
-  fast-fail on offline / 429 rate-limit with actionable ERROR events.
-- **`tools/build-component.sh`** — enum extended with `mangohud`,
-  `vkbasalt`, `optiscaler`. vkBasalt builds from source via meson+ninja
-  (reusing Phase B's build helpers); MangoHud + OptiScaler are
-  prebuilt-archive installs.
-- **`src/wb-gui-lib/wb-gui-settings.sh`** — extended to persist the
-  `overlays` sub-object in per-app settings, including a
-  `_wb_overlay_managed_env_keys` array that tracks which env_vars entries
-  the overlay handler owns (so disable cleanly removes them without
-  clobbering user-set keys).
-- **`src/wb-gui`** — Per-App tab of `_cmd_settings_v2` extended with the
-  overlay panel (3 overlays × {enable + version + bundled/system radio}
-  per W2 wireframe field index O1–O25). Save-handler flow invokes
-  `wb_gui_overlays_save_env_bake`, with a **conflict-detection dialog**
-  that fires when the user has manually set a managed env key (MANGOHUD,
-  ENABLE_VKBASALT, etc.). Check-updates dialog chain: 4 stages (progress →
-  checklist → per-overlay install log → summary), reusing
-  `wb_gui_dialog_log_tail` with the Phase B P1 auto-close pattern. 4 error
-  dialogs (offline, rate-limited, sha-mismatch, degradation) with
-  "what / why / next action" copy.
-- **One-time v1.8.0 banner** — `_cmd_main_window` shows the Phase C
-  "new feature" info dialog once, gated by
-  `$WB_HOME/etc/wb-gui-seen-phase-c.flag`. Suppressed by
-  `WB_GUI_NO_OVERLAY_BANNER=1` and in test mode.
-- **`src/wb-gui-lib/wb-gui-dialogs.sh`** — two new helpers:
-  `wb_gui_dialog_overlay_install_prompt` (post-check yes/no) and
-  `wb_gui_dialog_overlay_updates_checklist` (multi-overlay selection).
-- **Tests** (+48) — `33_overlays_registry.bats` (33), `35_overlay_panel.bats`
-  (15) covering registry refresh, env-bake correctness, conflict detection,
-  banner sentinel lifecycle, and offline/rate-limit error branches.
-  Full suite 439 → 487, all green. GitHub API is stubbed through
-  `WB_TEST_GH_API_FIXTURE` + `WB_OVERLAY_DOWNLOAD_BASE` seams — tests are
-  fully offline.
+Open a per-app settings panel and the Per-App tab now has an **Overlays**
+section with three overlays: **MangoHud** (FPS/frametime HUD),
+**VKBasalt** (post-processing), and **OptiScaler** (upscaler replacement).
 
-Known limitations (polish follow-ups for v1.8.x):
+- **Enable** — per app, per overlay. Changes save into the prefix's
+  `wb.conf` at save-time, so `wb run` picks them up on the next launch
+  without touching its runtime.
+- **Bundled vs system** — for MangoHud and VKBasalt, flip between the
+  bundled build (downloaded + installed by wine-bleeding) and your
+  distro's system copy. OptiScaler is enable-only (it's a Windows DLL
+  replacement; no Linux system counterpart exists).
+- **Version pinning** — each overlay tracks the installed versions under
+  `$WB_HOME/overlays/<name>/<version>/`. Use the version dropdown to
+  choose which is active.
+- **Check for updates** — fetches the latest release tag from GitHub
+  on demand (no background polling). Offline or rate-limited? The dialog
+  says so plainly with a next-action hint ("try again later" / "sign in
+  to GitHub and retry").
+- **Conflict detection** — if you've manually set `MANGOHUD=1` or
+  `ENABLE_VKBASALT=1` in per-app env vars, enabling the overlay warns
+  before taking ownership of those keys. Disable later, and only the
+  overlay-managed keys are removed — your other env vars are untouched.
+- **GStreamer is intentionally not an overlay.** No clean GitHub-only
+  source build exists for the gstreamer plugin stack; the existing
+  build-dependency path (which ingests system `libgst*.so`) stays.
+  Revisit when/if the source story improves.
 
-- **Unsaved-changes indicator in the overlay panel** — yad `--form` button
-  callbacks run in subshells with no channel back to the parent plug, so a
-  dirty flag can't propagate without a named-pipe state bus. Deferred.
-- **Check-updates Stage 1 shows a static 30s progress dialog** rather than
-  per-overlay streaming status. Backend check is synchronous; a streaming
-  variant requires restructuring `wb_gui_overlays_check_updates`.
-- **Version dropdown renders as a single-item CB "latest"** when no
-  versions are installed (instead of a static LBL "—"). yad `--form`
-  doesn't support runtime field-type switching without a dual-plug setup.
+### Prefix deep customization (new panels in the Prefix tab)
 
-### Phase B: dist management UI + component builder
+The Prefix tab of the settings dialog now has four collapsible panels —
+Components (open by default), DLL Overrides, Winetricks, Registry.
 
-Dist Manager and a Component Builder that wraps `tools/full-build.sh` into
-per-component rebuilds (DXVK / VKD3D-Proton / DXVK-NVAPI). gstreamer is
-**deferred** to Phase C (no clean source-build path exists today —
-`build-full-wine-deps.sh` ingests system `libgst*.so`).
+**Per-prefix component toggles.** Override the dist-global
+DXVK / VKD3D / NVAPI defaults for a specific prefix. Three-way switch:
+**On**, **Off**, or **Inherit** (removes the override and falls back to
+whatever the dist says). Saved to the prefix's `wb.conf` atomically,
+preserving any other keys you've set there by hand.
 
-- **`src/wb-gui-lib/wb-gui-dist.sh`** (new) — dist registry library with a
-  derived-view refresh pattern (registry is rebuilt from `.wb_dist_meta` +
-  `plugins/runtimes.d/` rather than stored as a source-of-truth to avoid
-  drift). JSON storage at `$WB_HOME/dists.json`.
-  Schema: `share/schemas/wb_dists.schema.json`.
-- **`tools/build-component.sh`** (new) — component-granular builder with a
-  `PROGRESS:/LOG:/WARN:/ERROR:` event protocol on `--progress-fd=<N>`.
-  Builds to a sibling directory and performs an atomic `mv -T` swap so the
-  user's currently-active dist is never blocked during rebuild.
-  Hard-kill cancellation: SIGTERM → 5s watchdog → SIGKILL to the process
-  group (required because meson/ninja grandchildren ignore plain SIGTERM).
-- **`tools/lib/build-common.sh`** (new) — shared helpers extracted from
-  `full-build.sh` Step 1-2 of the decomposition plan. Steps 3-4 (routing
-  `full-build.sh` through `build-component.sh` in a loop) are **deferred**
-  pending a real MinGW+network build verification of byte-identical dist
-  output. Existing `full-build.sh` CLI parity preserved unchanged.
-- **`src/wb-gui`** — new `[Dists]` button on the main window (rc=70) opens
-  the Dist Manager. `_cmd_dist_manager` implements the list + Add External +
-  Activate + Build Components + Remove flows. `_cmd_build_component`
-  implements the 3-stage Component Builder (form → live log tail → result),
-  routing each `build-component.sh` exit code to a specific result dialog.
-- **`src/wb-gui-lib/wb-gui-dialogs.sh`** — new `wb_gui_dialog_log_tail`
-  helper (yad `--text-info --tail --filename`) for live build output.
-- **Tests** (+30) — `30_dist_registry.bats`, `31_dist_manager.bats`,
-  `32_build_component.bats`. Full suite 409 → 439, all green.
+**DLL Overrides.** A structured editor for DLL overrides separate from
+your personal `WINEDLLOVERRIDES` env var. 15 common DLLs preset as rows
+(d3d11, d3d9, dinput8, msvcr120, etc.) plus free-form custom rows.
+Overrides compose into the launch environment via
+`WB_EXTRA_DLLOVERRIDES`; your hand-typed `env_vars.WINEDLLOVERRIDES` is
+left alone.
 
-### Polish — Phase B follow-up (Stage 2 auto-close)
+**Winetricks.** Install verbs from a category-tabbed picker (All, dlls,
+fonts, settings, apps, benchmarks) with a search box. Live progress
+during install. If you try to install a verb that's already installed,
+you get an **[installed]** marker and a re-install confirmation.
+**Uninstall is intentionally not exposed** — winetricks itself has no
+generic uninstall for most verbs, so the UI shows a "Remove not
+supported" badge and a "How to clean up manually" hint rather than a
+Remove button that silently does nothing.
 
-- **`src/wb-gui` `_cmd_build_component`** — Stage 2 log-tail now closes
-  automatically when the builder exits naturally (async yad launch + poll
-  loop on both PIDs). Previously the user had to click Cancel to advance
-  to Stage 3. User-cancel path unchanged (still SIGTERM → 5s → SIGKILL
-  to the process group). Poll interval and post-exit drain configurable
-  via `WB_GUI_BUILD_POLL_SEC` / `WB_GUI_BUILD_TAIL_DRAIN_SEC`.
+**Registry editor.** Browse and edit the Wine registry through two
+safety layers:
 
-Known limitations (polish follow-ups for v1.7.x):
+- **Safe zones are the only writable keys.** Anything outside is
+  display-only. The Write button is greyed out, and the backend
+  rejects writes there regardless. Safe zones:
+    - `HKCU\Software\Wine\*`
+    - `HKCU\Environment`
+    - `HKCU\Control Panel\Desktop`
+    - `HKCU\Control Panel\International`
+    - `HKLM\System\CurrentControlSet\Services\Wine`
+    - `HKLM\Software\Wine`
+- **Every write goes through a diff-preview** — you see exactly the
+  old vs new value before you click Apply.
+- **Undo the last 10 changes per prefix** — stack-based, restores
+  the prior value cleanly via `wine reg` (no direct `.reg` edits).
 
-- Stage 1 "Current version" field is static (shows DXVK at open time);
-  `yad --form` does not support live field refresh on `CB` change.
-- `full-build.sh` decomposition Steps 3-4 are deferred (see above).
+### Settings dialog polish
 
-### Removed — GAP-2 transitional bridge
+- **Dialog stays open on Save.** Saving one tab no longer closes the
+  whole settings dialog — you stay in place and can keep editing other
+  tabs. Close or Escape ends the session.
+- **`wb-gui settings <prefix>`** (legacy alias) now dispatches directly
+  to the 4-layer settings dialog. The transitional `.wb.ppdb` writer
+  from v1.6.0 has been removed; per-app settings flow exclusively
+  through the new store.
+- **`wb-gui detect <prefix>`** standalone command now asks
+  "Continue / Cancel" between snapshot and diff, with Cancel purging
+  the snapshot cleanly.
 
-- **`src/wb-gui` `_cmd_settings`** — removed the v1.6.0 transitional
-  `.wb.ppdb` write path. `wb-gui settings <prefix>` now resolves the prefix
-  to an app-id via `apps.json` and dispatches directly to
-  `_cmd_settings_v2 app <id>`, so per-app settings flow exclusively through
-  the 4-layer store. Obsolete `.wb.ppdb` assertions dropped from
-  `tests/24_gui.bats` (tests 7-8) and `tests/29_ui_flows.bats` (tests 18-19);
-  coverage of the settings-v2 dispatch lives in `tests/29_ui_flows.bats`
-  tests 7-9 and 16.
+### Configuration surface (new env vars and storage paths)
+
+- `$WB_HOME/dists.json` — dist registry view (rebuilt on demand from
+  `.wb_dist_meta` + runtime plugins; not a source of truth).
+- `$WB_HOME/overlays.json` + `$WB_HOME/overlays/<name>/<version>/` —
+  overlay registry + bundled binaries.
+- `$WB_HOME/settings/{general,dist,prefix,apps}/*.json` — continues the
+  Phase A 4-layer store with new `overlays`, `dll_overrides`, and
+  `wine_registry_patches` fields in the per-app and per-prefix layers.
+- `WB_GUI_BUILD_POLL_SEC`, `WB_GUI_BUILD_TAIL_DRAIN_SEC` — tune the
+  Component Builder's log-tail auto-close behaviour.
+- `WB_GUI_NO_OVERLAY_BANNER=1` — suppress the one-time v1.7.0 "new
+  overlays" discoverability dialog. Normally auto-hides once dismissed
+  (sentinel at `$WB_HOME/etc/wb-gui-seen-phase-c.flag`).
+
+### Known limitations (queued for v1.7.x polish)
+
+- **Overlay panel dirty-flag** — the overlay section doesn't show a
+  visual "unsaved changes" indicator because yad `--form` button
+  callbacks run in subshells that can't signal the parent. Your saves
+  are still honoured; you just don't get the yellow dot.
+- **Overlay check-updates progress** — Stage 1 shows a static 30s
+  timeout dialog instead of streaming per-overlay status while
+  checking. The actual check completes correctly; only the progress UI
+  is non-streaming.
+- **Version dropdown when nothing installed** — renders as a single-item
+  combo reading "latest" rather than a dash. Selecting it still triggers
+  an install correctly.
+- **Component Builder Stage 1 "Current version"** — static at dialog
+  open; doesn't refresh when you change the component dropdown.
+- **"Add custom DLL" in the DLL Overrides panel** — preset rows work;
+  a brand-new custom-DLL entry row is queued.
+- **Registry tree vs flat list** — on older yad builds without
+  `--tree` support, the browser falls back to an ASCII-indented list.
+  Editing still works identically.
+- **DLL-vs-component conflict warning** — setting `d3d11=native` while
+  DXVK is on doesn't warn yet. The override wins (that's how Wine works);
+  we just don't flag it for you.
+- **`tools/full-build.sh` pass-through refactor** — the full-dist build
+  pipeline hasn't yet been routed through the new per-component driver.
+  It keeps its existing CLI and behaviour unchanged; the Component
+  Builder path uses the new driver directly.
 
 ## [1.6.0] — 2026-04-20
 
