@@ -475,17 +475,30 @@ wb_gui_overlays_install() {
   local cache_dir
   cache_dir="$(_wb_gui_overlays_cache)"
 
-  # Locate fetch-overlay.sh relative to this script or WINE_ROOT
-  local fetcher
-  fetcher="${WB_OVERLAY_FETCHER:-}"
-  if [[ -z "${fetcher}" ]]; then
-    local wine_root
-    wine_root="${WINE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
-    fetcher="${wine_root}/tools/fetch-overlay.sh"
+  # Locate fetch-overlay.sh.
+  # Preference order: WB_OVERLAY_FETCHER override → WB_TOOLS_DIR (set by wb-gui) →
+  # dev-tree sibling → /usr/lib/wine-bleeding/tools → /usr/local/lib/wine-bleeding/tools.
+  local fetcher="${WB_OVERLAY_FETCHER:-}"
+  if [[ -z "${fetcher}" ]] && [[ -n "${WB_TOOLS_DIR:-}" ]]; then
+    fetcher="${WB_TOOLS_DIR}/fetch-overlay.sh"
+  fi
+  if [[ ! -x "${fetcher}" ]]; then
+    local _ov_script_dir _ov_c
+    _ov_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for _ov_c in \
+      "${_ov_script_dir}/../../../tools/fetch-overlay.sh" \
+      "/usr/lib/wine-bleeding/tools/fetch-overlay.sh" \
+      "/usr/local/lib/wine-bleeding/tools/fetch-overlay.sh"
+    do
+      if [[ -x "${_ov_c}" ]]; then
+        fetcher="$(cd "$(dirname "${_ov_c}")" && pwd)/$(basename "${_ov_c}")"
+        break
+      fi
+    done
   fi
 
   if [[ ! -x "${fetcher}" ]]; then
-    echo "wb_gui_overlays_install: fetch-overlay.sh not found at ${fetcher}" >&2
+    echo "wb_gui_overlays_install: fetch-overlay.sh not found. Set WB_TOOLS_DIR or reinstall wine-bleeding-wb." >&2
     return 1
   fi
 

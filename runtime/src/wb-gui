@@ -60,6 +60,43 @@ _wb_gui_resolve_dir() {
 
 _WB_LIB_DIR="$(_wb_gui_resolve_dir wb-lib "${WB_LIB_DIR:-}")"
 _WB_GUI_LIB_DIR="$(_wb_gui_resolve_dir wb-gui-lib "${WB_GUI_LIB_DIR:-}")"
+
+# ---------------------------------------------------------------------------
+# _wb_gui_resolve_tools — find the directory containing build-component.sh,
+# fetch-overlay.sh, run-winetricks.sh, lib/build-common.sh.
+#
+# Order:
+#   1. $WB_TOOLS_DIR (explicit override — tests, dev)
+#   2. Dev tree: ${_WB_GUI_SELF_DIR}/../../tools/ (runtime/src → ../../tools)
+#   3. /usr/lib/wine-bleeding/tools/
+#   4. /usr/local/lib/wine-bleeding/tools/
+#
+# Exports WB_TOOLS_DIR so child processes (and sourced libs) pick it up.
+# Unlike wb-lib/wb-gui-lib, the tools dir is optional — Component Builder
+# and other tool-dependent flows surface clear user-facing errors when it's
+# missing rather than aborting startup.
+# ---------------------------------------------------------------------------
+_wb_gui_resolve_tools() {
+  if [[ -n "${WB_TOOLS_DIR:-}" ]] && [[ -d "${WB_TOOLS_DIR}" ]]; then
+    echo "${WB_TOOLS_DIR}"
+    return 0
+  fi
+  local dev_candidate="${_WB_GUI_SELF_DIR}/../../tools"
+  if [[ -x "${dev_candidate}/build-component.sh" ]]; then
+    (cd "${dev_candidate}" && pwd)
+    return 0
+  fi
+  local c
+  for c in /usr/lib/wine-bleeding/tools /usr/local/lib/wine-bleeding/tools; do
+    if [[ -x "${c}/build-component.sh" ]]; then
+      echo "${c}"
+      return 0
+    fi
+  done
+  return 1
+}
+_WB_TOOLS_DIR="$(_wb_gui_resolve_tools || true)"
+export WB_TOOLS_DIR="${_WB_TOOLS_DIR}"
 _WB_BIN="$(command -v wb 2>/dev/null || echo "${_WB_GUI_SELF_DIR}/wb")"
 
 # ---------------------------------------------------------------------------
@@ -3975,19 +4012,20 @@ _cmd_build_component() {
   local force_flag=""
   [[ "${force_rebuild_flag}" == "TRUE" ]] && force_flag="--force-rebuild"
 
-  # Locate build-component.sh
-  local build_script
-  build_script="$(command -v build-component.sh 2>/dev/null || true)"
-  if [[ -z "${build_script}" ]]; then
-    # Try relative to wb-gui's own directory
-    local candidate="${_WB_GUI_SELF_DIR}/../../tools/build-component.sh"
-    if [[ -x "${candidate}" ]]; then
-      build_script="$(realpath -m "${candidate}")"
-    fi
+  # Locate build-component.sh via the shared tools-dir resolver.
+  local build_script=""
+  if [[ -n "${_WB_TOOLS_DIR}" ]] && [[ -x "${_WB_TOOLS_DIR}/build-component.sh" ]]; then
+    build_script="${_WB_TOOLS_DIR}/build-component.sh"
+  elif command -v build-component.sh &>/dev/null; then
+    build_script="$(command -v build-component.sh)"
   fi
   if [[ -z "${build_script}" || ! -x "${build_script}" ]]; then
     wb_gui_dialog_error "Build Error" \
-      "Cannot locate tools/build-component.sh. Make sure the wine-bleeding build tools are installed."
+      "Cannot locate tools/build-component.sh.
+
+What happened: the wine-bleeding build driver is not installed or WB_TOOLS_DIR is not pointing at a directory that contains it.
+Expected: /usr/lib/wine-bleeding/tools/build-component.sh (system install) or ./tools/build-component.sh (source tree).
+Next action: reinstall wine-bleeding-wb (the RPM/DEB now ships this file) or set WB_TOOLS_DIR=<path-to-tools>."
     rm -rf "${tmp_dir}"
     return 1
   fi

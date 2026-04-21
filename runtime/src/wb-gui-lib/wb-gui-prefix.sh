@@ -905,17 +905,29 @@ wb_gui_prefix_winetricks_install() {
     shift
   done
 
-  # Locate run-winetricks.sh relative to this lib file
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # May be at runtime/src/wb-gui-lib/ — run-winetricks.sh is at tools/
-  local rw_script="${script_dir}/../../../tools/run-winetricks.sh"
-  if [[ ! -x "${rw_script}" ]]; then
-    # Installed path: libdir/wine-bleeding/wb-gui-lib → look for adjacent tools dir
-    rw_script="${script_dir}/../../run-winetricks.sh"
+  # Locate run-winetricks.sh.
+  # Preference order: WB_RUN_WINETRICKS override → WB_TOOLS_DIR (set by wb-gui)
+  # → dev-tree sibling → /usr/lib/wine-bleeding/tools → /usr/local/...
+  local rw_script="${WB_RUN_WINETRICKS:-}"
+  if [[ -z "${rw_script}" ]] && [[ -n "${WB_TOOLS_DIR:-}" ]]; then
+    rw_script="${WB_TOOLS_DIR}/run-winetricks.sh"
   fi
   if [[ ! -x "${rw_script}" ]]; then
-    echo "wb_gui_prefix_winetricks_install: run-winetricks.sh not found" >&2
+    local _rw_script_dir _rw_c
+    _rw_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for _rw_c in \
+      "${_rw_script_dir}/../../../tools/run-winetricks.sh" \
+      "/usr/lib/wine-bleeding/tools/run-winetricks.sh" \
+      "/usr/local/lib/wine-bleeding/tools/run-winetricks.sh"
+    do
+      if [[ -x "${_rw_c}" ]]; then
+        rw_script="${_rw_c}"
+        break
+      fi
+    done
+  fi
+  if [[ ! -x "${rw_script}" ]]; then
+    echo "wb_gui_prefix_winetricks_install: run-winetricks.sh not found. Reinstall wine-bleeding-wb or set WB_TOOLS_DIR." >&2
     return 1
   fi
 

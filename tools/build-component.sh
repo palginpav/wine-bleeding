@@ -545,8 +545,9 @@ fi
 # ---------------------------------------------------------------------------
 _bc_refresh_manifest() {
   local dist_path="$1"
-  local wb_lib="${WINE_ROOT}/runtime/src/wb-lib"
-  if [[ -f "${wb_lib}/wb-dist.sh" ]]; then
+  local wb_lib
+  wb_lib="$(bc_resolve_wb_lib)" || wb_lib=""
+  if [[ -n "${wb_lib}" ]] && [[ -f "${wb_lib}/wb-dist.sh" ]]; then
     (
       # shellcheck source=../runtime/src/wb-lib/wb-log.sh
       source "${wb_lib}/wb-log.sh" 2>/dev/null || true
@@ -577,8 +578,9 @@ _bc_write_settings_hint() {
 
   mkdir -p "${settings_dir}"
 
-  local wb_lib="${WINE_ROOT}/runtime/src/wb-lib"
-  if [[ -f "${wb_lib}/wb-json.sh" ]]; then
+  local wb_lib
+  wb_lib="$(bc_resolve_wb_lib)" || wb_lib=""
+  if [[ -n "${wb_lib}" ]] && [[ -f "${wb_lib}/wb-json.sh" ]]; then
     (
       source "${wb_lib}/wb-json.sh"
       # Read existing settings or start fresh

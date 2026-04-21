@@ -178,6 +178,28 @@ install:
 	@for f in $(SRC_DIR)/hooks/*.sh; do \
 	  install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/hooks/$$(basename $$f)"; \
 	done
+	@# Install the libexec helper (wb-lnk-parse.py) — referenced by wb-gui-detection.sh.
+	@if test -d $(RUNTIME_DIR)libexec; then \
+	  for f in $(RUNTIME_DIR)libexec/*; do \
+	    if test -f "$$f"; then \
+	      install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/libexec/$$(basename $$f)"; \
+	    fi; \
+	  done; \
+	fi
+	@# Install the Phase B/C/D tool drivers (build-component.sh, fetch-overlay.sh,
+	@# run-winetricks.sh) + their shared helper. Sit under $(LIBDIR)/wine-bleeding/tools/
+	@# where wb-gui's resolver picks them up.
+	@if test -d $(RUNTIME_DIR)../tools; then \
+	  for f in $(RUNTIME_DIR)../tools/build-component.sh $(RUNTIME_DIR)../tools/fetch-overlay.sh $(RUNTIME_DIR)../tools/run-winetricks.sh; do \
+	    if test -x "$$f"; then \
+	      install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/tools/$$(basename $$f)"; \
+	    fi; \
+	  done; \
+	  if test -f $(RUNTIME_DIR)../tools/lib/build-common.sh; then \
+	    install -Dm644 $(RUNTIME_DIR)../tools/lib/build-common.sh \
+	      $(DESTDIR)$(LIBDIR)/wine-bleeding/tools/lib/build-common.sh; \
+	  fi; \
+	fi
 	install -Dm644 $(RUNTIME_DIR)share/defaults.conf \
 	  $(DESTDIR)$(SHAREDIR)/wine-bleeding/defaults.conf
 	@for f in $(RUNTIME_DIR)share/schemas/*.json; do \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tools/lib/build-common.sh — shared helpers for build-component.sh and full-build.sh
-# Sourced only; never executed directly.
+# tools/lib/build-common.sh — shared helpers for build-component.sh, fetch-overlay.sh,
+# run-winetricks.sh and full-build.sh. Sourced only; never executed directly.
 #
 # Public API:
 #   bc_check_env            — verify required build tools; ERROR+exit on missing

@@ -53,8 +53,22 @@ SRC_STAGE="$(mktemp -d)"
 trap 'rm -rf "${SRC_STAGE}" "${BUILD_ROOT}"' EXIT
 mkdir -p "${SRC_STAGE}/${SRC_NAME}"
 
+# The build drivers (build-component.sh, fetch-overlay.sh, run-winetricks.sh,
+# lib/build-common.sh) live at the repo root under tools/, not inside
+# runtime/. We need both trees in the tarball so the installed package can
+# rebuild components + fetch overlays + run winetricks. Stage as:
+#   ${SRC_NAME}/runtime/...
+#   ${SRC_NAME}/tools/...
+# and point the spec's make invocation at the nested runtime/ subdir.
+mkdir -p "${SRC_STAGE}/${SRC_NAME}/runtime"
 rsync -a --exclude='packaging/' --exclude='tests/vendor/' \
-  "${RUNTIME_DIR}/" "${SRC_STAGE}/${SRC_NAME}/"
+  "${RUNTIME_DIR}/" "${SRC_STAGE}/${SRC_NAME}/runtime/"
+
+REPO_ROOT="$(cd "${RUNTIME_DIR}/.." && pwd)"
+if [[ -d "${REPO_ROOT}/tools" ]]; then
+  mkdir -p "${SRC_STAGE}/${SRC_NAME}/tools"
+  rsync -a "${REPO_ROOT}/tools/" "${SRC_STAGE}/${SRC_NAME}/tools/"
+fi
 
 # Create source tarball
 tar -czf "${BUILD_ROOT}/SOURCES/${SRC_NAME}.tar.gz" \

@@ -54,8 +54,11 @@ desktop entry, icon, and Steam compatibility tool support.
 # No compiled artefacts — pure shell.
 
 %install
-# Shell scripts are arch-independent; use /usr/lib not /usr/lib64
-make install \
+# Shell scripts are arch-independent; use /usr/lib not /usr/lib64.
+# The source tarball carries runtime/ and tools/ side-by-side (build.sh
+# stages both), so the Makefile is at runtime/Makefile and picks up
+# ../tools automatically.
+make -C runtime install \
     DESTDIR=%{buildroot} \
     PREFIX=/usr \
     LIBDIR=/usr/lib \
@@ -78,6 +81,8 @@ make install \
 # menu, and no icons. Listed as real %files entries now.
 %{_bindir}/wb-gui
 /usr/lib/wine-bleeding/wb-gui-lib/
+/usr/lib/wine-bleeding/libexec/
+/usr/lib/wine-bleeding/tools/
 %{_datadir}/applications/wine-bleeding-wb.desktop
 %{_datadir}/icons/hicolor/16x16/apps/wine-bleeding.png
 %{_datadir}/icons/hicolor/22x22/apps/wine-bleeding.png

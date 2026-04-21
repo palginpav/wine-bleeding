@@ -301,9 +301,10 @@ done
 if [[ "${NO_RECONCILE}" -eq 0 ]]; then
   bc_emit_progress 95 "Reconciling winetricks.log"
   # Source the gui-prefix lib for reconcile if available
-  local_gui_lib="${WINE_ROOT}/runtime/src/wb-gui-lib"
-  local_wb_lib="${WINE_ROOT}/runtime/src/wb-lib"
-  if [[ -f "${local_gui_lib}/wb-gui-prefix.sh" ]] && \
+  local_gui_lib="$(bc_resolve_wb_gui_lib 2>/dev/null || true)"
+  local_wb_lib="$(bc_resolve_wb_lib 2>/dev/null || true)"
+  if [[ -n "${local_gui_lib}" ]] && [[ -n "${local_wb_lib}" ]] && \
+     [[ -f "${local_gui_lib}/wb-gui-prefix.sh" ]] && \
      [[ -f "${local_wb_lib}/wb-json.sh" ]]; then
     (
       # shellcheck source=../runtime/src/wb-lib/wb-json.sh
