@@ -21,6 +21,11 @@ _WB_GUI_YAD_COMMON=(
   --window-icon=wine-bleeding
   --class=wine-bleeding
   --width=600
+  # Keep wb-gui windows above file managers / terminals that are typically
+  # already open. Without this, new dialogs (especially short-lived ones
+  # launched from the main window) get buried behind Dolphin / Konsole
+  # under most KDE and GNOME WM focus policies.
+  --on-top
 )
 
 # ---------------------------------------------------------------------------
