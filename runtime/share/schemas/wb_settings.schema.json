@@ -172,30 +172,91 @@
           "description": "WINEDEBUG override at the prefix layer. null = inherit."
         },
         "winetricks_verbs_installed": {
-          "$comment": "Reserved for Phase D — prefix deep customization",
+          "$comment": "Active (Phase D) — verbs reconciled from winetricks.log",
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9_.=+-]+$"
+          }
         },
         "dll_overrides": {
-          "$comment": "Reserved for Phase D — DLL overrides UI",
+          "$comment": "Active (Phase D) — per-prefix DLL override list (structured; NOT env_vars)",
           "oneOf": [
-            { "type": "array" },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["dll", "mode", "origin"],
+                "additionalProperties": false,
+                "properties": {
+                  "dll": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.-]+$"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["native", "builtin", "n,b", "b,n", "disabled"]
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": ["preset", "user"]
+                  }
+                }
+              }
+            },
             { "type": "null" }
           ]
         },
         "components_enabled": {
-          "$comment": "Reserved for Phase D — bundled vs system libs toggle",
+          "$comment": "Active (Phase D) — per-prefix component toggle (on/off/inherit)",
           "oneOf": [
-            { "type": "object" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "dxvk":  { "type": "string", "enum": ["on", "off", "inherit"] },
+                "vkd3d": { "type": "string", "enum": ["on", "off", "inherit"] },
+                "nvapi": { "type": "string", "enum": ["on", "off", "inherit"] }
+              }
+            },
             { "type": "null" }
           ]
         },
         "wine_registry_patches": {
-          "$comment": "Reserved for Phase D — registry edit",
+          "$comment": "Active (Phase D) — bounded undo stack (last 10 wine reg edits)",
           "oneOf": [
-            { "type": "array" },
+            {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "object",
+                "required": ["key", "name", "type", "prev_data", "new_data", "applied_utc"],
+                "additionalProperties": false,
+                "properties": {
+                  "key":          { "type": "string" },
+                  "name":         { "type": "string" },
+                  "type": {
+                    "type": "string",
+                    "enum": ["REG_SZ", "REG_EXPAND_SZ", "REG_DWORD", "REG_QWORD"]
+                  },
+                  "prev_data":    { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                  "new_data":     { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                  "applied_utc":  { "type": "string" }
+                }
+              }
+            },
             { "type": "null" }
           ]
+        },
+        "env_vars": {
+          "$comment": "Active (Phase D) — prefix-layer env overrides (incl. WB_DXVK/VKD3D/NVAPI managed keys)",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "_wb_prefix_managed_env_keys": {
+          "$comment": "Active (Phase D) internal — env_vars keys owned by Phase D bake handler",
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },

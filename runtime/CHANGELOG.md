@@ -2,6 +2,70 @@
 
 ## [Unreleased] — v1.7.0-dev
 
+### Phase D: prefix deep customization (winetricks, DLL overrides, registry editor, per-prefix components)
+
+Final roadmapped phase. The Prefix tab of `_cmd_settings_v2` now carries
+four stacked `:FL` collapsible panels: **Components** (default-expanded),
+**DLL Overrides**, **Winetricks**, **Registry** — all layered on top of
+Phase A's 4-layer settings store and Phase B's component-builder event
+protocol.
+
+- **`src/wb-gui-lib/wb-gui-prefix.sh`** (new) — backend library. Exports
+  `wb_gui_prefix_save_env_bake`, `wb_gui_prefix_winetricks_list`,
+  `wb_gui_prefix_winetricks_available`, `wb_gui_prefix_winetricks_install`,
+  `wb_gui_prefix_reg_read` / `reg_write` / `reg_undo`,
+  `wb_gui_prefix_dll_set` / `dll_remove`, `wb_gui_prefix_component_toggle`.
+  Path B (per Phase C): bakes `WB_DXVK` / `WB_VKD3D` / `WB_NVAPI` +
+  `WB_EXTRA_DLLOVERRIDES` into `<prefix_path>/wb.conf` atomically, preserving
+  user-set keys bit-identical; managed keys tracked via
+  `_wb_prefix_managed_wbconf_keys`. `component_toggle` accepts a 3-way
+  `ON / OFF / INHERIT` — INHERIT removes the key from `wb.conf` so the
+  dist-level default (Phase B) takes over.
+- **`tools/run-winetricks.sh`** (new) — winetricks wrapper emitting the
+  Phase-B `PROGRESS: / LOG: / WARN: / ERROR:` event protocol on
+  `--progress-fd=<N>`. Reuses `tools/lib/build-common.sh`. Cancellation:
+  SIGTERM → 5s watchdog → SIGKILL on the process group.
+  **Winetricks verb-uninstall is intentionally NOT exposed** — winetricks
+  itself has no generic uninstall; the GUI surfaces this honestly with a
+  "Remove not supported" badge and manual cleanup hints.
+- **Wine registry editor** — safe-zone whitelist enforced in two layers
+  (UI greys out the Write button outside the zone; the backend rejects
+  any write regardless). Writable zones: `HKCU\Software\Wine\*`,
+  `HKCU\Environment`, `HKCU\Control Panel\{Desktop,International}`,
+  `HKLM\System\CurrentControlSet\Services\Wine`, `HKLM\Software\Wine`.
+  Every write goes through a modal **diff-preview** before apply.
+  Bounded last-10 **undo stack** per prefix — values are restored via
+  `wine reg add/delete`, never through direct `.reg` edits.
+- **DLL overrides** — structured prefix-level store (`dll_overrides` array
+  in prefix settings JSON), separate from `env_vars.WINEDLLOVERRIDES`
+  (user-owned), composed into launch via the existing
+  `WB_EXTRA_DLLOVERRIDES` hook in `wb-env.sh`. 15 preset common DLLs plus
+  custom-entry rows.
+- **`src/wb-gui`** — `_launch_tab_prefix` extended with the 4-panel
+  stacked-expander layout (Components default-open). 14 new dispatch +
+  dialog-render functions. Winetricks install uses
+  `wb_gui_dialog_log_tail` with the Phase B P1 auto-close pattern.
+  Category-tabbed verb picker (All / dlls / fonts / settings / apps /
+  benchmarks) with search.
+- **`share/schemas/wb_settings.schema.json`** — prefix `$defs` tightened
+  for the new `dll_overrides`, `wine_registry_patches`, and
+  `_wb_prefix_managed_wbconf_keys` fields.
+- **Tests** (+67) — `36_prefix_customization.bats` (41) backend coverage,
+  `37_prefix_panel.bats` (26) GUI integration. Suite 487 → 554, all green.
+  Winetricks stubbed via `WB_TEST_WT_FIXTURE`; wine `reg` stubbed via
+  `WB_TEST_WINE_REG_FIXTURE` — CI runs fully offline.
+- **`runtime/Makefile`** — `SHELLCHECK_TARGETS` extended to cover the new
+  Phase D (and previously uncovered Phase B/C) library files.
+
+Known limitations (polish follow-ups for v1.9.x):
+
+- "Add custom DLL" button not wired in the first cut — preset DLL rows
+  work; brand-new custom DLL entry deferred.
+- Registry browser uses a flat list view when `yad --tree` is unavailable
+  on the target yad build. Detection present at startup.
+- A DLL-vs-component conflict warning on Apply (e.g. user sets
+  `d3d11=native` while DXVK is on) is queued for v1.9.1.
+
 ### Phase C: per-app overlay bundling (MangoHud, VKBasalt, OptiScaler)
 
 Per-app overlay enable/disable + "bundled vs system libs" toggle (PortProton

@@ -32,7 +32,16 @@ _WB_GUI_SETTINGS_LAYER_KEYS_GENERAL=(gpu win_version wine_debug)
 _WB_GUI_SETTINGS_LAYER_KEYS_DIST=(external_source name active last_built_at gpu)
 
 # Prefix layer: exclusive keys + cross-cutting
-_WB_GUI_SETTINGS_LAYER_KEYS_PREFIX=(notes gpu win_version wine_debug)
+# Phase D (v1.9.0) activates the reserved slots + adds env_vars/_wb_prefix_managed_env_keys.
+_WB_GUI_SETTINGS_LAYER_KEYS_PREFIX=(
+  notes gpu win_version wine_debug
+  winetricks_verbs_installed
+  dll_overrides
+  components_enabled
+  wine_registry_patches
+  env_vars
+  _wb_prefix_managed_env_keys
+)
 
 # App layer: exclusive keys + cross-cutting
 # overlays: Phase C per-app overlay object (MangoHud / VKBasalt / OptiScaler)
@@ -263,6 +272,41 @@ _wb_gui_settings_set_key() {
                 --arg now "${now_utc}" \
                 --argjson v "${value}" \
                 '.updated_utc = $now | ._wb_overlay_managed_env_keys = $v')"
+            ;;
+        winetricks_verbs_installed)
+            # Phase D: JSON array of verb name strings
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | .winetricks_verbs_installed = $v')"
+            ;;
+        dll_overrides)
+            # Phase D: JSON array of {dll, mode, origin} objects
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | .dll_overrides = $v')"
+            ;;
+        components_enabled)
+            # Phase D: JSON object {dxvk, vkd3d, nvapi} → "on"|"off"|"inherit"
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | .components_enabled = $v')"
+            ;;
+        wine_registry_patches)
+            # Phase D: JSON array of patch records (bounded undo stack)
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | .wine_registry_patches = $v')"
+            ;;
+        _wb_prefix_managed_env_keys)
+            # Phase D: JSON array of env_vars key names owned by Phase D
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | ._wb_prefix_managed_env_keys = $v')"
             ;;
         active)
             # boolean

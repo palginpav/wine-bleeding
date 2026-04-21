@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# fake-winetricks — test fixture for Phase D winetricks integration tests.
+#
+# Test seam environment variables:
+#   WINETRICKS_FAKE_FAIL=1      → exit 1 with "fake failure" on stderr for any verb install
+#   WINETRICKS_FAKE_SLEEP=N     → sleep N seconds before completing (for cancellation tests)
+#   WINEPREFIX                  → path to prefix (for log writes and list-installed)
+#
+# Behavior mirrors real winetricks CLI surface used by run-winetricks.sh.
+
+set -euo pipefail
+
+_fake_log() {
+  local wineprefix="${WINEPREFIX:-/tmp/fake-prefix}"
+  mkdir -p "${wineprefix}"
+  echo "[fake-winetricks] $*" >&2
+}
+
+# Dispatch on first non-option arg
+_mode=""
+_verbs=()
+_force=0
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --version)
+      printf '20260125-fake\n'
+      exit 0
+      ;;
+    --unattended|--no-isolate|--no-clean|--no-self-update)
+      # Accepted silently
+      ;;
+    --force|-f)
+      _force=1
+      ;;
+    list-all)
+      # Print minimal verb catalogue (3 verbs per 2 categories)
+      printf '===== category: dlls =====\n'
+      printf 'vcrun2019              MS Visual C++ 2019 runtime (Microsoft, 2019) [downloadable]\n'
+      printf 'd3dcompiler_43         MS d3dcompiler_43.dll (Microsoft, 2010) [downloadable]\n'
+      printf 'd3dx9_43               MS d3dx9_43.dll from DirectX (Microsoft, 2010) [downloadable]\n'
+      printf '===== category: fonts =====\n'
+      printf 'allfonts               All fonts (various) [downloadable]\n'
+      printf 'arial                  Arial font (Microsoft) [downloadable]\n'
+      printf 'corefonts              MS fonts: Arial, Courier, Times (Microsoft) [downloadable]\n'
+      exit 0
+      ;;
+    list-installed)
+      # Read WINEPREFIX/winetricks.log and emit verb names
+      local_wineprefix="${WINEPREFIX:-/tmp/fake-prefix}"
+      local_log="${local_wineprefix}/winetricks.log"
+      if [[ -f "${local_log}" ]]; then
+        awk '/^[0-9]/ && NF >= 2 { print $2 }' "${local_log}"
+      fi
+      exit 0
+      ;;
+    -*)
+      # Unknown option — ignore silently
+      ;;
+    *)
+      # Verb name
+      _verbs+=("$1")
+      ;;
+  esac
+  shift
+done
+
+# If no verbs, nothing to do
+if [[ "${#_verbs[@]}" -eq 0 ]]; then
+  exit 0
+fi
+
+# Simulate verb installation
+local_wineprefix="${WINEPREFIX:-/tmp/fake-prefix}"
+mkdir -p "${local_wineprefix}"
+
+for _verb in "${_verbs[@]}"; do
+  _fake_log "Installing ${_verb}..."
+
+  # Optional pre-install sleep (for cancellation tests)
+  if [[ -n "${WINETRICKS_FAKE_SLEEP:-}" ]] && [[ "${WINETRICKS_FAKE_SLEEP}" -gt 0 ]]; then
+    sleep "${WINETRICKS_FAKE_SLEEP}"
+  fi
+
+  # Simulated failure
+  if [[ "${WINETRICKS_FAKE_FAIL:-0}" == "1" ]]; then
+    echo "fake failure" >&2
+    exit 1
+  fi
+
+  # Append to winetricks.log (timestamp verb format)
+  local_ts="$(date +%Y%m%d%H%M%S 2>/dev/null || echo "20260420120000")"
+  printf '%s %s\n' "${local_ts}" "${_verb}" >> "${local_wineprefix}/winetricks.log"
+
+  _fake_log "Installed ${_verb} successfully"
+done
+
+exit 0

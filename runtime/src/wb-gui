@@ -87,6 +87,8 @@ _wb_gui_load_libs() {
   source "${_WB_GUI_LIB_DIR}/wb-gui-dist.sh"
   # shellcheck source=wb-gui-lib/wb-gui-overlays.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-prefix.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -901,8 +903,59 @@ _launch_tab_dist() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase D prefix-tab callback functions — called by yad :BTN fields via
+# bash -c in a subshell.  Must source libs themselves and read prefix_id
+# from the exported _WB_PREFIX_TAB_PREFIX_ID env var.
+#
+# Pattern mirrors _wb_overlay_btn_* in Phase C.
+# ---------------------------------------------------------------------------
+
+_wb_prefix_btn_dll_dialog() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"  2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh"            2>/dev/null || return 1
+  local prefix_id="${_WB_PREFIX_TAB_PREFIX_ID:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+  _cmd_prefix_dll_dialog "${prefix_id}"
+}
+export -f _wb_prefix_btn_dll_dialog 2>/dev/null || true
+
+_wb_prefix_btn_winetricks_install() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"  2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh"            2>/dev/null || return 1
+  local prefix_id="${_WB_PREFIX_TAB_PREFIX_ID:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+  _cmd_prefix_winetricks_picker "${prefix_id}" "all"
+}
+export -f _wb_prefix_btn_winetricks_install 2>/dev/null || true
+
+_wb_prefix_btn_winetricks_installed() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"  2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh"            2>/dev/null || return 1
+  local prefix_id="${_WB_PREFIX_TAB_PREFIX_ID:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+  _cmd_prefix_winetricks_installed "${prefix_id}"
+}
+export -f _wb_prefix_btn_winetricks_installed 2>/dev/null || true
+
+_wb_prefix_btn_reg_dialog() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"  2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh"            2>/dev/null || return 1
+  local prefix_id="${_WB_PREFIX_TAB_PREFIX_ID:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+  _cmd_prefix_reg_browser "${prefix_id}"
+}
+export -f _wb_prefix_btn_reg_dialog 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # _launch_tab_prefix <yad_key> <prefix_id_or_empty> <pipe_file>
-# Launch Tab 3 (Prefix) child plug.
+# Launch Tab 3 (Prefix) child plug — Phase D: 4 stacked :FL expanders
+# (Components, DLL Overrides, Winetricks Verbs, Registry Editor) above
+# the existing General block.  Field index follows P1–P41 from
+# w2-prefix-panel-wireframe.md.
 # ---------------------------------------------------------------------------
 _launch_tab_prefix() {
   local yad_key="${1}"
@@ -919,13 +972,12 @@ _launch_tab_prefix() {
     return
   fi
 
-  # Load prefix values
+  # ── General (Phase A) fields ─────────────────────────────────────────────
   local winver_cur debug_cur notes_cur
   winver_cur="$(wb_gui_settings_get_prefix "${prefix_id}" win_version 2>/dev/null || true)"
   debug_cur="$(wb_gui_settings_get_prefix "${prefix_id}" wine_debug 2>/dev/null || true)"
   notes_cur="$(wb_gui_settings_get_prefix "${prefix_id}" notes 2>/dev/null || true)"
 
-  # Phase-A inherited hint: from general layer only (F11 note)
   local inherited_winver inherited_debug
   inherited_winver="$(wb_gui_settings_get_general win_version 2>/dev/null || true)"
   [[ -z "${inherited_winver}" ]] && inherited_winver="win10"
@@ -940,13 +992,174 @@ _launch_tab_prefix() {
 
   local winver_opts
   winver_opts="$(_settings_build_winver_combo "${winver_cur}" "${inherited_winver_label}")"
-
-  # For the TEXT field: if there's a concrete value, show it; otherwise empty (inherit)
   local debug_field_val="${debug_cur}"
 
+  # ── Phase D: Components (P1–P7) ─────────────────────────────────────────
+  # Load current component states from prefix settings JSON
+  local settings_json
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+
+  local dxvk_state vkd3d_state nvapi_state
+  dxvk_state="$(printf '%s' "${settings_json}" | jq -r '.components_enabled.dxvk // "inherit"' 2>/dev/null || echo "inherit")"
+  vkd3d_state="$(printf '%s' "${settings_json}" | jq -r '.components_enabled.vkd3d // "inherit"' 2>/dev/null || echo "inherit")"
+  nvapi_state="$(printf '%s' "${settings_json}" | jq -r '.components_enabled.nvapi // "inherit"' 2>/dev/null || echo "inherit")"
+
+  # Build combobox values: current state first (yad selects first item)
+  _wb_prefix_comp_cb() {
+    local cur="$1"
+    case "${cur}" in
+      on)      printf 'on!off!inherit' ;;
+      off)     printf 'off!on!inherit' ;;
+      inherit) printf 'inherit!on!off' ;;
+      *)       printf 'inherit!on!off' ;;
+    esac
+  }
+  local dxvk_cb vkd3d_cb nvapi_cb
+  dxvk_cb="$(_wb_prefix_comp_cb "${dxvk_state}")"
+  vkd3d_cb="$(_wb_prefix_comp_cb "${vkd3d_state}")"
+  nvapi_cb="$(_wb_prefix_comp_cb "${nvapi_state}")"
+
+  # Dist-default hints via wb_config_load in subshell (M3: show effective launch value)
+  local wb_home
+  wb_home="$(_wb_gui_prefix_wb_home 2>/dev/null || printf '%s' "${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}")"
+  local prefix_path="${wb_home}/prefixes/${prefix_id}"
+  local prefix_conf="${prefix_path}/wb.conf"
+
+  _wb_prefix_comp_hint() {
+    local comp="$1" cur_state="$2" wb_var="$3"
+    local eff_val
+    # Read effective value from wb.conf (best-effort; falls back to "auto")
+    if [[ -f "${prefix_conf}" ]]; then
+      eff_val="$(grep -m1 "^${wb_var}=" "${prefix_conf}" 2>/dev/null | cut -d= -f2-)" || true
+    fi
+    if [[ -z "${eff_val}" ]]; then
+      # Check dist-level: try active dist runtime.conf
+      local rt_conf="${wb_home}/etc/runtime.conf"
+      [[ -f "${rt_conf}" ]] && eff_val="$(grep -m1 "^${wb_var}=" "${rt_conf}" 2>/dev/null | cut -d= -f2-)" || true
+    fi
+    [[ -z "${eff_val}" ]] && eff_val="auto"
+    case "${cur_state}" in
+      inherit) printf 'dist default: %s' "${eff_val}" ;;
+      on)      printf 'overriding dist default: %s' "${eff_val}" ;;
+      off)     printf 'overriding dist default: %s' "${eff_val}" ;;
+    esac
+  }
+  local dxvk_hint vkd3d_hint nvapi_hint
+  dxvk_hint="$(_wb_prefix_comp_hint dxvk "${dxvk_state}" WB_DXVK)"
+  vkd3d_hint="$(_wb_prefix_comp_hint vkd3d "${vkd3d_state}" WB_VKD3D)"
+  nvapi_hint="$(_wb_prefix_comp_hint nvapi "${nvapi_state}" WB_NVAPI)"
+
+  # ── Phase D: DLL Overrides summary (P8–P10) ──────────────────────────────
+  local dll_overrides_json dll_summary
+  dll_overrides_json="$(printf '%s' "${settings_json}" | jq '.dll_overrides // []' 2>/dev/null || echo '[]')"
+  local dll_count
+  dll_count="$(printf '%s' "${dll_overrides_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [[ "${dll_count}" -eq 0 ]]; then
+    dll_summary="No overrides set"
+  else
+    local dll_preview
+    dll_preview="$(printf '%s' "${dll_overrides_json}" | jq -r '
+      [ .[:3][] | .dll + "=" + .mode ] | join(", ")
+    ' 2>/dev/null || true)"
+    [[ "${dll_count}" -gt 3 ]] && dll_preview="${dll_preview}, ..."
+    dll_summary="${dll_count} override(s): ${dll_preview}"
+  fi
+
+  # ── Phase D: Winetricks summary (P11–P13) ────────────────────────────────
+  local wt_summary
+  # Check if winetricks is available
+  local wt_available=1
+  command -v winetricks >/dev/null 2>&1 || wt_available=0
+  [[ -n "${WB_TEST_WT_FIXTURE:-}" ]] && wt_available=1
+
+  local wt_installed_json
+  wt_installed_json="$(printf '%s' "${settings_json}" | jq '.winetricks_verbs_installed // []' 2>/dev/null || echo '[]')"
+  local wt_count
+  wt_count="$(printf '%s' "${wt_installed_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [[ "${wt_available}" -eq 0 ]]; then
+    wt_summary="[!] winetricks not found — install via distro package manager"
+  elif [[ "${wt_count}" -eq 0 ]]; then
+    wt_summary="No verbs installed"
+  else
+    wt_summary="${wt_count} verb(s) installed"
+  fi
+
+  # ── Phase D: Registry undo stack summary (P14–P16) ───────────────────────
+  local undo_stack_json undo_depth undo_summary
+  undo_stack_json="$(printf '%s' "${settings_json}" | jq '.wine_registry_patches // []' 2>/dev/null || echo '[]')"
+  undo_depth="$(printf '%s' "${undo_stack_json}" | jq 'length' 2>/dev/null || echo 0)"
+  if [[ "${undo_depth}" -eq 0 ]]; then
+    undo_summary="No undoable changes"
+  else
+    undo_summary="${undo_depth} / 10 changes undoable"
+  fi
+
+  # ── Export context for :BTN callbacks ────────────────────────────────────
+  export _WB_PREFIX_TAB_PREFIX_ID="${prefix_id}"
+  export _WB_GUI_LIB_DIR
+  export _WB_LIB_DIR
+  export -f _wb_prefix_btn_dll_dialog 2>/dev/null || true
+  export -f _wb_prefix_btn_winetricks_install 2>/dev/null || true
+  export -f _wb_prefix_btn_winetricks_installed 2>/dev/null || true
+  export -f _wb_prefix_btn_reg_dialog 2>/dev/null || true
+
+  # ── Build the plug form ───────────────────────────────────────────────────
+  # Field order (pipe-separated output):
+  #  1  FL_COMPONENTS (bool)
+  #  2  DXVK_CB       3  DXVK_RO(ignored)
+  #  4  VKD3D_CB      5  VKD3D_RO(ignored)
+  #  6  NVAPI_CB      7  NVAPI_RO(ignored)
+  #  8  FL_DLL(bool)  9  DLL_RO(ignored)  10 DLL_BTN(ignored)
+  #  11 FL_WT(bool)   12 WT_RO(ignored)   13 WT_INSTALL_BTN  14 WT_VIEW_BTN
+  #  15 FL_REG(bool)  16 REG_RO(ignored)  17 REG_BTN
+  #  18 SEP_LBL       19 GEN_LBL
+  #  20 WINVER_CB     21 WINVER_RO(ignored)
+  #  22 DEBUG_TEXT    23 DEBUG_RO(ignored)
+  #  24 NOTES_TXT
   yad --plug="${yad_key}" --tabnum=3 \
     --form --separator="|" --no-markup \
-    --text="Editing prefix: ${prefix_id}. Leave a field blank to use the inherited value shown above." \
+    --text="Prefix: ${prefix_id}. Use expanders below to customize. General settings at the bottom." \
+    \
+    --field="Components (per-prefix override):FL" \
+      "TRUE" \
+    --field="DXVK:CB" \
+      "${dxvk_cb}" \
+    --field="  \xe2\x86\xb3 ${dxvk_hint}:RO" \
+      "" \
+    --field="VKD3D:CB" \
+      "${vkd3d_cb}" \
+    --field="  \xe2\x86\xb3 ${vkd3d_hint}:RO" \
+      "" \
+    --field="NVAPI:CB" \
+      "${nvapi_cb}" \
+    --field="  \xe2\x86\xb3 ${nvapi_hint}:RO" \
+      "" \
+    \
+    --field="DLL Overrides (prefix-scoped):FL" \
+      "FALSE" \
+    --field="  Current overrides:RO" \
+      "${dll_summary}" \
+    --field="  Manage DLL overrides:BTN" \
+      "_wb_prefix_btn_dll_dialog" \
+    \
+    --field="Winetricks Verbs (install runtimes & libraries):FL" \
+      "FALSE" \
+    --field="  Installed:RO" \
+      "${wt_summary}" \
+    --field="  Install verbs:BTN" \
+      "_wb_prefix_btn_winetricks_install" \
+    --field="  View installed:BTN" \
+      "_wb_prefix_btn_winetricks_installed" \
+    \
+    --field="Registry Editor:FL" \
+      "FALSE" \
+    --field="  Undo stack:RO" \
+      "${undo_summary}" \
+    --field="  Open registry editor:BTN" \
+      "_wb_prefix_btn_reg_dialog" \
+    \
+    --field=":LBL" "" \
+    --field="\xe2\x94\x80\xe2\x94\x80 General \xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80:LBL" "" \
     --field="Windows version:CB" \
       "${winver_opts}" \
     --field="  Inherited from general: ${inherited_winver_label}:RO" \
@@ -959,6 +1172,1093 @@ _launch_tab_prefix() {
       "${notes_cur}" \
     > "${pipe_file}" 2>/dev/null &
   echo "$!"
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_dll_dialog <prefix_id>
+# DLL Overrides editor — child dialog spawned by the Prefix tab BTN callback.
+# Writes atomically to prefix settings JSON on Apply; does NOT wait for the
+# parent Save button (per W2 Phase D "child dialogs are mini-transactions").
+# ---------------------------------------------------------------------------
+_cmd_prefix_dll_dialog() {
+  local prefix_id="${1:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+
+  # Preset DLL list (per w2-prefix-panel-wireframe.md §3)
+  local -a _WB_DLL_PRESETS=(
+    d3d8 d3d9 d3d10 d3d11 dxgi dinput8 dinput ddraw
+    xinput1_3 xaudio2_7 dsound msvcp140 msvcr120 msvcr100
+    nvapi nvapi64 vcruntime140 dxvk_config
+  )
+
+  # Mode label → internal mode mapping
+  _wb_dll_label_to_mode() {
+    case "$1" in
+      "Native")           printf 'native'  ;;
+      "Builtin"):         printf 'builtin' ;;
+      "Native, Builtin"): printf 'n,b'     ;;
+      "Builtin, Native"): printf 'b,n'     ;;
+      "Disabled"):        printf 'disabled';;
+      *):                 printf ''        ;;
+    esac
+  }
+
+  _wb_dll_mode_to_label() {
+    case "$1" in
+      native):   printf 'Native'           ;;
+      builtin):  printf 'Builtin'          ;;
+      n,b):      printf 'Native, Builtin'  ;;
+      b,n):      printf 'Builtin, Native'  ;;
+      disabled): printf 'Disabled'         ;;
+      *):        printf '(not overridden)' ;;
+    esac
+  }
+
+  _wb_dll_cb_opts() {
+    local cur_label="$1"
+    # Build combobox: current first, then remaining options
+    local -a opts=("(not overridden)" "Native" "Builtin" "Native, Builtin" "Builtin, Native" "Disabled")
+    local result="${cur_label}"
+    local o
+    for o in "${opts[@]}"; do
+      [[ "${o}" == "${cur_label}" ]] && continue
+      result="${result}!${o}"
+    done
+    printf '%s' "${result}"
+  }
+
+  local settings_json
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  local dll_overrides_json
+  dll_overrides_json="$(printf '%s' "${settings_json}" | jq '.dll_overrides // []' 2>/dev/null || echo '[]')"
+
+  # Build field args for preset DLLs
+  local -a field_args=()
+  field_args+=(--field=":LBL" "── Preset DLLs ──")
+  local dll
+  for dll in "${_WB_DLL_PRESETS[@]}"; do
+    local cur_mode cur_label cb_opts
+    cur_mode="$(printf '%s' "${dll_overrides_json}" | jq -r --arg d "${dll}" \
+      'map(select(.dll==$d)) | .[0].mode // ""' 2>/dev/null || true)"
+    cur_label="$(_wb_dll_mode_to_label "${cur_mode}")"
+    cb_opts="$(_wb_dll_cb_opts "${cur_label}")"
+    field_args+=(--field="${dll}:CB" "${cb_opts}")
+  done
+
+  # Build custom DLL fields
+  local custom_dlls_json
+  custom_dlls_json="$(printf '%s' "${dll_overrides_json}" | jq \
+    '[.[] | select(.origin=="user")]' 2>/dev/null || echo '[]')"
+
+  field_args+=(--field=":LBL" "── Custom DLLs ──")
+
+  local custom_count custom_idx
+  custom_count="$(printf '%s' "${custom_dlls_json}" | jq 'length' 2>/dev/null || echo 0)"
+  for (( custom_idx=0; custom_idx < custom_count; custom_idx++ )); do
+    local cdll cmode clabel copts
+    cdll="$(printf '%s' "${custom_dlls_json}" | jq -r --argjson i "${custom_idx}" '.[$i].dll' 2>/dev/null || true)"
+    cmode="$(printf '%s' "${custom_dlls_json}" | jq -r --argjson i "${custom_idx}" '.[$i].mode' 2>/dev/null || true)"
+    clabel="$(_wb_dll_mode_to_label "${cmode}")"
+    copts="$(_wb_dll_cb_opts "${clabel}")"
+    field_args+=(--field="${cdll} (custom):CB" "${copts}")
+    # Remove button for custom DLLs — writes immediately via export
+    # (yad BTN in child dialog not exported; we skip remove in this context
+    # and handle it via the "not overridden" mode selection)
+  done
+
+  field_args+=(--field=":LBL" "── Effective override string (preview updates after Apply) ──")
+  local effective_str
+  effective_str="$(printf '%s' "${dll_overrides_json}" | jq -r '
+    [.[] | select(.mode != "") | .dll + "=" + (
+      if .mode == "native"   then "n"
+      elif .mode == "builtin" then "b"
+      elif .mode == "n,b"    then "n,b"
+      elif .mode == "b,n"    then "b,n"
+      elif .mode == "disabled" then ""
+      else .mode end
+    )] | join(";")
+  ' 2>/dev/null || true)"
+  [[ -z "${effective_str}" ]] && effective_str="(none)"
+  field_args+=(--field="  Result:RO" "${effective_str}")
+
+  # Launch the dialog
+  local dlg_out dlg_rc=0
+  dlg_out="$(wb_gui_yad \
+    --title="DLL Overrides -- Prefix: ${prefix_id}" \
+    --width=700 \
+    --form --separator="|" --no-markup \
+    --text="Prefix-scoped DLL overrides. Applied at launch after component DLLs (DXVK/VKD3D/NVAPI).
+Mode: Native = Windows DLL, Builtin = Wine DLL." \
+    "${field_args[@]}" \
+    --button="Cancel:1" \
+    --button="Save overrides:0" 2>/dev/null)" || dlg_rc=$?
+
+  [[ "${dlg_rc}" -ne 0 ]] && return 0
+
+  # Parse output: skip LBL, RO fields — count only CB fields in order
+  IFS='|' read -ra fields <<< "${dlg_out}"
+
+  # field_args layout: LBL, then N * (CB), then LBL, custom CBs, LBL, RO
+  # Output order matches field_args order. We need to pick out just the CB values.
+  # Index in output: 0=LBL, 1..N=preset CBs, N+1=LBL, N+2..=custom CBs, ...
+  local preset_count="${#_WB_DLL_PRESETS[@]}"
+  local out_idx=1  # skip first LBL at output index 0
+
+  # Apply preset overrides
+  local pi
+  for (( pi=0; pi < preset_count; pi++ )); do
+    local label_val="${fields[${out_idx}]:-}"
+    local mode_val
+    mode_val="$(_wb_dll_label_to_mode "${label_val}")"
+    local dll_name="${_WB_DLL_PRESETS[${pi}]}"
+    if [[ -n "${mode_val}" ]]; then
+      wb_gui_prefix_dll_set "${prefix_id}" "${dll_name}" "${mode_val}" "preset" 2>/dev/null || true
+    else
+      # "(not overridden)" — remove from overrides
+      wb_gui_prefix_dll_remove "${prefix_id}" "${dll_name}" 2>/dev/null || true
+    fi
+    out_idx=$(( out_idx + 1 ))
+  done
+
+  # Skip custom DLL LBL field
+  out_idx=$(( out_idx + 1 ))
+
+  # Apply custom DLL changes
+  for (( custom_idx=0; custom_idx < custom_count; custom_idx++ )); do
+    local clabel_val="${fields[${out_idx}]:-}"
+    local cmode_val
+    cmode_val="$(_wb_dll_label_to_mode "${clabel_val}")"
+    local cdll_name
+    cdll_name="$(printf '%s' "${custom_dlls_json}" | jq -r --argjson i "${custom_idx}" '.[$i].dll' 2>/dev/null || true)"
+    if [[ -n "${cmode_val}" && -n "${cdll_name}" ]]; then
+      wb_gui_prefix_dll_set "${prefix_id}" "${cdll_name}" "${cmode_val}" "user" 2>/dev/null || true
+    elif [[ -n "${cdll_name}" ]]; then
+      wb_gui_prefix_dll_remove "${prefix_id}" "${cdll_name}" 2>/dev/null || true
+    fi
+    out_idx=$(( out_idx + 1 ))
+  done
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_winetricks_picker <prefix_id> <category>
+# Verb picker dialog — category tabs implemented as buttons that relaunch
+# this function filtered to a given category.
+# ---------------------------------------------------------------------------
+_cmd_prefix_winetricks_picker() {
+  local prefix_id="${1:-}"
+  local active_cat="${2:-all}"
+  [[ -z "${prefix_id}" ]] && return 1
+
+  # Guard: winetricks must be available
+  if ! command -v winetricks >/dev/null 2>&1 && [[ -z "${WB_TEST_WT_FIXTURE:-}" ]]; then
+    wb_gui_dialog_error "Winetricks unavailable" \
+      "Winetricks not found on this system.
+
+What happened: the 'winetricks' binary was not found in PATH.
+Why: it is not installed.
+Next steps: install via your distro package manager (e.g. 'dnf install winetricks', 'apt install winetricks')."
+    return 1
+  fi
+
+  # Load available verbs (may take a moment on cache miss)
+  local raw_verbs
+  raw_verbs="$(wb_gui_prefix_winetricks_available 2>/dev/null || true)"
+  if [[ -z "${raw_verbs}" ]]; then
+    wb_gui_dialog_error "Winetricks" "Unable to retrieve verb catalogue. Check that winetricks is installed and working."
+    return 1
+  fi
+
+  # Load installed verbs for [installed] marker
+  local settings_json installed_verbs_json
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  installed_verbs_json="$(printf '%s' "${settings_json}" | jq '.winetricks_verbs_installed // []' 2>/dev/null || echo '[]')"
+
+  # Filter by category
+  local filtered_verbs
+  if [[ "${active_cat}" == "all" ]]; then
+    filtered_verbs="${raw_verbs}"
+  else
+    filtered_verbs="$(printf '%s' "${raw_verbs}" | grep "^[^|]*|${active_cat}|" 2>/dev/null || true)"
+  fi
+
+  # Build picker rows: FALSE "<verb>" "<category>" "<description>"
+  local -a picker_rows=()
+  while IFS='|' read -r verb cat desc; do
+    [[ -z "${verb}" ]] && continue
+    local is_installed
+    is_installed="$(printf '%s' "${installed_verbs_json}" | jq --arg v "${verb}" \
+      'index($v) != null' 2>/dev/null || echo "false")"
+    if [[ "${is_installed}" == "true" ]]; then
+      desc="[installed] ${desc}"
+    fi
+    picker_rows+=(FALSE "${verb}" "${cat}" "${desc}")
+  done <<< "${filtered_verbs}"
+
+  # Relaunch helpers — exported so category buttons can call them
+  export _WB_PREFIX_PICKER_PREFIX_ID="${prefix_id}"
+  export _WB_GUI_LIB_DIR _WB_LIB_DIR
+
+  _wb_picker_relaunch_all()        { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "all"; }
+  _wb_picker_relaunch_dlls()       { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "dlls"; }
+  _wb_picker_relaunch_fonts()      { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "fonts"; }
+  _wb_picker_relaunch_settings()   { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "settings"; }
+  _wb_picker_relaunch_apps()       { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "apps"; }
+  _wb_picker_relaunch_benchmarks() { source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "benchmarks"; }
+  _wb_picker_cache_invalidate()    { rm -f "${TMPDIR:-/tmp}/wb-gui-winetricks-cache.${USER:-nobody}" 2>/dev/null || true; source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null; source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh" 2>/dev/null; source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null; _cmd_prefix_winetricks_picker "${_WB_PREFIX_PICKER_PREFIX_ID}" "all"; }
+  export -f _wb_picker_relaunch_all _wb_picker_relaunch_dlls _wb_picker_relaunch_fonts 2>/dev/null || true
+  export -f _wb_picker_relaunch_settings _wb_picker_relaunch_apps _wb_picker_relaunch_benchmarks 2>/dev/null || true
+  export -f _wb_picker_cache_invalidate 2>/dev/null || true
+
+  local picker_out picker_rc=0
+  picker_out="$(wb_gui_yad \
+    --list --checklist \
+    --title="Winetricks -- Install verbs" \
+    --width=800 --height=550 \
+    --no-markup \
+    --separator='|' \
+    --search-column=2 \
+    --text="Select verbs to install into prefix '${prefix_id}'. Already-installed verbs shown with [installed] label." \
+    --column="Install:CHK" \
+    --column="Verb" \
+    --column="Category" \
+    --column="Description" \
+    "${picker_rows[@]}" \
+    --button="All:_wb_picker_relaunch_all" \
+    --button="dlls:_wb_picker_relaunch_dlls" \
+    --button="fonts:_wb_picker_relaunch_fonts" \
+    --button="settings:_wb_picker_relaunch_settings" \
+    --button="apps:_wb_picker_relaunch_apps" \
+    --button="benchmarks:_wb_picker_relaunch_benchmarks" \
+    --button="Refresh catalogue:_wb_picker_cache_invalidate" \
+    --button="Cancel:1" \
+    --button="Install selected:0" \
+    2>/dev/null)" || picker_rc=$?
+
+  [[ "${picker_rc}" -ne 0 ]] && return 0
+
+  # Collect selected verbs (column 2 of rows where CHK=TRUE)
+  local -a selected_verbs=()
+  while IFS='|' read -r chk verb _rest; do
+    [[ "${chk}" == "TRUE" && -n "${verb}" ]] && selected_verbs+=("${verb}")
+  done <<< "${picker_out}"
+
+  [[ "${#selected_verbs[@]}" -eq 0 ]] && return 0
+
+  # Long-verb pre-check (w2-prefix-ux-flows.md Flow 1 Step 4)
+  local -a long_verbs=(dotnet48 mf mfc42 vcrun6sp6 dotnetdesktop7 dotnet6)
+  local -a matched_long=()
+  local sv lv
+  for sv in "${selected_verbs[@]}"; do
+    for lv in "${long_verbs[@]}"; do
+      [[ "${sv}" == "${lv}" ]] && matched_long+=("${sv}") && break
+    done
+  done
+
+  if [[ "${#matched_long[@]}" -gt 0 ]]; then
+    local long_list
+    long_list="$(printf '%s\n' "${matched_long[@]}" | sed 's/^/  /')"
+    local long_rc=0
+    wb_gui_dialog_question \
+      "Long install warning" \
+      "The following verbs typically take 20+ minutes to install:
+
+${long_list}
+
+Wine will appear busy during installation. Make sure no game is running in this prefix.
+
+Continue?" \
+      "Continue" "Cancel" 2>/dev/null || long_rc=$?
+    [[ "${long_rc}" -ne 0 ]] && return 0
+  fi
+
+  # Check for already-installed verbs — offer skip option (B3 resolution)
+  local -a already_installed=()
+  for sv in "${selected_verbs[@]}"; do
+    local is_inst
+    is_inst="$(printf '%s' "${installed_verbs_json}" | jq --arg v "${sv}" \
+      'index($v) != null' 2>/dev/null || echo "false")"
+    [[ "${is_inst}" == "true" ]] && already_installed+=("${sv}")
+  done
+
+  if [[ "${#already_installed[@]}" -gt 0 ]]; then
+    local inst_list
+    inst_list="$(printf '%s\n' "${already_installed[@]}" | sed 's/^/  /')"
+    local reinstall_rc=0
+    wb_gui_yad \
+      --title="Already installed" \
+      --no-markup \
+      --image=dialog-question \
+      --text="The following verbs are already installed:
+
+${inst_list}
+
+Selecting them will re-install (overwrite) their effects. Proceed?" \
+      --button="Re-install:0" \
+      --button="Skip already-installed:10" \
+      --button="Cancel:1" 2>/dev/null || reinstall_rc=$?
+    case "${reinstall_rc}" in
+      10)
+        # Remove already-installed from selected set
+        local -a filtered_selected=()
+        for sv in "${selected_verbs[@]}"; do
+          local skip=0
+          for ai in "${already_installed[@]}"; do
+            [[ "${sv}" == "${ai}" ]] && skip=1 && break
+          done
+          [[ "${skip}" -eq 0 ]] && filtered_selected+=("${sv}")
+        done
+        selected_verbs=("${filtered_selected[@]}")
+        [[ "${#selected_verbs[@]}" -eq 0 ]] && return 0
+        ;;
+      1|252) return 0 ;;
+    esac
+  fi
+
+  # Install selected verbs via winetricks install + log-tail dialog
+  local verb_list_display
+  verb_list_display="$(printf '%s, ' "${selected_verbs[@]}")"
+  verb_list_display="${verb_list_display%, }"
+
+  # Open progress log pipe
+  local log_fifo
+  log_fifo="$(mktemp -u "${TMPDIR:-/tmp}/wb-wt-log-XXXXXX")"
+  mkfifo "${log_fifo}"
+
+  # Launch installer for each verb (run-winetricks.sh supports one verb at a time)
+  local install_pids=()
+  local sv
+  for sv in "${selected_verbs[@]}"; do
+    local wt_pid
+    wt_pid="$(wb_gui_prefix_winetricks_install "${prefix_id}" "${sv}" 2>/dev/null)" || {
+      wb_gui_dialog_error "Winetricks" "Failed to start winetricks for verb '${sv}'.
+
+What happened: wb_gui_prefix_winetricks_install returned an error.
+Why: run-winetricks.sh may be missing or not executable.
+Next steps: verify wine-bleeding installation."
+      rm -f "${log_fifo}"
+      return 1
+    }
+    install_pids+=("${wt_pid}")
+    # Redirect background output to fifo
+    ( cat /proc/"${wt_pid}"/fd/1 2>/dev/null >> "${log_fifo}" ) &
+  done
+
+  # Show log-tail dialog — auto-closes when all installs finish
+  _wb_wt_log_tail_auto "${verb_list_display}" "${log_fifo}" "${install_pids[@]}"
+  local tail_rc=$?
+  rm -f "${log_fifo}"
+
+  # Reconcile installed verbs list
+  wb_gui_prefix_winetricks_reconcile "${prefix_id}" 2>/dev/null || true
+
+  case "${tail_rc}" in
+    0)
+      wb_gui_dialog_info "Winetricks" "Installed verb(s) successfully: ${verb_list_display}."
+      ;;
+    2)
+      wb_gui_dialog_info "Winetricks" "Install cancelled. Prefix state may be partially modified; re-run to retry."
+      ;;
+    *)
+      wb_gui_dialog_error "Winetricks" "One or more verbs may have failed. See the log for details.
+
+What happened: winetricks install returned exit code ${tail_rc}.
+Why: the verb download or installation step failed.
+Next steps: re-run to retry, or check the prefix's winetricks.log for details."
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _wb_wt_log_tail_auto <title_suffix> <log_fifo> <pid> [<pid> ...]
+# Show wb_gui_dialog_log_tail and poll for all PIDs exiting.
+# Auto-closes when all install PIDs finish (Phase B P1 auto-close pattern).
+# Cancel button sends SIGTERM to all PIDs → 5s watchdog → SIGKILL.
+# Returns: 0=all done, 2=cancelled, non-zero=error.
+# ---------------------------------------------------------------------------
+_wb_wt_log_tail_auto() {
+  local title_suffix="${1}"
+  local log_fifo="${2}"
+  shift 2
+  local -a pids=("$@")
+
+  # Background watcher: kills the yad dialog when all pids finish
+  local watcher_fifo
+  watcher_fifo="$(mktemp -u "${TMPDIR:-/tmp}/wb-wt-watcher-XXXXXX")"
+  mkfifo "${watcher_fifo}"
+
+  (
+    # Wait for all pids
+    local p all_done=0
+    while [[ "${all_done}" -eq 0 ]]; do
+      all_done=1
+      for p in "${pids[@]}"; do
+        kill -0 "${p}" 2>/dev/null && all_done=0 && break
+      done
+      [[ "${all_done}" -eq 0 ]] && sleep 0.5
+    done
+    # Signal: write "done" to watcher_fifo to let main loop know
+    printf 'done\n' > "${watcher_fifo}"
+  ) &
+  local watcher_pid=$!
+
+  # Read the yad log-tail in a subshell so we can kill it when done
+  local yad_pid log_rc=0
+
+  wb_gui_yad \
+    --text-info \
+    --tail \
+    --filename="${log_fifo}" \
+    --title="Winetricks -- Installing: ${title_suffix}" \
+    --width=800 \
+    --height=500 \
+    --no-markup \
+    --button="Cancel install:1" 2>/dev/null &
+  yad_pid=$!
+
+  # Wait for either watcher (done) or yad to exit
+  while true; do
+    # Non-blocking check: is yad still alive?
+    if ! kill -0 "${yad_pid}" 2>/dev/null; then
+      log_rc=1  # User closed/cancelled
+      break
+    fi
+    # Non-blocking read from watcher_fifo
+    if read -r -t 0.3 _done_signal < "${watcher_fifo}" 2>/dev/null; then
+      # All installs done — kill yad
+      kill "${yad_pid}" 2>/dev/null || true
+      log_rc=0
+      break
+    fi
+  done
+
+  kill "${watcher_pid}" 2>/dev/null || true
+  rm -f "${watcher_fifo}"
+
+  if [[ "${log_rc}" -ne 0 ]]; then
+    # Cancel: SIGTERM all install pids, 5s watchdog, SIGKILL
+    local p
+    for p in "${pids[@]}"; do
+      kill -TERM -- "-${p}" 2>/dev/null || kill -TERM "${p}" 2>/dev/null || true
+    done
+    local waited=0
+    while [[ "${waited}" -lt 50 ]]; do
+      local all_gone=1
+      for p in "${pids[@]}"; do
+        kill -0 "${p}" 2>/dev/null && all_gone=0 && break
+      done
+      [[ "${all_gone}" -eq 1 ]] && break
+      sleep 0.1
+      waited=$(( waited + 1 ))
+    done
+    # Force-kill if still alive
+    for p in "${pids[@]}"; do
+      kill -KILL -- "-${p}" 2>/dev/null || kill -KILL "${p}" 2>/dev/null || true
+    done
+    return 2  # Cancelled
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_winetricks_installed <prefix_id>
+# Show a dialog listing installed verbs with cleanup hints per row.
+# No Remove button — per W1/W2 design decision.
+# ---------------------------------------------------------------------------
+_cmd_prefix_winetricks_installed() {
+  local prefix_id="${1:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+
+  # Reconcile first
+  wb_gui_prefix_winetricks_reconcile "${prefix_id}" 2>/dev/null || true
+
+  local settings_json installed_json
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  installed_json="$(printf '%s' "${settings_json}" | jq '.winetricks_verbs_installed // []' 2>/dev/null || echo '[]')"
+
+  local verb_count
+  verb_count="$(printf '%s' "${installed_json}" | jq 'length' 2>/dev/null || echo 0)"
+
+  if [[ "${verb_count}" -eq 0 ]]; then
+    wb_gui_dialog_info "Winetricks -- Installed verbs" \
+      "No verbs installed in prefix '${prefix_id}'."
+    return 0
+  fi
+
+  # Build list rows: verb | category (from cache if available) | installed date
+  local -a list_rows=()
+  while IFS= read -r verb; do
+    [[ -z "${verb}" ]] && continue
+    # Look up category from cache
+    local cat="unknown"
+    local cache_file="${TMPDIR:-/tmp}/wb-gui-winetricks-cache.${USER:-nobody}"
+    if [[ -f "${cache_file}" ]]; then
+      local cache_line
+      cache_line="$(grep "^${verb}|" "${cache_file}" 2>/dev/null | head -1 || true)"
+      if [[ -n "${cache_line}" ]]; then
+        IFS='|' read -r _v cat _d <<< "${cache_line}"
+      fi
+    fi
+    list_rows+=("${verb}" "${cat}" "installed")
+  done < <(printf '%s' "${installed_json}" | jq -r '.[]' 2>/dev/null)
+
+  # Export prefix id for cleanup hint button
+  export _WB_PREFIX_CLEANUP_PREFIX_ID="${prefix_id}"
+  export _WB_GUI_LIB_DIR _WB_LIB_DIR
+
+  local list_rc=0
+  wb_gui_yad \
+    --list \
+    --title="Winetricks -- Installed verbs in prefix '${prefix_id}'" \
+    --width=700 --height=450 \
+    --no-markup \
+    --column="Verb" \
+    --column="Category" \
+    --column="Status" \
+    --text="Winetricks has no generic uninstall. To remove a verb's effects, use Wine's Add/Remove Programs (inside the prefix) or delete the prefix. The 'Remove' button is intentionally absent — see [How to remove] per row for verb-specific guidance." \
+    "${list_rows[@]}" \
+    --button="Refresh:10" \
+    --button="How to remove (selected):20" \
+    --button="Close:1" 2>/dev/null || list_rc=$?
+
+  case "${list_rc}" in
+    10) _cmd_prefix_winetricks_installed "${prefix_id}" ;;
+    20)
+      wb_gui_dialog_info "How to remove a verb" \
+        "Winetricks has no generic verb uninstall.
+
+To remove a verb's effects:
+  1. Run: wine control  (from a terminal with WINEPREFIX set to this prefix)
+  2. Open Add/Remove Programs
+  3. Find the installed program and uninstall it.
+
+Alternatively:
+  - For font verbs: delete the font files from drive_c/windows/Fonts/
+  - For settings verbs (e.g. 'settings win7'): run the opposite verb (e.g. 'settings default')
+  - For a guaranteed clean state: delete the prefix and recreate it.
+
+Winetricks does not support generic verb uninstall. This information is provided to help you clean up manually."
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_reg_browser <prefix_id>
+# Two-pane registry browser: key tree (left) + value list (right).
+# Detects yad TREE support; falls back to ASCII-indent list if unavailable.
+# ---------------------------------------------------------------------------
+_cmd_prefix_reg_browser() {
+  local prefix_id="${1:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+
+  # Detect yad TREE capability (M4 fallback)
+  local yad_has_tree=0
+  if yad --help-all 2>/dev/null | grep -q -- '--tree\|:TREE'; then
+    yad_has_tree=1
+  fi
+
+  # Initial key to show — HKCU\Software\Wine expanded by default
+  local current_key="HKCU\\Software\\Wine"
+
+  # Read initial tree structure
+  local reg_json reg_rc=0
+  reg_json="$(wb_gui_prefix_reg_read "${prefix_id}" "${current_key}" 2>/dev/null)" || reg_rc=$?
+
+  if [[ "${reg_rc}" -ne 0 || -z "${reg_json}" ]]; then
+    wb_gui_dialog_error "Registry Editor" \
+      "Unable to read registry — the prefix may not have been initialized, or Wine has encountered an error.
+
+What happened: 'wine reg query' failed for key: ${current_key}
+Why: the prefix Wine registry may be corrupted or uninitialized.
+Next steps: run 'wb prefix init ${prefix_id}' to reinitialize, or check the WINEDEBUG log for Wine errors."
+    return 1
+  fi
+
+  # Build the browser loop — navigate by re-querying on key selection
+  _cmd_prefix_reg_browser_loop "${prefix_id}" "${current_key}" "${yad_has_tree}"
+}
+
+_cmd_prefix_reg_browser_loop() {
+  local prefix_id="${1}"
+  local current_key="${2}"
+  local yad_has_tree="${3}"
+
+  # Read key data
+  local reg_json reg_rc=0
+  reg_json="$(wb_gui_prefix_reg_read "${prefix_id}" "${current_key}" 2>/dev/null)" || reg_rc=$?
+
+  if [[ "${reg_rc}" -ne 0 || -z "${reg_json}" ]]; then
+    wb_gui_dialog_error "Registry read error" \
+      "Unable to read registry key: ${current_key}
+
+What happened: 'wine reg query' failed.
+Why: key may not exist or the prefix registry is in an error state.
+Next steps: navigate to a different key or retry."
+    return 1
+  fi
+
+  # Safe-zone check
+  local zone_status
+  zone_status="$(wb_gui_prefix_reg_safe_zone_check "${current_key}" 2>/dev/null || echo "readonly")"
+
+  local zone_label
+  case "${zone_status}" in
+    writable) zone_label="Safe-zone: WRITABLE" ;;
+    readonly) zone_label="Safe-zone: READ-ONLY" ;;
+    invalid)  zone_label="Safe-zone: INVALID" ;;
+    *)        zone_label="Safe-zone: READ-ONLY" ;;
+  esac
+
+  # Undo stack info
+  local settings_json undo_depth undo_label undo_btn_label
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  undo_depth="$(printf '%s' "${settings_json}" | jq '(.wine_registry_patches // []) | length' 2>/dev/null || echo 0)"
+  if [[ "${undo_depth}" -gt 0 ]]; then
+    local last_patch last_name
+    last_patch="$(printf '%s' "${settings_json}" | jq '.wine_registry_patches[-1]' 2>/dev/null || echo '{}')"
+    last_name="$(printf '%s' "${last_patch}" | jq -r '.name // "(default)"' 2>/dev/null | cut -c1-20)"
+    undo_btn_label="Undo: ${last_name} (${undo_depth}/10)"
+    undo_label="${undo_depth} / 10 changes undoable"
+  else
+    undo_btn_label="Undo (nothing to undo)"
+    undo_label="No undoable changes"
+  fi
+
+  # Build subkey list for navigation
+  local subkeys_json
+  subkeys_json="$(printf '%s' "${reg_json}" | jq '.subkeys // []' 2>/dev/null || echo '[]')"
+  local -a nav_rows=()
+
+  # Root-level pseudo-keys always present
+  nav_rows+=("HKCU\\Software\\Wine" "(safe zone)")
+  nav_rows+=("HKCU\\Environment" "(safe zone)")
+  nav_rows+=("HKLM\\Software\\Wine" "(safe zone)")
+  nav_rows+=("HKCU\\Control Panel\\Desktop" "(safe zone)")
+  nav_rows+=("HKLM\\System\\CurrentControlSet\\Services\\Wine" "(safe zone)")
+  nav_rows+=("HKCR" "(read-only)")
+
+  # Add subkeys of current key
+  while IFS= read -r sk; do
+    [[ -z "${sk}" ]] && continue
+    local sk_note=""
+    [[ "${sk}" == "DllOverrides" ]] && sk_note="(managed by DLL Overrides panel)"
+    nav_rows+=("${current_key}\\${sk}" "${sk_note}")
+  done < <(printf '%s' "${subkeys_json}" | jq -r '.[]' 2>/dev/null)
+
+  # Build value rows for right pane
+  local values_json
+  values_json="$(printf '%s' "${reg_json}" | jq '.values // []' 2>/dev/null || echo '[]')"
+  local -a value_rows=()
+  while IFS= read -r entry; do
+    local vname vtype vdata vflag
+    vname="$(printf '%s' "${entry}" | jq -r '.name // "(default)"' 2>/dev/null)"
+    vtype="$(printf '%s' "${entry}" | jq -r '.type' 2>/dev/null)"
+    vdata="$(printf '%s' "${entry}" | jq -r '.data' 2>/dev/null)"
+    vflag="$(printf '%s' "${entry}" | jq -r '.flag // "null"' 2>/dev/null)"
+    local editable="Yes"
+    [[ "${vflag}" == "multi" || "${vflag}" == "binary" ]] && editable="Read-only"
+    value_rows+=("${vname}" "${vtype}" "${vdata}" "${editable}")
+  done < <(printf '%s' "${values_json}" | jq -c '.[]' 2>/dev/null)
+
+  # Compose the browser dialog text
+  local browser_text="Current key: ${current_key}
+${zone_label}   ${undo_label}
+
+Note: DllOverrides subkey is managed by the DLL Overrides panel. Edit there.
+Undo restores to state before your last Apply. External changes (via wine regedit.exe) are not merged."
+
+  local readonly_warning=""
+  if [[ "${zone_status}" != "writable" ]]; then
+    readonly_warning="
+[READ-ONLY] Writes to ${current_key} are disabled. View values for inspection only."
+    browser_text="${browser_text}${readonly_warning}"
+  fi
+
+  # Show combined browser: nav list + value list side-by-side is not natively
+  # supported by yad --list; we use a two-step approach:
+  # 1. Show key navigation list; user selects a key → navigate
+  # 2. Show value list for the current key with edit actions
+
+  local browser_rc=0
+  local selected_row
+  selected_row="$(wb_gui_yad \
+    --list \
+    --title="Registry Editor -- Prefix: ${prefix_id}" \
+    --width=700 --height=500 \
+    --no-markup \
+    --column="Key / Value" \
+    --column="Info" \
+    --text="${browser_text}" \
+    "${nav_rows[@]}" \
+    --button="Navigate to selected key:0" \
+    --button="Edit values in current key:10" \
+    --button="${undo_btn_label}:20" \
+    --button="Close:1" \
+    --print-column=1 \
+    2>/dev/null)" || browser_rc=$?
+
+  case "${browser_rc}" in
+    0)
+      # Navigate to selected key
+      local nav_key
+      nav_key="$(printf '%s' "${selected_row}" | head -1 | tr -d '\n')"
+      if [[ -n "${nav_key}" ]]; then
+        _cmd_prefix_reg_browser_loop "${prefix_id}" "${nav_key}" "${yad_has_tree}"
+      else
+        _cmd_prefix_reg_browser_loop "${prefix_id}" "${current_key}" "${yad_has_tree}"
+      fi
+      ;;
+    10)
+      # Edit values in current key
+      if [[ "${zone_status}" == "writable" ]]; then
+        _cmd_prefix_reg_values_dialog "${prefix_id}" "${current_key}" "${values_json}"
+      else
+        wb_gui_dialog_error "Write refused" \
+          "Writes to ${current_key} are disabled by the safe-zone policy.
+
+This key is shown for inspection only. To edit values outside the safe zones, use wine regedit.exe from inside the prefix.
+
+If you believe this key should be writable, please open an issue in the wine-bleeding repository."
+      fi
+      # Return to browser
+      _cmd_prefix_reg_browser_loop "${prefix_id}" "${current_key}" "${yad_has_tree}"
+      ;;
+    20)
+      # Undo last change
+      if [[ "${undo_depth}" -gt 0 ]]; then
+        _cmd_prefix_reg_undo_confirm "${prefix_id}"
+      fi
+      _cmd_prefix_reg_browser_loop "${prefix_id}" "${current_key}" "${yad_has_tree}"
+      ;;
+    1|252) return 0 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_reg_values_dialog <prefix_id> <key> <values_json>
+# Show value list for a key; let user add/edit/delete values.
+# ---------------------------------------------------------------------------
+_cmd_prefix_reg_values_dialog() {
+  local prefix_id="${1}"
+  local key="${2}"
+  local values_json="${3}"
+
+  local -a value_rows=()
+  while IFS= read -r entry; do
+    local vname vtype vdata vflag editable
+    vname="$(printf '%s' "${entry}" | jq -r '.name // "(default)"' 2>/dev/null)"
+    vtype="$(printf '%s' "${entry}" | jq -r '.type' 2>/dev/null)"
+    vdata="$(printf '%s' "${entry}" | jq -r '.data' 2>/dev/null)"
+    vflag="$(printf '%s' "${entry}" | jq -r '.flag // "null"' 2>/dev/null)"
+    editable="Yes"
+    [[ "${vflag}" == "multi" || "${vflag}" == "binary" ]] && editable="Read-only (REG_BINARY/REG_MULTI_SZ)"
+    value_rows+=("${vname}" "${vtype}" "${vdata}" "${editable}")
+  done < <(printf '%s' "${values_json}" | jq -c '.[]' 2>/dev/null)
+
+  local val_rc=0 selected_val
+  selected_val="$(wb_gui_yad \
+    --list \
+    --title="Values in: ${key}" \
+    --width=650 --height=400 \
+    --no-markup \
+    --column="Name" \
+    --column="Type" \
+    --column="Data" \
+    --column="Editable" \
+    "${value_rows[@]}" \
+    --button="Add value:0" \
+    --button="Edit selected:10" \
+    --button="Delete selected:20" \
+    --button="Close:1" \
+    --print-column=1 \
+    2>/dev/null)" || val_rc=$?
+
+  local sel_name
+  sel_name="$(printf '%s' "${selected_val}" | head -1 | tr -d '\n')"
+
+  case "${val_rc}" in
+    0)
+      # Add value
+      _cmd_prefix_reg_add_edit_dialog "${prefix_id}" "${key}" "" "" ""
+      ;;
+    10)
+      # Edit selected
+      if [[ -n "${sel_name}" ]]; then
+        local sel_type sel_data
+        sel_type="$(printf '%s' "${values_json}" | jq -r \
+          --arg n "${sel_name}" 'map(select(.name==$n)) | .[0].type // "REG_SZ"' 2>/dev/null || echo "REG_SZ")"
+        sel_data="$(printf '%s' "${values_json}" | jq -r \
+          --arg n "${sel_name}" 'map(select(.name==$n)) | .[0].data // ""' 2>/dev/null || true)"
+        local sel_flag
+        sel_flag="$(printf '%s' "${values_json}" | jq -r \
+          --arg n "${sel_name}" 'map(select(.name==$n)) | .[0].flag // "null"' 2>/dev/null || echo "null")"
+        if [[ "${sel_flag}" == "multi" || "${sel_flag}" == "binary" ]]; then
+          wb_gui_dialog_error "Read-only" "This value type (REG_BINARY/REG_MULTI_SZ) cannot be edited through the registry panel."
+        else
+          _cmd_prefix_reg_add_edit_dialog "${prefix_id}" "${key}" "${sel_name}" "${sel_type}" "${sel_data}"
+        fi
+      fi
+      ;;
+    20)
+      # Delete selected
+      if [[ -n "${sel_name}" ]]; then
+        local del_data
+        del_data="$(printf '%s' "${values_json}" | jq -r \
+          --arg n "${sel_name}" 'map(select(.name==$n)) | .[0].data // ""' 2>/dev/null || true)"
+        _cmd_prefix_reg_delete_confirm "${prefix_id}" "${key}" "${sel_name}" "${del_data}"
+      fi
+      ;;
+    1|252) return 0 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_reg_add_edit_dialog <prefix_id> <key> <name> <type> <data>
+# Add/Edit value dialog → diff-preview → apply.
+# Empty name = add new value.
+# ---------------------------------------------------------------------------
+_cmd_prefix_reg_add_edit_dialog() {
+  local prefix_id="${1}"
+  local key="${2}"
+  local init_name="${3:-}"
+  local init_type="${4:-REG_SZ}"
+  local init_data="${5:-}"
+
+  # Build type combobox
+  local type_opts
+  case "${init_type}" in
+    REG_SZ)        type_opts="REG_SZ!REG_EXPAND_SZ!REG_DWORD!REG_QWORD" ;;
+    REG_EXPAND_SZ) type_opts="REG_EXPAND_SZ!REG_SZ!REG_DWORD!REG_QWORD" ;;
+    REG_DWORD)     type_opts="REG_DWORD!REG_SZ!REG_EXPAND_SZ!REG_QWORD" ;;
+    REG_QWORD)     type_opts="REG_QWORD!REG_SZ!REG_EXPAND_SZ!REG_DWORD" ;;
+    *)             type_opts="REG_SZ!REG_EXPAND_SZ!REG_DWORD!REG_QWORD" ;;
+  esac
+
+  local ae_out ae_rc=0
+  ae_out="$(wb_gui_yad \
+    --form --no-markup --separator='|' \
+    --title="Add/Edit value" \
+    --width=450 \
+    --text="Key: ${key}" \
+    --field="Name:TEXT" "${init_name}" \
+    --field="Type:CB" "${type_opts}" \
+    --field="Data:TEXT" "${init_data}" \
+    --button="Cancel:1" \
+    --button="Next\: preview:0" \
+    2>/dev/null)" || ae_rc=$?
+
+  [[ "${ae_rc}" -ne 0 ]] && return 0
+
+  IFS='|' read -r new_name new_type new_data <<< "${ae_out}"
+  new_name="$(printf '%s' "${new_name}" | tr -d '\n')"
+  new_type="$(printf '%s' "${new_type}" | tr -d '\n')"
+  new_data="$(printf '%s' "${new_data}" | tr -d '\n')"
+
+  [[ -z "${new_type}" ]] && new_type="REG_SZ"
+
+  # Get previous value for diff
+  local prev_display="(not set)"
+  if [[ -n "${init_data}" ]]; then
+    prev_display="${init_data}"
+  fi
+  local new_display="${new_data}"
+  [[ -z "${new_display}" ]] && new_display="(empty)"
+
+  # Undo depth for diff-preview text
+  local settings_json undo_depth
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  undo_depth="$(printf '%s' "${settings_json}" | jq '(.wine_registry_patches // []) | length' 2>/dev/null || echo 0)"
+
+  # Diff-preview dialog (w2-prefix-panel-wireframe.md §6)
+  local diff_text
+  diff_text="Key:  ${key}
+Name: ${new_name:-(default)}
+Type: ${new_type}
+
+Change:
+  - ${prev_display}   (current)
+  + ${new_display}    (new)
+
+This change can be undone from the Registry panel.
+Undo stack: ${undo_depth} / 10 entries used."
+
+  local preview_rc=0
+  wb_gui_yad \
+    --title="Apply registry change?" \
+    --width=500 \
+    --no-markup \
+    --text="${diff_text}" \
+    --image=dialog-warning \
+    --button="Cancel:1" \
+    --button="Apply:0" 2>/dev/null || preview_rc=$?
+
+  [[ "${preview_rc}" -ne 0 ]] && return 0
+
+  # Apply via backend — safe-zone check is inside wb_gui_prefix_reg_write
+  local write_rc=0
+  wb_gui_prefix_reg_write "${prefix_id}" "${key}" "${new_name}" "${new_type}" "${new_data}" 2>/dev/null || write_rc=$?
+
+  if [[ "${write_rc}" -eq 74 ]]; then
+    # Safe-zone refusal (exit code 74 = EACCES per wb_gui_prefix_reg_write)
+    wb_gui_dialog_error "Write refused" \
+      "Writes to ${key} are disabled by the safe-zone policy.
+
+This key is shown for inspection only. To edit values outside the safe zones, use wine regedit.exe from inside the prefix.
+
+If you believe this key should be writable, please open an issue in the wine-bleeding repository."
+  elif [[ "${write_rc}" -ne 0 ]]; then
+    wb_gui_dialog_error "Registry write failed" \
+      "Registry write failed for key: ${key}
+
+What happened: 'wine reg add' returned exit code ${write_rc}.
+Why: the prefix Wine registry may be in an error state, or the value is malformed.
+Next steps: The undo stack is unchanged. Try again or use 'wine regedit.exe' from the prefix for manual repair."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_reg_delete_confirm <prefix_id> <key> <name> <current_data>
+# Confirm then delete a registry value via diff-preview.
+# ---------------------------------------------------------------------------
+_cmd_prefix_reg_delete_confirm() {
+  local prefix_id="${1}"
+  local key="${2}"
+  local vname="${3}"
+  local current_data="${4}"
+
+  local settings_json undo_depth
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  undo_depth="$(printf '%s' "${settings_json}" | jq '(.wine_registry_patches // []) | length' 2>/dev/null || echo 0)"
+
+  local diff_text
+  diff_text="Key:  ${key}
+Name: ${vname:-(default)}
+
+Change:
+  - ${current_data:-'(empty)'}   (current)
+  + (deleted)    (new)
+
+This change can be undone from the Registry panel.
+Undo stack: ${undo_depth} / 10 entries used."
+
+  local del_rc=0
+  wb_gui_yad \
+    --title="Apply registry change?" \
+    --width=500 \
+    --no-markup \
+    --text="${diff_text}" \
+    --image=dialog-warning \
+    --button="Cancel:1" \
+    --button="Apply:0" 2>/dev/null || del_rc=$?
+
+  [[ "${del_rc}" -ne 0 ]] && return 0
+
+  # Execute delete — capture current value first for undo (handled inside reg_write)
+  # We use reg_write with a sentinel: write empty string then delete
+  # Actually: backend has wb_gui_prefix_reg_write but no explicit delete function.
+  # We implement delete via wine reg delete directly here with undo entry.
+  local wine_bin
+  wine_bin="$(_wb_gui_prefix_wine_bin "${prefix_id}" 2>/dev/null || echo "wine")"
+  local prefix_path
+  prefix_path="$(_wb_gui_prefix_path "${prefix_id}" 2>/dev/null || true)"
+
+  # Build undo record before deleting
+  local now_utc
+  now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "1970-01-01T00:00:00Z")"
+  local prev_data_json
+  prev_data_json="$(jq -cn --arg d "${current_data}" '$d')"
+  local patch
+  patch="$(jq -cn \
+    --arg key "${key}" \
+    --arg name "${vname}" \
+    --arg type "REG_SZ" \
+    --argjson prev_data "${prev_data_json}" \
+    --argjson new_data "null" \
+    --arg applied_utc "${now_utc}" \
+    '{key:$key, name:$name, type:$type, prev_data:$prev_data, new_data:$new_data, applied_utc:$applied_utc}')"
+
+  local patches
+  patches="$(printf '%s' "${settings_json}" | jq '.wine_registry_patches // []')"
+  patches="$(printf '%s' "${patches}" | jq \
+    --argjson p "${patch}" '. + [$p] | if length > 10 then .[1:] else . end')"
+  local new_json
+  new_json="$(printf '%s' "${settings_json}" | jq --argjson patches "${patches}" '.wine_registry_patches=$patches')"
+  # Persist undo entry before deleting
+  _wb_gui_prefix_write_json "${prefix_id}" "${new_json}" 2>/dev/null || true
+
+  # Execute delete
+  local del_wine_rc=0
+  if [[ -n "${vname}" ]]; then
+    WINEPREFIX="${prefix_path}" "${wine_bin}" reg delete "${key}" /v "${vname}" /f > /dev/null 2>&1 || del_wine_rc=$?
+  else
+    WINEPREFIX="${prefix_path}" "${wine_bin}" reg delete "${key}" /ve /f > /dev/null 2>&1 || del_wine_rc=$?
+  fi
+
+  if [[ "${del_wine_rc}" -ne 0 ]]; then
+    # Rollback undo entry
+    local rolled
+    rolled="$(printf '%s' "${new_json}" | jq '.wine_registry_patches[:-1]')"
+    local rolled_json
+    rolled_json="$(printf '%s' "${new_json}" | jq --argjson patches "${rolled}" '.wine_registry_patches=$patches')"
+    _wb_gui_prefix_write_json "${prefix_id}" "${rolled_json}" 2>/dev/null || true
+    wb_gui_dialog_error "Delete failed" \
+      "Registry delete failed for key: ${key}, name: ${vname}
+
+What happened: 'wine reg delete' returned exit code ${del_wine_rc}.
+Why: the value may not exist or the prefix registry is in an error state.
+Next steps: The undo stack is unchanged. Try again or use 'wine regedit.exe' from the prefix."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _cmd_prefix_reg_undo_confirm <prefix_id>
+# Confirm undo of last registry change.
+# ---------------------------------------------------------------------------
+_cmd_prefix_reg_undo_confirm() {
+  local prefix_id="${1:-}"
+  [[ -z "${prefix_id}" ]] && return 1
+
+  local settings_json
+  settings_json="$(_wb_gui_prefix_load_json "${prefix_id}" 2>/dev/null || echo '{}')"
+  local patches
+  patches="$(printf '%s' "${settings_json}" | jq '.wine_registry_patches // []' 2>/dev/null || echo '[]')"
+  local patch_count
+  patch_count="$(printf '%s' "${patches}" | jq 'length' 2>/dev/null || echo 0)"
+
+  if [[ "${patch_count}" -eq 0 ]]; then
+    wb_gui_dialog_info "Undo" "Nothing to undo — the undo stack is empty."
+    return 0
+  fi
+
+  local last_patch r_key r_name r_prev r_new
+  last_patch="$(printf '%s' "${patches}" | jq '.[-1]' 2>/dev/null || echo '{}')"
+  r_key="$(printf '%s' "${last_patch}" | jq -r '.key' 2>/dev/null | cut -c1-50)"
+  r_name="$(printf '%s' "${last_patch}" | jq -r '.name' 2>/dev/null | cut -c1-20)"
+  r_prev="$(printf '%s' "${last_patch}" | jq -r '.prev_data // "(not set)"' 2>/dev/null | cut -c1-30)"
+  r_new="$(printf '%s' "${last_patch}" | jq -r '.new_data // "(deleted)"' 2>/dev/null | cut -c1-30)"
+
+  local confirm_rc=0
+  wb_gui_dialog_confirm \
+    "Undo registry change" \
+    "Undo this change?
+
+  Key: ${r_key}
+  Name: ${r_name:-'(default)'}
+  Was: ${r_prev}  Now: ${r_new}
+
+This will restore: ${r_prev}" 2>/dev/null || confirm_rc=$?
+
+  [[ "${confirm_rc}" -ne 0 ]] && return 0
+
+  local undo_rc=0
+  wb_gui_prefix_reg_undo "${prefix_id}" 2>/dev/null || undo_rc=$?
+
+  if [[ "${undo_rc}" -ne 0 ]]; then
+    wb_gui_dialog_error "Undo failed" \
+      "Undo failed.
+
+What happened: 'wine reg add/delete' returned exit code ${undo_rc}.
+Why: the Wine registry may be in an error state.
+Next steps: The change is still in the undo stack; retry is safe."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1233,6 +2533,19 @@ _settings_save_dist() {
 # ---------------------------------------------------------------------------
 # _settings_save_prefix <prefix_id> <pipe_file>
 # Parse tab3 output and persist to prefix layer.
+#
+# Phase D field order (pipe-separated, 1-based):
+#  1  FL_COMPONENTS(bool)
+#  2  DXVK_CB       3  DXVK_RO(ignored)
+#  4  VKD3D_CB      5  VKD3D_RO(ignored)
+#  6  NVAPI_CB      7  NVAPI_RO(ignored)
+#  8  FL_DLL(bool)  9  DLL_RO(ignored)  10 DLL_BTN(ignored)
+#  11 FL_WT(bool)   12 WT_RO(ignored)   13 WT_INSTALL_BTN  14 WT_VIEW_BTN
+#  15 FL_REG(bool)  16 REG_RO(ignored)  17 REG_BTN
+#  18 SEP_LBL       19 GEN_LBL
+#  20 WINVER_CB     21 WINVER_RO(ignored)
+#  22 DEBUG_TEXT    23 DEBUG_RO(ignored)
+#  24 NOTES_TXT
 # ---------------------------------------------------------------------------
 _settings_save_prefix() {
   local prefix_id="${1}"
@@ -1243,11 +2556,53 @@ _settings_save_prefix() {
   raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
   [[ -z "${raw_out}" ]] && return 0
 
-  # stdout: winver_sel|inh_ro1_ignored|debug_val|inh_ro2_ignored|notes_val|
-  IFS='|' read -r winver_sel _inh1 debug_val _inh2 notes_val _rest <<< "${raw_out}"
+  # Parse all Phase D + General fields
+  local fl_comp dxvk_cb _dxvk_ro vkd3d_cb _vkd3d_ro nvapi_cb _nvapi_ro
+  local _fl_dll _dll_ro _dll_btn
+  local _fl_wt _wt_ro _wt_install_btn _wt_view_btn
+  local _fl_reg _reg_ro _reg_btn
+  local _sep_lbl _gen_lbl
+  local winver_sel _winver_ro debug_val _debug_ro notes_val _rest
+  IFS='|' read -r \
+    fl_comp dxvk_cb _dxvk_ro vkd3d_cb _vkd3d_ro nvapi_cb _nvapi_ro \
+    _fl_dll _dll_ro _dll_btn \
+    _fl_wt _wt_ro _wt_install_btn _wt_view_btn \
+    _fl_reg _reg_ro _reg_btn \
+    _sep_lbl _gen_lbl \
+    winver_sel _winver_ro debug_val _debug_ro notes_val _rest \
+    <<< "${raw_out}"
 
+  # Suppress unused variable warnings from shellcheck
+  : "${fl_comp}" "${_dxvk_ro}" "${_vkd3d_ro}" "${_nvapi_ro}"
+  : "${_fl_dll}" "${_dll_ro}" "${_dll_btn}"
+  : "${_fl_wt}" "${_wt_ro}" "${_wt_install_btn}" "${_wt_view_btn}"
+  : "${_fl_reg}" "${_reg_ro}" "${_reg_btn}"
+  : "${_sep_lbl}" "${_gen_lbl}" "${_winver_ro}" "${_debug_ro}" "${_rest}"
+
+  # ── Phase D: component toggles ──────────────────────────────────────────
+  # Apply each component state (on|off|inherit)
+  local comp state
+  for comp in dxvk vkd3d nvapi; do
+    case "${comp}" in
+      dxvk)  state="${dxvk_cb:-inherit}"  ;;
+      vkd3d) state="${vkd3d_cb:-inherit}" ;;
+      nvapi) state="${nvapi_cb:-inherit}"  ;;
+    esac
+    # Normalize: strip leading/trailing whitespace
+    state="${state#"${state%%[![:space:]]*}"}"
+    state="${state%"${state##*[![:space:]]}"}"
+    case "${state}" in
+      on|off|inherit) : ;;
+      *) state="inherit" ;;
+    esac
+    wb_gui_prefix_component_toggle "${prefix_id}" "${comp}" "${state}" 2>/dev/null || true
+  done
+
+  # Bake env vars to wb.conf (component toggles + DLL overrides)
+  wb_gui_prefix_save_env_bake "${prefix_id}" 2>/dev/null || true
+
+  # ── General (Phase A): Windows version ──────────────────────────────────
   if [[ "${winver_sel}" == "(inherited:"* ]]; then
-    # Clear override: remove key from file
     local prefix_path
     prefix_path="$(_wb_gui_settings_layer_path prefix "${prefix_id}")"
     if [[ -f "${prefix_path}" ]]; then
@@ -1261,8 +2616,7 @@ _settings_save_prefix() {
     [[ -n "${winver_json}" ]] && wb_gui_settings_set_prefix "${prefix_id}" win_version "${winver_json}" 2>/dev/null || true
   fi
 
-  # wine_debug: empty → write null (W4 flag 3: empty string is meaningful)
-  # User left blank = inherit; write null to layer
+  # ── General: WINEDEBUG ─────────────────────────────────────────────────
   if [[ -z "${debug_val}" ]]; then
     local prefix_path2
     prefix_path2="$(_wb_gui_settings_layer_path prefix "${prefix_id}")"
@@ -1275,7 +2629,7 @@ _settings_save_prefix() {
     wb_gui_settings_set_prefix "${prefix_id}" wine_debug "${debug_val}" 2>/dev/null || true
   fi
 
-  # notes: always write (even empty string is valid)
+  # ── General: Notes ─────────────────────────────────────────────────────
   wb_gui_settings_set_prefix "${prefix_id}" notes "${notes_val}" 2>/dev/null || true
 }
 

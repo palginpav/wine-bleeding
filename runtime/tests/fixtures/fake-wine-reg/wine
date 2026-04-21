@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# fake-wine-reg — test fixture for Phase D registry operations.
+#
+# Handles only "reg" subcommands; all others are no-ops.
+# Uses a JSON "shadow registry" at $WINEPREFIX/.fake_registry.json.
+#
+# Shadow registry layout:
+#   {
+#     "HKCU\\Software\\Wine\\Direct3D": {
+#       "MaxShaderModel": {"type": "REG_DWORD", "data": "0x5"}
+#     }
+#   }
+#
+# Seam: WB_TEST_WINE_REG_FIXTURE=<path to this script>
+
+set -euo pipefail
+
+if [[ -z "${WINEPREFIX:-}" ]]; then
+  echo "fake-wine-reg: WINEPREFIX not set" >&2
+  exit 1
+fi
+
+SHADOW_REG="${WINEPREFIX}/.fake_registry.json"
+mkdir -p "${WINEPREFIX}"
+
+# Initialize shadow registry if absent
+if [[ ! -f "${SHADOW_REG}" ]]; then
+  printf '{}' > "${SHADOW_REG}"
+fi
+
+# Dispatch on subcommand
+case "${1:-}" in
+  reg)
+    SUBCMD="${2:-}"
+    shift 2 || true
+    ;;
+  wineboot|wineserver|*)
+    # Non-reg subcommands: no-op
+    exit 0
+    ;;
+esac
+
+_query() {
+  local key="${1:-}"
+  shift || true
+  local vname=""
+  local single=0
+  local default_val=0
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      /v|/V) vname="${2:-}"; single=1; shift ;;
+      /ve|/VE) default_val=1; single=1 ;;
+      /s|/S) : ;; # recursive — ignored
+      *) : ;;
+    esac
+    shift || true
+  done
+
+  # Normalize HKCU → HKEY_CURRENT_USER for output format (real wine format)
+  local display_key="${key}"
+  display_key="${display_key/HKCU\\/HKEY_CURRENT_USER\\}"
+  display_key="${display_key/HKLM\\/HKEY_LOCAL_MACHINE\\}"
+
+  local key_exists
+  key_exists="$(jq -r --arg k "${key}" 'if has($k) then "yes" else "no" end' "${SHADOW_REG}" 2>/dev/null)" || key_exists="no"
+
+  if [[ "${key_exists}" != "yes" ]]; then
+    echo "ERROR: The system was unable to find the specified registry key or value." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${display_key}"
+
+  if [[ "${single}" -eq 1 ]]; then
+    local target_name=""
+    [[ "${default_val}" -eq 0 ]] && target_name="${vname}"
+    local val_json
+    val_json="$(jq -c \
+      --arg k "${key}" \
+      --arg n "${target_name}" \
+      '.[$k][$n] // empty' "${SHADOW_REG}" 2>/dev/null)" || val_json=""
+    if [[ -n "${val_json}" ]]; then
+      local vtype vdata
+      vtype="$(printf '%s' "${val_json}" | jq -r '.type')"
+      vdata="$(printf '%s' "${val_json}" | jq -r '.data')"
+      local display_name="${target_name}"
+      [[ -z "${display_name}" ]] && display_name="(Default)"
+      printf '    %s\t%s\t%s\n' "${display_name}" "${vtype}" "${vdata}"
+    else
+      echo "ERROR: The system was unable to find the specified registry key or value." >&2
+      exit 1
+    fi
+  else
+    # All values in key
+    jq -r \
+      --arg k "${key}" \
+      '.[$k] | to_entries[] | "    " + (if .key == "" then "(Default)" else .key end) + "\t" + .value.type + "\t" + .value.data' \
+      "${SHADOW_REG}" 2>/dev/null || true
+
+    # Emit direct subkeys
+    jq -r \
+      --arg k "${key}" \
+      'keys[] | select(startswith($k + "\\")) | select((ltrimstr($k + "\\") | test("\\\\") | not))' \
+      "${SHADOW_REG}" 2>/dev/null | while IFS= read -r subkey; do
+        local sub_display="${subkey}"
+        sub_display="${sub_display/HKCU\\/HKEY_CURRENT_USER\\}"
+        sub_display="${sub_display/HKLM\\/HKEY_LOCAL_MACHINE\\}"
+        printf '\n%s\n' "${sub_display}"
+      done || true
+  fi
+}
+
+_add() {
+  local key="${1:-}"
+  shift || true
+  local vname=""
+  local vtype="REG_SZ"
+  local vdata=""
+  local default_val=0
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      /v|/V) vname="${2:-}"; shift ;;
+      /ve|/VE) default_val=1 ;;
+      /t|/T) vtype="${2:-}"; shift ;;
+      /d|/D) vdata="${2:-}"; shift ;;
+      /f|/F) : ;; # force
+      *) : ;;
+    esac
+    shift || true
+  done
+  [[ "${default_val}" -eq 1 ]] && vname=""
+  local tmp
+  tmp="$(mktemp "${WINEPREFIX}/.fake_reg_XXXXXX")"
+  jq \
+    --arg k "${key}" \
+    --arg n "${vname}" \
+    --arg t "${vtype}" \
+    --arg d "${vdata}" \
+    '.[$k][$n] = {type:$t, data:$d}' "${SHADOW_REG}" > "${tmp}" 2>/dev/null
+  mv -T "${tmp}" "${SHADOW_REG}"
+}
+
+_delete() {
+  local key="${1:-}"
+  shift || true
+  local vname=""
+  local single=0
+  local default_val=0
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      /v|/V) vname="${2:-}"; single=1; shift ;;
+      /ve|/VE) default_val=1; single=1 ;;
+      /f|/F) : ;;
+      *) : ;;
+    esac
+    shift || true
+  done
+  [[ "${default_val}" -eq 1 ]] && vname=""
+  local tmp
+  tmp="$(mktemp "${WINEPREFIX}/.fake_reg_XXXXXX")"
+  if [[ "${single}" -eq 1 ]]; then
+    jq \
+      --arg k "${key}" \
+      --arg n "${vname}" \
+      'if has($k) then .[$k] |= del(.[$n]) else . end' \
+      "${SHADOW_REG}" > "${tmp}" 2>/dev/null
+  else
+    jq \
+      --arg k "${key}" \
+      'del(.[$k])' \
+      "${SHADOW_REG}" > "${tmp}" 2>/dev/null
+  fi
+  mv -T "${tmp}" "${SHADOW_REG}"
+}
+
+case "${SUBCMD:-}" in
+  query|QUERY) _query "$@" ;;
+  add|ADD)     _add "$@" ;;
+  delete|DELETE) _delete "$@" ;;
+  *) exit 0 ;;
+esac
+
+exit 0

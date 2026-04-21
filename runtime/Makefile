@@ -29,6 +29,9 @@ SHELLCHECK_TARGETS := \
   $(SRC_DIR)/wb-gui \
   $(SRC_DIR)/wb-gui-lib/wb-gui-games.sh \
   $(SRC_DIR)/wb-gui-lib/wb-gui-dialogs.sh \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-prefix.sh \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-settings.sh \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-overlays.sh \
   $(SRC_DIR)/wb-diag \
   $(SRC_DIR)/wb-lib/wb-log.sh \
   $(SRC_DIR)/wb-lib/wb-die.sh \
@@ -56,7 +59,8 @@ SHELLCHECK_TARGETS := \
   $(PACKAGING_DIR)/rpm/build.sh \
   $(PACKAGING_DIR)/deb/build.sh \
   $(PACKAGING_DIR)/appimage/build-appimage.sh \
-  $(PACKAGING_DIR)/appimage/AppRun
+  $(PACKAGING_DIR)/appimage/AppRun \
+  $(RUNTIME_DIR)../tools/run-winetricks.sh
 
 FLATPAK_DIR      := $(RUNTIME_DIR)flatpak
 FLATPAK_MANIFEST := $(FLATPAK_DIR)/org.wine_bleeding.wb.yaml
