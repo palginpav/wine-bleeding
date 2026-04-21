@@ -23,12 +23,28 @@
 #   70 — swap failure (atomic mv -T failed)
 #   71 — lock failure (build lock already held)
 #   99 — internal error
+#
+# Environment:
+#   WB_WINE_SOURCE_ROOT  — path to a wine-bleeding source tree (holds
+#                          build-deps/ and tools/widl/). Required when running
+#                          from an installed package; defaults to the
+#                          script-relative root in the dev tree.
+#   WB_BUILD_DEPS_DIR    — explicit build-deps path (overrides the default
+#                          derived from WB_WINE_SOURCE_ROOT).
 
 set -euo pipefail
 
 WINE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/build-common.sh
 source "${WINE_ROOT}/tools/lib/build-common.sh"
+
+# When this script is shipped in an installed package (under
+# /usr/lib/wine-bleeding/tools/), WINE_ROOT resolves to /usr/lib/wine-bleeding
+# which does NOT contain build-deps/ or tools/widl/. Users with a wine-bleeding
+# source tree can point us at it via WB_WINE_SOURCE_ROOT so the installed
+# driver can compile DXVK/VKD3D-Proton/DXVK-NVAPI against the source tree.
+# If unset, we fall back to the script-relative WINE_ROOT (works in dev).
+WB_WINE_SOURCE_ROOT="${WB_WINE_SOURCE_ROOT:-${WINE_ROOT}}"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -186,8 +202,25 @@ export FORCE_REBUILD_DEPS BUILD_MINGW_FROM_SOURCE
 # ---------------------------------------------------------------------------
 # Set up component-specific constants
 # ---------------------------------------------------------------------------
-DEPS_DIR="${WB_BUILD_DEPS_DIR:-${WINE_ROOT}/build-deps}"
+DEPS_DIR="${WB_BUILD_DEPS_DIR:-${WB_WINE_SOURCE_ROOT}/build-deps}"
 export DEPS_DIR
+
+# Pre-flight: DEPS_DIR must exist. When the driver runs from an installed
+# package and WB_WINE_SOURCE_ROOT points at a non-source location (or is
+# unset), we fail here with an actionable error rather than deep inside a
+# meson/ninja invocation. WB_BUILD_SKIP_COMPILE=1 (tests) bypasses this;
+# the overlay-install path does not use DEPS_DIR and is not guarded here.
+if [[ "${WB_BUILD_SKIP_COMPILE:-0}" != "1" ]] \
+   && [[ "${COMPONENT}" == "dxvk" || "${COMPONENT}" == "vkd3d" || "${COMPONENT}" == "nvapi" ]] \
+   && [[ ! -d "${DEPS_DIR}" ]]; then
+  bc_emit_error "Component build needs a wine-bleeding source tree with build-deps/.
+Expected: ${DEPS_DIR}
+Next action: check out https://github.com/palginpav/wine-bleeding and either
+  (a) run wb-gui directly from that tree, OR
+  (b) set WB_WINE_SOURCE_ROOT=/path/to/wine-bleeding and retry, OR
+  (c) set WB_BUILD_DEPS_DIR=/path/to/build-deps explicitly."
+  exit 66
+fi
 
 case "${COMPONENT}" in
   dxvk)
@@ -323,7 +356,7 @@ bc_check_deps_upstream "${COMPONENT}"
 # widl wrapper (required by VKD3D-Proton)
 # ---------------------------------------------------------------------------
 _bc_setup_widl() {
-  local widl_bin="${WINE_ROOT}/tools/widl/widl"
+  local widl_bin="${WB_WINE_SOURCE_ROOT}/tools/widl/widl"
   if [[ -x "${widl_bin}" ]]; then
     local wrapper_dir="${DEPS_DIR}/widl-wrapper"
     mkdir -p "${wrapper_dir}"
