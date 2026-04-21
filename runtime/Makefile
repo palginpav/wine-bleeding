@@ -187,8 +187,11 @@ install:
 	  install -Dm644 $(RUNTIME_DIR)share/applications/wine-bleeding-wb.desktop \
 	    $(DESTDIR)$(SHAREDIR)/applications/wine-bleeding-wb.desktop; \
 	fi
-	@# Install every icon size + format present in share/icons/hicolor/
-	@for sub in scalable 256x256 512x512 1024x1024; do \
+	@# Install every icon size + format present in share/icons/hicolor/.
+	@# Small sizes (16..128) are critical for title-bar decorations under KWin/
+	@# Plasma; without them Plasma downscales from 256 and sometimes falls
+	@# back to a placeholder on transient dialogs.
+	@for sub in scalable 16x16 22x22 24x24 32x32 48x48 64x64 128x128 256x256 512x512 1024x1024; do \
 	  for ext in svg png; do \
 	    src=$(RUNTIME_DIR)share/icons/hicolor/$$sub/apps/wine-bleeding.$$ext; \
 	    if test -f "$$src"; then \

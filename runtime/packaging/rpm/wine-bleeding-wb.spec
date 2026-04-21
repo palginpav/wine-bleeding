@@ -79,6 +79,13 @@ make install \
 %{_bindir}/wb-gui
 /usr/lib/wine-bleeding/wb-gui-lib/
 %{_datadir}/applications/wine-bleeding-wb.desktop
+%{_datadir}/icons/hicolor/16x16/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/22x22/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/24x24/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/32x32/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/48x48/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/64x64/apps/wine-bleeding.png
+%{_datadir}/icons/hicolor/128x128/apps/wine-bleeding.png
 %{_datadir}/icons/hicolor/256x256/apps/wine-bleeding.png
 %{_datadir}/icons/hicolor/512x512/apps/wine-bleeding.png
 %{_datadir}/icons/hicolor/1024x1024/apps/wine-bleeding.png
