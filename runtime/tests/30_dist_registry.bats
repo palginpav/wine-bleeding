@@ -294,3 +294,85 @@ _make_external_dist() {
   run check-jsonschema --schemafile "${SCHEMA_FILE}" "${TEST_HOME}/dists.json"
   [ "${status}" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# 11. rebuildable=true for a dist with the full-build.sh layout even when
+#     registered as external (previously misclassified as non-rebuildable).
+# ---------------------------------------------------------------------------
+@test "registry_refresh: external dist with full-build layout reports rebuildable=true" {
+  local ext_path="${TEST_HOME}/external/WINE-BLEEDING-28032026"
+  mkdir -p "${ext_path}/bin" "${ext_path}/lib/wine/x86_64-windows"
+  printf '#!/usr/bin/env bash\necho wine\n' > "${ext_path}/bin/wine"
+  chmod +x "${ext_path}/bin/wine"
+  mkdir -p "${TEST_HOME}/plugins/runtimes.d"
+  printf '{"schema":1,"name":"%s","path":"%s","wine_version":"11.4"}\n' \
+    "WINE-BLEEDING-28032026" "${ext_path}" \
+    > "${TEST_HOME}/plugins/runtimes.d/WINE-BLEEDING-28032026.json"
+
+  run bash -c "
+    source '${WB_LIB}/wb-paths.sh'
+    source '${WB_LIB}/wb-log.sh'
+    source '${WB_LIB}/wb-json.sh'
+    source '${WB_LIB}/wb-dist.sh'
+    source '${WB_GUI_LIB}/wb-gui-apps.sh'
+    source '${WB_GUI_LIB}/wb-gui-dist.sh'
+    wb_gui_dist_registry_refresh
+    jq -r '.dists[] | select(.name == \"WINE-BLEEDING-28032026\") | [.source, .rebuildable] | @tsv' \
+      \"\${WB_HOME}/dists.json\"
+  " WB_HOME="${TEST_HOME}" 2>/dev/null
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == $'external\ttrue' ]]
+}
+
+# ---------------------------------------------------------------------------
+# 12. rebuildable=false for a dist missing the windows-DLL directory, even
+#     when it is a native dist under $WB_HOME/dist/.
+# ---------------------------------------------------------------------------
+@test "registry_refresh: native dist without lib/wine/x86_64-windows reports rebuildable=false" {
+  local native_path="${TEST_HOME}/dist/WINE-BLEEDING-stub"
+  mkdir -p "${native_path}/bin"
+  printf '#!/usr/bin/env bash\necho wine\n' > "${native_path}/bin/wine"
+  chmod +x "${native_path}/bin/wine"
+  # Intentionally no lib/wine/x86_64-windows directory.
+
+  run bash -c "
+    source '${WB_LIB}/wb-paths.sh'
+    source '${WB_LIB}/wb-log.sh'
+    source '${WB_LIB}/wb-json.sh'
+    source '${WB_LIB}/wb-dist.sh'
+    source '${WB_GUI_LIB}/wb-gui-apps.sh'
+    source '${WB_GUI_LIB}/wb-gui-dist.sh'
+    wb_gui_dist_registry_refresh
+    jq -r '.dists[] | select(.name == \"WINE-BLEEDING-stub\") | .rebuildable' \
+      \"\${WB_HOME}/dists.json\"
+  " WB_HOME="${TEST_HOME}" 2>/dev/null
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == "false" ]]
+}
+
+# ---------------------------------------------------------------------------
+# 13. wb runtime activate resolves an external dist registered as a plugin
+#     (previously failed with "dist not found in $WB_HOME/dist").
+# ---------------------------------------------------------------------------
+@test "wb runtime activate: resolves external dist via plugins/runtimes.d" {
+  local ext_path="${TEST_HOME}/external/WINE-BLEEDING-28032026"
+  mkdir -p "${ext_path}/bin"
+  printf '#!/usr/bin/env bash\necho wine\n' > "${ext_path}/bin/wine"
+  chmod +x "${ext_path}/bin/wine"
+  mkdir -p "${TEST_HOME}/plugins/runtimes.d"
+  printf '{"schema":1,"name":"%s","path":"%s","wine_version":"11.4"}\n' \
+    "WINE-BLEEDING-28032026" "${ext_path}" \
+    > "${TEST_HOME}/plugins/runtimes.d/WINE-BLEEDING-28032026.json"
+
+  local wb_bin="${BATS_TEST_DIRNAME}/../src/wb"
+  run env WB_HOME="${TEST_HOME}" WB_LOG_FILE="${TEST_HOME}/wb.log" \
+    "${wb_bin}" runtime activate WINE-BLEEDING-28032026
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Activated: WINE-BLEEDING-28032026"* ]]
+  # Alias should now point at the external path.
+  local alias_target
+  alias_target="$(readlink -f "${TEST_HOME}/dist/WINE-BLEEDING" 2>/dev/null || true)"
+  local expected
+  expected="$(readlink -f "${ext_path}")"
+  [ "${alias_target}" = "${expected}" ]
+}

@@ -64,6 +64,24 @@ _wb_gui_dist_settings_read() {
 }
 
 # ---------------------------------------------------------------------------
+# Internal: decide whether a dist path can be rebuilt component-by-component
+# via tools/build-component.sh. A dist is rebuildable when it has the
+# full-build.sh layout (bin/wine + lib/wine/x86_64-windows/) and the path
+# is writable by the current user — regardless of how it was registered.
+# This replaces the older `source == "native"` capability gate, which mis-
+# classified externally-added full-build.sh dists as non-rebuildable.
+# Emits "true" or "false" (JSON-compatible) on stdout.
+# ---------------------------------------------------------------------------
+_wb_gui_dist_is_rebuildable() {
+  local path="$1"
+  [[ -d "${path}" ]] || { printf 'false'; return; }
+  [[ -x "${path}/bin/wine" ]] || { printf 'false'; return; }
+  [[ -d "${path}/lib/wine/x86_64-windows" ]] || { printf 'false'; return; }
+  [[ -w "${path}/lib/wine/x86_64-windows" ]] || { printf 'false'; return; }
+  printf 'true'
+}
+
+# ---------------------------------------------------------------------------
 # Internal: classify a dist as native/external/unknown and check if broken.
 # Outputs a JSON object with dist entry fields.
 # ---------------------------------------------------------------------------
@@ -148,6 +166,9 @@ _wb_gui_dist_describe_native() {
   local build_profile
   build_profile="$(_wb_gui_dist_settings_read "${name}" '.build_profile')"
 
+  local rebuildable
+  rebuildable="$(_wb_gui_dist_is_rebuildable "${path}")"
+
   jq -cn \
     --arg name "${name}" \
     --arg path "${path}" \
@@ -165,6 +186,7 @@ _wb_gui_dist_describe_native() {
     --arg mono_ver "${mono_ver}" \
     --arg icu_ver "${icu_ver}" \
     --arg build_profile "${build_profile}" \
+    --argjson rebuildable "${rebuildable}" \
     '{
       name: $name,
       path: $path,
@@ -184,6 +206,7 @@ _wb_gui_dist_describe_native() {
       },
       build_profile: (if $build_profile == "" then null else $build_profile end),
       external_source: null,
+      rebuildable: $rebuildable,
       broken: $broken,
       broken_reason: $broken_reason
     }'
@@ -216,6 +239,32 @@ _wb_gui_dist_describe_external() {
   external_source="$(jq -r '.external_source // empty' "${plugin_file}" 2>/dev/null || true)"
   wine_version="$(jq -r '.wine_version // empty' "${plugin_file}" 2>/dev/null || true)"
 
+  local rebuildable
+  rebuildable="$(_wb_gui_dist_is_rebuildable "${path}")"
+
+  # Probe .wb_dist_meta for built_by + components (an externally-added dist
+  # that still came out of full-build.sh carries the same metadata, so users
+  # should see the real builder, not "external" as a blanket label).
+  local ext_built_by_json='"external"'
+  local ext_built_utc="null"
+  local ext_components_included="[]"
+  local meta_file="${path}/.wb_dist_meta"
+  if [[ -r "${meta_file}" ]]; then
+    local mb
+    mb="$(jq -r '.built_by // empty' "${meta_file}" 2>/dev/null || true)"
+    if [[ -n "${mb}" ]]; then
+      ext_built_by_json="$(printf '%s' "${mb}" | jq -R .)"
+    fi
+    local mu
+    mu="$(jq -r '.build_utc // empty' "${meta_file}" 2>/dev/null || true)"
+    if [[ -n "${mu}" ]]; then
+      ext_built_utc="$(printf '%s' "${mu}" | jq -R .)"
+    fi
+    ext_components_included="$(jq -r \
+      '[.components // {} | to_entries[] | select((.value.paths // [] | length) > 0) | .key] | sort' \
+      "${meta_file}" 2>/dev/null || echo "[]")"
+  fi
+
   jq -cn \
     --arg name "${name}" \
     --arg path "${path}" \
@@ -224,19 +273,24 @@ _wb_gui_dist_describe_external() {
     --argjson broken_reason "${broken_reason}" \
     --arg external_source "${external_source}" \
     --arg wine_version "${wine_version}" \
+    --argjson rebuildable "${rebuildable}" \
+    --argjson built_by "${ext_built_by_json}" \
+    --argjson built_utc "${ext_built_utc}" \
+    --argjson components_included "${ext_components_included}" \
     '{
       name: $name,
       path: $path,
       source: "external",
       active: $active,
-      built_by: "external",
-      built_utc: null,
-      last_built_at: null,
+      built_by: $built_by,
+      built_utc: $built_utc,
+      last_built_at: $built_utc,
       wine_version: (if $wine_version == "" then null else $wine_version end),
-      components_included: [],
+      components_included: $components_included,
       component_versions: {},
       build_profile: null,
       external_source: (if $external_source == "" then null else $external_source end),
+      rebuildable: $rebuildable,
       broken: $broken,
       broken_reason: $broken_reason
     }'

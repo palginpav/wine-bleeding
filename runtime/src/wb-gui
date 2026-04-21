@@ -4411,20 +4411,29 @@ Fix or remove this dist, then try again."
       # ------------------------------------------------------------------
       30)
         # Build Components
-        local _bm bn bs _bw _blb bp bb _btrail
-        IFS='|' read -r _bm bn bs _bw _blb bp bb _btrail <<< "${yad_out}"
+        local _bm bn _bs _bw _blb bp bb _btrail
+        IFS='|' read -r _bm bn _bs _bw _blb bp bb _btrail <<< "${yad_out}"
 
         if [[ -z "${bn}" || "${bn}" == "No dists registered" ]]; then
           wb_gui_dialog_info "Build Components" "Select a dist row first."
           continue
         fi
 
-        # Guard: external dist
-        if [[ "${bs}" == "external" ]]; then
-          wb_gui_dialog_error "Not a native dist" \
-            "Component builds only work on native dists built by full-build.sh.
+        # Guard: not rebuildable. `rebuildable` is derived from the dist's
+        # on-disk layout (bin/wine + lib/wine/x86_64-windows/ + writable),
+        # independent of how the dist was registered. This lets externally-
+        # added full-build.sh dists rebuild components, while still rejecting
+        # dists shipped by distros (read-only layout) or with missing pieces.
+        local bld_rebuildable
+        bld_rebuildable="$(jq -r --arg n "${bn}" \
+          '.dists[] | select(.name == $n) | .rebuildable // false' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || echo "false")"
+        if [[ "${bld_rebuildable}" != "true" ]]; then
+          wb_gui_dialog_error "Dist cannot be rebuilt" \
+            "${bn} does not have the full-build.sh layout or is not writable.
 
-This dist was registered externally — its file layout may differ. To rebuild components, use a native dist."
+Expected: bin/wine + lib/wine/x86_64-windows/ under a user-writable path.
+If this dist came from your distro's package manager, it is intentionally read-only; build a native dist via tools/full-build.sh and register it to rebuild components."
           continue
         fi
 

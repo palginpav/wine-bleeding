@@ -61,6 +61,7 @@
           "oneOf": [{ "enum": ["minimal", "standard", "full"] }, { "type": "null" }]
         },
         "external_source": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "rebuildable":     { "type": "boolean", "description": "Whether tools/build-component.sh can rebuild components on this dist. Derived from on-disk layout (bin/wine + lib/wine/x86_64-windows/ + user-writable), not from the source tag." },
         "broken":          { "type": "boolean" },
         "broken_reason":   { "oneOf": [{ "type": "string" }, { "type": "null" }] }
       }

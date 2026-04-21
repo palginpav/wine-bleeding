@@ -536,11 +536,27 @@ cmd_runtime_activate() {
     exit 1
   fi
   _wb_load_dist_lib
-  local dist_dir
-  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  local wb_home_resolved
+  wb_home_resolved="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+  local dist_dir="${wb_home_resolved}/dist"
   local dist_path="${dist_dir}/${name}"
+
+  # If not present under the native dist dir, fall back to an external dist
+  # registered as a plugin (plugins/runtimes.d/<name>.json carries an absolute
+  # path). Keeps Activate working for dists added via the GUI's "Add External".
   if [[ ! -d "${dist_path}" ]]; then
-    echo "wb runtime activate: dist '${name}' not found in ${dist_dir}" >&2
+    local plugin_file="${wb_home_resolved}/plugins/runtimes.d/${name}.json"
+    if [[ -f "${plugin_file}" ]]; then
+      local ext_path
+      ext_path="$(jq -r '.path // empty' "${plugin_file}" 2>/dev/null || true)"
+      if [[ -n "${ext_path}" && -d "${ext_path}" ]]; then
+        dist_path="${ext_path}"
+      fi
+    fi
+  fi
+
+  if [[ ! -d "${dist_path}" ]]; then
+    echo "wb runtime activate: dist '${name}' not found in ${dist_dir} or plugins/runtimes.d" >&2
     exit 1
   fi
   wb_dist_set_alias "${dist_path}"
