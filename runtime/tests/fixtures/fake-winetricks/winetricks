@@ -77,9 +77,16 @@ mkdir -p "${local_wineprefix}"
 for _verb in "${_verbs[@]}"; do
   _fake_log "Installing ${_verb}..."
 
-  # Optional pre-install sleep (for cancellation tests)
+  # Optional pre-install sleep (for cancellation tests).
+  # Run `sleep` as a background child and `wait` on it, with a TERM trap, so
+  # SIGTERM propagates across bash versions (bash 4.4 vs 5.2 differ in their
+  # default child-signal forwarding behavior).
   if [[ -n "${WINETRICKS_FAKE_SLEEP:-}" ]] && [[ "${WINETRICKS_FAKE_SLEEP}" -gt 0 ]]; then
-    sleep "${WINETRICKS_FAKE_SLEEP}"
+    trap 'kill "${_fw_sleep_pid}" 2>/dev/null || true; exit 143' TERM INT
+    sleep "${WINETRICKS_FAKE_SLEEP}" &
+    _fw_sleep_pid=$!
+    wait "${_fw_sleep_pid}" 2>/dev/null || exit 143
+    trap - TERM INT
   fi
 
   # Simulated failure
