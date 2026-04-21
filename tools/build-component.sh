@@ -233,13 +233,36 @@ if [[ ! -d "${TARGET_DIST}" ]]; then
   exit 65
 fi
 
-# Canonicalize and enforce that target is under $WB_HOME/dist/
+# Canonicalize. Accept --target-dist if EITHER of these is true:
+#   1. It's a direct child of $WB_HOME/dist/ (a native dist), OR
+#   2. It is listed in $WB_HOME/plugins/runtimes.d/*.json .path (i.e. the user
+#      registered it via "Add External" in the Dist Manager).
+# This lets externally-added full-build.sh dists rebuild components while
+# still preventing arbitrary-path writes from a rogue caller.
 TARGET_DIST_REAL="$(realpath -m "${TARGET_DIST}")"
 DIST_BASE_REAL="$(realpath -m "${WB_HOME}/dist")"
 TARGET_DIST_BASENAME="$(basename "${TARGET_DIST_REAL}")"
 
-if [[ "${TARGET_DIST_REAL}" != "${DIST_BASE_REAL}/${TARGET_DIST_BASENAME}" ]]; then
-  bc_emit_error "Security gate: --target-dist must be a direct child of \$WB_HOME/dist/; got '${TARGET_DIST_REAL}'"
+_bc_is_registered_external() {
+  local plugin_dir="${WB_HOME}/plugins/runtimes.d"
+  [[ -d "${plugin_dir}" ]] || return 1
+  local pfile pcanon
+  for pfile in "${plugin_dir}"/*.json; do
+    [[ -f "${pfile}" ]] || continue
+    local ppath
+    ppath="$(jq -r '.path // empty' "${pfile}" 2>/dev/null || true)"
+    [[ -z "${ppath}" ]] && continue
+    pcanon="$(realpath -m "${ppath}" 2>/dev/null || echo "${ppath}")"
+    if [[ "${pcanon}" == "${TARGET_DIST_REAL}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [[ "${TARGET_DIST_REAL}" != "${DIST_BASE_REAL}/${TARGET_DIST_BASENAME}" ]] \
+   && ! _bc_is_registered_external; then
+  bc_emit_error "Security gate: --target-dist must be either a direct child of \$WB_HOME/dist/ or a registered external dist (plugins/runtimes.d); got '${TARGET_DIST_REAL}'"
   exit 65
 fi
 

@@ -247,6 +247,32 @@ _plant_staged_dlls() {
 # ---------------------------------------------------------------------------
 # 10. Full-build.sh --help smoke test (CLI parity check)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 11. Registered external dist passes the security gate (Dist Manager's
+#     "Add External" path). Regression: previously the gate rejected ANY
+#     target-dist outside $WB_HOME/dist/, blocking Build Components on
+#     externally-added full-build.sh dists.
+# ---------------------------------------------------------------------------
+@test "build-component: registered external dist passes security gate" {
+  # Put the dist outside $WB_HOME/dist/, then register it as a plugin.
+  local ext_path="${TEST_HOME}/external/WINE-BLEEDING-ext"
+  mkdir -p "${ext_path}/bin" "${ext_path}/lib/wine/x86_64-windows"
+  printf '#!/usr/bin/env bash\necho wine\n' > "${ext_path}/bin/wine"
+  chmod +x "${ext_path}/bin/wine"
+  mkdir -p "${TEST_HOME}/plugins/runtimes.d"
+  printf '{"schema":1,"name":"%s","path":"%s","wine_version":"11.4"}\n' \
+    "WINE-BLEEDING-ext" "${ext_path}" \
+    > "${TEST_HOME}/plugins/runtimes.d/WINE-BLEEDING-ext.json"
+
+  # Invoke with WB_BUILD_SKIP_COMPILE=1 (set in setup). The driver should
+  # clear the security gate — it may exit non-zero later for other reasons
+  # (missing build-deps etc.), but NOT with exit 65 "Security gate".
+  run "${BUILD_COMPONENT}" \
+    --component dxvk \
+    --target-dist "${ext_path}" 2>&1
+  [[ "${output}" != *"Security gate"* ]]
+}
+
 @test "full-build.sh: --help not recognized exits 1 (arg parsing regression guard)" {
   # full-build.sh does not have --help; unknown args exit 1.
   # This test verifies arg-parsing still works and exits predictably.
