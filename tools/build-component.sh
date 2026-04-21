@@ -68,7 +68,7 @@ while [[ "$#" -gt 0 ]]; do
       HELP=1 ;;
     *)
       echo "build-component: unknown argument: $1" >&2
-      echo "  Usage: $0 --component {dxvk|vkd3d|nvapi} --target-dist <path> [options]" >&2
+      echo "  Usage: $0 --component {dxvk|vkd3d|nvapi|mangohud|vkbasalt|optiscaler} --target-dist <path> [options]" >&2
       exit 64 ;;
   esac
   shift
@@ -82,8 +82,9 @@ Build a single Wine GPU component into an existing native dist, using
 build-to-sibling staging + atomic swap so the dist stays usable during rebuild.
 
 Required:
-  --component {dxvk|vkd3d|nvapi}
-      Component to build.
+  --component {dxvk|vkd3d|nvapi|mangohud|vkbasalt|optiscaler}
+      Component to build. Overlay components (mangohud, vkbasalt, optiscaler)
+      install to $WB_HOME/overlays/ via fetch-overlay.sh, not into --target-dist.
 
   --target-dist PATH
       Absolute path to an existing native dist dir (must be under $WB_HOME/dist/).
@@ -129,9 +130,46 @@ fi
 
 case "${COMPONENT}" in
   dxvk|vkd3d|nvapi) ;;
+  mangohud|vkbasalt|optiscaler) ;;
   *)
-    bc_emit_error "Unknown component '${COMPONENT}' (expected: dxvk, vkd3d, nvapi)"
+    bc_emit_error "Unknown component '${COMPONENT}' (expected: dxvk, vkd3d, nvapi, mangohud, vkbasalt, optiscaler)"
     exit 64 ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Overlay components — delegate to fetch-overlay.sh
+# These install to $WB_HOME/overlays/, not into --target-dist.
+# They do NOT require --target-dist; any provided value is silently ignored.
+# ---------------------------------------------------------------------------
+_bc_run_overlay_component() {
+  local overlay_name="$1"
+  local fetcher="${WINE_ROOT}/tools/fetch-overlay.sh"
+
+  if [[ ! -x "${fetcher}" ]]; then
+    bc_emit_error "fetch-overlay.sh not found at ${fetcher}"
+    exit 99
+  fi
+
+  local version="${_BC_OVERLAY_VERSION:-latest}"
+  local fetch_args=(
+    --overlay "${overlay_name}"
+    --version "${version}"
+  )
+
+  if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
+    fetch_args+=(--progress-fd "${WB_BUILD_PROGRESS_FD}")
+  fi
+
+  bc_emit_log "Delegating to fetch-overlay.sh for overlay component '${overlay_name}'"
+  bc_emit_log "Note: overlay components install to \$WB_HOME/overlays/, not to a dist"
+  "${fetcher}" "${fetch_args[@]}"
+}
+
+case "${COMPONENT}" in
+  mangohud|vkbasalt|optiscaler)
+    _bc_run_overlay_component "${COMPONENT}"
+    exit $?
+    ;;
 esac
 
 if [[ -z "${TARGET_DIST}" ]]; then

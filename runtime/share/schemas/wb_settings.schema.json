@@ -255,11 +255,48 @@
           "description": "Extra environment variables for the launch. Layer-exclusive."
         },
         "overlays": {
-          "$comment": "Reserved for Phase C — per-app overlay bundling (MangoHud/OptiScaler/GStreamer/VKBasalt)",
+          "$comment": "Phase C — per-app overlay bundling (MangoHud/VKBasalt/OptiScaler). Active as of v1.8.0.",
           "oneOf": [
-            { "type": "object" },
-            { "type": "null" }
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mangohud": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled":     { "type": "boolean" },
+                    "bundled":     { "type": "boolean" },
+                    "version":     { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+                    "config_path": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+                  }
+                },
+                "vkbasalt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "bundled": { "type": "boolean" },
+                    "version": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+                  }
+                },
+                "optiscaler": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "version": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+                  }
+                }
+              }
+            }
           ]
+        },
+        "_wb_overlay_managed_env_keys": {
+          "$comment": "Phase C internal — env_vars keys baked by the overlay save handler. Not user-editable.",
+          "type": "array",
+          "items": { "type": "string" }
         },
         "wine_registry_patches": {
           "$comment": "Reserved for Phase D — registry edit",

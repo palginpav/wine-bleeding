@@ -237,6 +237,63 @@ wb_gui_dialog_checklist() {
 }
 
 # ---------------------------------------------------------------------------
+# wb_gui_dialog_overlay_install_prompt <overlay_name> <version>
+# 3-button dialog: "Install now" (rc=0) / "Save without installing" (rc=10) /
+# "Cancel" (rc=1).  Implements BLK-2 resolved copy.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_overlay_install_prompt() {
+  local overlay_name="${1:-overlay}"
+  local version="${2:-(unknown version)}"
+  wb_gui_yad \
+    --title="wb-gui — ${overlay_name} not installed" \
+    --no-markup \
+    --image=dialog-question \
+    --text="${overlay_name} is enabled but not yet installed.
+
+  Install now (recommended): download and install ${overlay_name} ${version},
+    then save. The HUD will be active on next game launch.
+
+  Save without installing: settings are saved. ${overlay_name} will use
+    your system installation (if any). A warning badge will appear
+    in this panel as a reminder.
+
+  Cancel: return to the panel without saving." \
+    --button="Install now:0" \
+    --button="Save without installing:10" \
+    --button="Cancel:1" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_overlay_updates_checklist <title> <header_text>
+#   <row_data...>
+# Wraps yad --list --checklist for Stage 2 (updates available).
+# Columns: CHK | Overlay | Installed | Available | Action
+# rc=0 "Install selected", rc=1 Cancel.
+# Prints pipe-separated checklist rows to stdout.
+# ---------------------------------------------------------------------------
+wb_gui_dialog_overlay_updates_checklist() {
+  local title="${1:-wb-gui — Overlay updates available}"
+  local header_text="${2:-}"
+  shift 2
+  wb_gui_yad \
+    --list --checklist \
+    --title="${title}" \
+    --text="${header_text}" \
+    --no-markup \
+    --width=640 --height=300 \
+    --separator="|" \
+    --print-all \
+    --column="Install:CHK" \
+    --column="Overlay" \
+    --column="Installed" \
+    --column="Available" \
+    --column="Action" \
+    --button="Cancel:1" \
+    --button="Install selected:0" \
+    "$@" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # wb_gui_dialog_notebook <key> <tab_labels_csv> [extra_yad_args...]
 #
 # Wraps yad --notebook (parent container). The caller must launch child

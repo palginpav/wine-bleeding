@@ -2,6 +2,73 @@
 
 ## [Unreleased] — v1.7.0-dev
 
+### Phase C: per-app overlay bundling (MangoHud, VKBasalt, OptiScaler)
+
+Per-app overlay enable/disable + "bundled vs system libs" toggle (PortProton
+parity), GitHub-sourced updates, and rebuild-separately via Phase B's
+`build-component.sh`. **GStreamer re-deferred** to Phase E (no single-artifact
+GitHub upstream; bundled path needs a source-build subsystem out of scope).
+**OptiScaler is enable-only** (Windows DLL replacement; no Linux system
+counterpart, so no `bundled/system` toggle).
+
+- **`src/wb-gui-lib/wb-gui-overlays.sh`** (new) — overlay registry library
+  using the Phase-B registry-as-view pattern. Derived from filesystem state
+  at `$WB_HOME/overlays/<name>/<version>/` plus per-app settings; no
+  source-of-truth drift. Public API: `wb_gui_overlays_registry_refresh`,
+  `wb_gui_overlays_list`, `wb_gui_overlays_check_updates`,
+  `wb_gui_overlays_install`, `wb_gui_overlays_save_env_bake`.
+  Schema: `share/schemas/wb_overlays.schema.json`.
+- **`tools/fetch-overlay.sh`** (new) — GitHub release fetcher. CLI:
+  `--overlay <name> --version <tag|latest> --dest <path>` plus
+  `--progress-fd <N>` emitting the same `PROGRESS:/LOG:/WARN:/ERROR:`
+  protocol as Phase B's `build-component.sh`. sha256 verification, archive
+  formats `.tar.gz` / `.tar.xz` / `.zip` / `.7z`, 10-min on-demand cache,
+  fast-fail on offline / 429 rate-limit with actionable ERROR events.
+- **`tools/build-component.sh`** — enum extended with `mangohud`,
+  `vkbasalt`, `optiscaler`. vkBasalt builds from source via meson+ninja
+  (reusing Phase B's build helpers); MangoHud + OptiScaler are
+  prebuilt-archive installs.
+- **`src/wb-gui-lib/wb-gui-settings.sh`** — extended to persist the
+  `overlays` sub-object in per-app settings, including a
+  `_wb_overlay_managed_env_keys` array that tracks which env_vars entries
+  the overlay handler owns (so disable cleanly removes them without
+  clobbering user-set keys).
+- **`src/wb-gui`** — Per-App tab of `_cmd_settings_v2` extended with the
+  overlay panel (3 overlays × {enable + version + bundled/system radio}
+  per W2 wireframe field index O1–O25). Save-handler flow invokes
+  `wb_gui_overlays_save_env_bake`, with a **conflict-detection dialog**
+  that fires when the user has manually set a managed env key (MANGOHUD,
+  ENABLE_VKBASALT, etc.). Check-updates dialog chain: 4 stages (progress →
+  checklist → per-overlay install log → summary), reusing
+  `wb_gui_dialog_log_tail` with the Phase B P1 auto-close pattern. 4 error
+  dialogs (offline, rate-limited, sha-mismatch, degradation) with
+  "what / why / next action" copy.
+- **One-time v1.8.0 banner** — `_cmd_main_window` shows the Phase C
+  "new feature" info dialog once, gated by
+  `$WB_HOME/etc/wb-gui-seen-phase-c.flag`. Suppressed by
+  `WB_GUI_NO_OVERLAY_BANNER=1` and in test mode.
+- **`src/wb-gui-lib/wb-gui-dialogs.sh`** — two new helpers:
+  `wb_gui_dialog_overlay_install_prompt` (post-check yes/no) and
+  `wb_gui_dialog_overlay_updates_checklist` (multi-overlay selection).
+- **Tests** (+48) — `33_overlays_registry.bats` (33), `35_overlay_panel.bats`
+  (15) covering registry refresh, env-bake correctness, conflict detection,
+  banner sentinel lifecycle, and offline/rate-limit error branches.
+  Full suite 439 → 487, all green. GitHub API is stubbed through
+  `WB_TEST_GH_API_FIXTURE` + `WB_OVERLAY_DOWNLOAD_BASE` seams — tests are
+  fully offline.
+
+Known limitations (polish follow-ups for v1.8.x):
+
+- **Unsaved-changes indicator in the overlay panel** — yad `--form` button
+  callbacks run in subshells with no channel back to the parent plug, so a
+  dirty flag can't propagate without a named-pipe state bus. Deferred.
+- **Check-updates Stage 1 shows a static 30s progress dialog** rather than
+  per-overlay streaming status. Backend check is synchronous; a streaming
+  variant requires restructuring `wb_gui_overlays_check_updates`.
+- **Version dropdown renders as a single-item CB "latest"** when no
+  versions are installed (instead of a static LBL "—"). yad `--form`
+  doesn't support runtime field-type switching without a dual-plug setup.
+
 ### Phase B: dist management UI + component builder
 
 Dist Manager and a Component Builder that wraps `tools/full-build.sh` into

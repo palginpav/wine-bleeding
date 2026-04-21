@@ -35,7 +35,10 @@ _WB_GUI_SETTINGS_LAYER_KEYS_DIST=(external_source name active last_built_at gpu)
 _WB_GUI_SETTINGS_LAYER_KEYS_PREFIX=(notes gpu win_version wine_debug)
 
 # App layer: exclusive keys + cross-cutting
-_WB_GUI_SETTINGS_LAYER_KEYS_APP=(wine_args env_vars gpu win_version wine_debug)
+# overlays: Phase C per-app overlay object (MangoHud / VKBasalt / OptiScaler)
+# _wb_overlay_managed_env_keys: Phase C internal — tracks which env_vars keys
+#   were baked by the overlay save handler so they can be cleanly removed on disable.
+_WB_GUI_SETTINGS_LAYER_KEYS_APP=(wine_args env_vars gpu win_version wine_debug overlays _wb_overlay_managed_env_keys)
 
 # ---------------------------------------------------------------------------
 # Built-in defaults — final fallback when no layer sets a cross-cutting key
@@ -246,6 +249,20 @@ _wb_gui_settings_set_key() {
                 --arg now "${now_utc}" \
                 --argjson v "${value}" \
                 '.updated_utc = $now | .env_vars = $v')"
+            ;;
+        overlays)
+            # Expect value to be a JSON object or null (Phase C per-app overlay state)
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | .overlays = $v')"
+            ;;
+        _wb_overlay_managed_env_keys)
+            # Expect value to be a JSON array of string key names
+            new_json="$(printf '%s' "${existing_json}" | jq \
+                --arg now "${now_utc}" \
+                --argjson v "${value}" \
+                '.updated_utc = $now | ._wb_overlay_managed_env_keys = $v')"
             ;;
         active)
             # boolean

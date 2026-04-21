@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wine-bleeding/wb-runtime/schemas/wb_overlays.schema.json",
+  "title": "wb_overlays",
+  "description": "Registry of overlays installed in $WB_HOME/overlays/. Derived view of $WB_HOME/overlays/<name>/<version>/ trees plus optional GitHub 'latest' cache.",
+  "type": "object",
+  "required": ["schema", "generated_utc", "overlays"],
+  "additionalProperties": false,
+  "properties": {
+    "schema":        { "type": "integer", "const": 1 },
+    "generated_utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "overlays":      { "type": "array", "items": { "$ref": "#/$defs/overlay_entry" } }
+  },
+  "$defs": {
+    "overlay_entry": {
+      "type": "object",
+      "required": ["name", "kind", "installed_versions"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["mangohud", "vkbasalt", "optiscaler"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["vulkan-layer", "windows-dll"],
+          "description": "vulkan-layer = MangoHud/VKBasalt (Linux .so + implicit_layer.d JSON); windows-dll = OptiScaler (Windows .dll, no system counterpart)"
+        },
+        "source_repo": {
+          "type": "string",
+          "description": "GitHub slug 'owner/repo' used by fetch-overlay.sh"
+        },
+        "installed_versions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/version_entry" }
+        },
+        "available_version": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ],
+          "description": "Latest version discovered via GitHub API on last check. null if never checked or offline."
+        },
+        "available_asset_url": {
+          "oneOf": [{ "type": "string", "format": "uri" }, { "type": "null" }]
+        },
+        "available_sha256": {
+          "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" }]
+        },
+        "last_checked_utc": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+            { "type": "null" }
+          ]
+        },
+        "last_check_error": {
+          "oneOf": [
+            { "type": "string", "enum": ["offline", "rate-limited", "http-error", "parse-error"] },
+            { "type": "null" }
+          ]
+        },
+        "last_fallback_utc": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+            { "type": "null" }
+          ],
+          "description": "Set when a bundled install was requested but missing; launch fell back to system."
+        },
+        "last_fallback_reason": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "version_entry": {
+      "type": "object",
+      "required": ["version", "install_path", "installed_utc"],
+      "additionalProperties": false,
+      "properties": {
+        "version":       { "type": "string", "minLength": 1 },
+        "install_path":  { "type": "string", "pattern": "^/" },
+        "installed_utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "sha256":        { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" }] },
+        "broken":        { "type": "boolean" },
+        "broken_reason": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    }
+  }
+}

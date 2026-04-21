@@ -19,7 +19,7 @@
 #   - apps.json registry lives at $WB_HOME/apps.json; mutations are atomic.
 set -euo pipefail
 
-WB_GUI_VERSION="1.7.0-dev"
+WB_GUI_VERSION="1.8.0-dev"
 
 # ---------------------------------------------------------------------------
 # Resolve paths — Option A fallback for system-package installs (mirrors wb).
@@ -85,6 +85,8 @@ _wb_gui_load_libs() {
   source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh"
   # shellcheck source=wb-gui-lib/wb-gui-dist.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-dist.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-overlays.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -1034,8 +1036,89 @@ _launch_tab_app() {
   local winver_opts
   winver_opts="$(_settings_build_winver_combo "${winver_cur}" "${winver_display}")"
 
+  # ---------------------------------------------------------------------------
+  # Phase C: Overlay panel state
+  # Refresh registry before rendering so action buttons are current.
+  # ---------------------------------------------------------------------------
+  wb_gui_overlays_registry_refresh 2>/dev/null || true
+
+  # Load per-app overlays object
+  local overlay_json_str
+  overlay_json_str="$(wb_gui_settings_get_app "${app_id}" overlays 2>/dev/null || true)"
+  [[ -z "${overlay_json_str}" || "${overlay_json_str}" == "null" ]] && overlay_json_str="{}"
+
+  # Helper: read per-overlay field with null-safe default
+  _ov_field() {
+    local j="${1}" path="${2}" def="${3:-}"
+    local v
+    v="$(printf '%s' "${j}" | jq -r "${path} // empty" 2>/dev/null || true)"
+    printf '%s' "${v:-${def}}"
+  }
+
+  # MangoHud
+  local mh_enabled_bool mh_enabled_chk mh_bundled mh_source_cb mh_version_cb mh_action
+  mh_enabled_bool="$(_ov_field "${overlay_json_str}" '.mangohud.enabled' 'false')"
+  mh_enabled_chk="FALSE"; [[ "${mh_enabled_bool}" == "true" ]] && mh_enabled_chk="TRUE"
+  mh_bundled="$(_ov_field "${overlay_json_str}" '.mangohud.bundled' 'true')"
+  mh_source_cb="Bundled!System"; [[ "${mh_bundled}" == "false" ]] && mh_source_cb="System!Bundled"
+  mh_version_cb="$(_overlay_build_version_cb mangohud)"
+  mh_action="$(_overlay_action_label mangohud)"
+  local mh_config_path
+  mh_config_path="$(_ov_field "${overlay_json_str}" '.mangohud.config_path' '')"
+  # Detect degradation: enabled, bundled, but no installed version
+  local mh_label="MangoHud (FPS/frametime HUD)"
+  if [[ "${mh_enabled_chk}" == "TRUE" && "${mh_bundled}" == "true" && "${mh_action}" == "Install" ]]; then
+    mh_label="MangoHud (FPS/frametime HUD) [not installed]"
+  fi
+
+  # VKBasalt
+  local vkb_enabled_bool vkb_enabled_chk vkb_bundled vkb_source_cb vkb_version_cb vkb_action
+  vkb_enabled_bool="$(_ov_field "${overlay_json_str}" '.vkbasalt.enabled' 'false')"
+  vkb_enabled_chk="FALSE"; [[ "${vkb_enabled_bool}" == "true" ]] && vkb_enabled_chk="TRUE"
+  vkb_bundled="$(_ov_field "${overlay_json_str}" '.vkbasalt.bundled' 'true')"
+  vkb_source_cb="Bundled!System"; [[ "${vkb_bundled}" == "false" ]] && vkb_source_cb="System!Bundled"
+  vkb_version_cb="$(_overlay_build_version_cb vkbasalt)"
+  vkb_action="$(_overlay_action_label vkbasalt)"
+  local vkb_label="VKBasalt (post-FX shaders)"
+  if [[ "${vkb_enabled_chk}" == "TRUE" && "${vkb_bundled}" == "true" && "${vkb_action}" == "Install" ]]; then
+    vkb_label="VKBasalt (post-FX shaders) [not installed]"
+  fi
+
+  # OptiScaler
+  local osc_enabled_bool osc_enabled_chk osc_version_cb osc_action
+  osc_enabled_bool="$(_ov_field "${overlay_json_str}" '.optiscaler.enabled' 'false')"
+  osc_enabled_chk="FALSE"; [[ "${osc_enabled_bool}" == "true" ]] && osc_enabled_chk="TRUE"
+  osc_version_cb="$(_overlay_build_version_cb optiscaler)"
+  osc_action="$(_overlay_action_label optiscaler)"
+  # osc_action used only for degradation label; suppress unused warning
+  : "${osc_action}"
+
+  # Last-checked timestamp label (O23)
+  local last_checked_text
+  last_checked_text="$(_overlay_last_checked_text)"
+
+  # MangoHud config placeholder (MIN-3 fix)
+  local mh_config_default="${HOME}/.config/MangoHud/MangoHud.conf (optional)"
+  if [[ -n "${mh_config_path}" ]]; then
+    mh_config_default="${mh_config_path}"
+  elif [[ -f "${HOME}/.config/MangoHud/MangoHud.conf" ]]; then
+    mh_config_default="${HOME}/.config/MangoHud/MangoHud.conf"
+  fi
+
+  # Export context vars for BTN callbacks (yad calls them via bash -c in subshell)
+  export _WB_OVERLAY_APP_ID="${app_id}"
+  export _WB_OVERLAY_WB_HOME="${wb_home}"
+  export _WB_GUI_LIB_DIR
+  export _WB_LIB_DIR
+  # Export the overlay button handler functions so yad BTN fields can call them
+  export -f _wb_overlay_btn_mangohud 2>/dev/null || true
+  export -f _wb_overlay_btn_vkbasalt 2>/dev/null || true
+  export -f _wb_overlay_btn_optiscaler 2>/dev/null || true
+  export -f _wb_overlay_btn_check_all 2>/dev/null || true
+
   yad --plug="${yad_key}" --tabnum=4 \
     --form --separator="|" --no-markup \
+    --columns=1 \
     --text="Editing app: ${app_display_name}. Leave a field blank to use the inherited value shown above." \
     --field="Windows version:CB" \
       "${winver_opts}" \
@@ -1049,6 +1132,37 @@ _launch_tab_app() {
       "${wine_args_display}" \
     --field="Env vars (KEY=VALUE, one per line):TXT" \
       "${env_vars_display}" \
+    --field="─── Overlays ───────────────────────────────────────────────────:LBL" "" \
+    --field="${mh_label}:CHK" \
+      "${mh_enabled_chk}" \
+    --field="  MangoHud source:CB" \
+      "${mh_source_cb}" \
+    --field="  MangoHud version:CB" \
+      "${mh_version_cb}" \
+    --field="  MangoHud action:BTN" \
+      "_wb_overlay_btn_mangohud" \
+    --field="  MangoHud config:FL" \
+      "${mh_config_default}" \
+    --field="${vkb_label}:CHK" \
+      "${vkb_enabled_chk}" \
+    --field="  VKBasalt source:CB" \
+      "${vkb_source_cb}" \
+    --field="  VKBasalt version:CB" \
+      "${vkb_version_cb}" \
+    --field="  VKBasalt action:BTN" \
+      "_wb_overlay_btn_vkbasalt" \
+    --field="OptiScaler (Windows DLL upscaler):CHK" \
+      "${osc_enabled_chk}" \
+    --field="  OptiScaler source:LBL" \
+      "Bundled (Windows DLL) — no system option" \
+    --field="  OptiScaler version:CB" \
+      "${osc_version_cb}" \
+    --field="  OptiScaler action:BTN" \
+      "_wb_overlay_btn_optiscaler" \
+    --field="  Check for updates (all overlays):BTN" \
+      "_wb_overlay_btn_check_all" \
+    --field="${last_checked_text}:LBL" "" \
+    --field="GStreamer support comes from your system libraries. No action needed unless you report codec issues.:LBL" "" \
     > "${pipe_file}" 2>/dev/null &
   echo "$!"
 }
@@ -1168,6 +1282,14 @@ _settings_save_prefix() {
 # ---------------------------------------------------------------------------
 # _settings_save_app <app_id> <pipe_file>
 # Parse tab4 output and persist to app layer.
+# Phase C: fields 7–20 carry overlay panel state; calls save_env_bake.
+# Field order (1-based, pipe-separated):
+#   1  winver_sel   2  inh_ro1      3  debug_val    4  inh_ro2
+#   5  wine_args    6  env_vars_ml  7  sep_lbl
+#   8  mh_chk       9  mh_src_cb   10  mh_ver_cb   11  mh_btn
+#  12  mh_config   13  vkb_chk     14  vkb_src_cb  15  vkb_ver_cb
+#  16  vkb_btn     17  osc_chk     18  osc_src_lbl 19  osc_ver_cb
+#  20  osc_btn     21  check_btn   22  ts_lbl       23  gs_lbl
 # ---------------------------------------------------------------------------
 _settings_save_app() {
   local app_id="${1}"
@@ -1178,9 +1300,20 @@ _settings_save_app() {
   raw_out="$(cat "${pipe_file}" 2>/dev/null || true)"
   [[ -z "${raw_out}" ]] && return 0
 
-  # stdout: winver_sel|inh_ro1|debug_val|inh_ro2|wine_args_str|env_vars_ml|
-  IFS='|' read -r winver_sel _inh1 debug_val _inh2 wine_args_str env_vars_ml _rest <<< "${raw_out}"
+  # Split on pipe into positional fields
+  # _inh_ro1/_inh_ro2: read-only inherited display labels (output from yad RO fields)
+  local winver_sel _inh_ro1 debug_val _inh_ro2 wine_args_str env_vars_ml _sep_lbl
+  local mh_chk mh_src_cb mh_ver_cb _mh_btn mh_config
+  local vkb_chk vkb_src_cb vkb_ver_cb _vkb_btn
+  local osc_chk _osc_src_lbl osc_ver_cb _osc_btn _rest
+  IFS='|' read -r \
+    winver_sel _inh_ro1 debug_val _inh_ro2 wine_args_str env_vars_ml _sep_lbl \
+    mh_chk mh_src_cb mh_ver_cb _mh_btn mh_config \
+    vkb_chk vkb_src_cb vkb_ver_cb _vkb_btn \
+    osc_chk _osc_src_lbl osc_ver_cb _osc_btn _rest \
+    <<< "${raw_out}"
 
+  # --- Windows version ---
   if [[ "${winver_sel}" == "(inherited:"* ]]; then
     local app_path
     app_path="$(_wb_gui_settings_layer_path app "${app_id}")"
@@ -1195,7 +1328,7 @@ _settings_save_app() {
     [[ -n "${winver_json}" ]] && wb_gui_settings_set_app "${app_id}" win_version "${winver_json}" 2>/dev/null || true
   fi
 
-  # wine_debug: empty → null/remove (W4 flag 3)
+  # --- wine_debug ---
   if [[ -z "${debug_val}" ]]; then
     local app_path2
     app_path2="$(_wb_gui_settings_layer_path app "${app_id}")"
@@ -1208,14 +1341,14 @@ _settings_save_app() {
     wb_gui_settings_set_app "${app_id}" wine_debug "${debug_val}" 2>/dev/null || true
   fi
 
-  # wine_args: split on whitespace → JSON array (W4 flag 2)
+  # --- wine_args ---
   if [[ -n "${wine_args_str}" ]]; then
     local wine_args_json
     wine_args_json="$(jq -cn --arg x "${wine_args_str}" '$x | split(" ") | map(select(length > 0))' 2>/dev/null || echo "[]")"
     wb_gui_settings_set_app "${app_id}" wine_args "${wine_args_json}" 2>/dev/null || true
   fi
 
-  # env_vars: parse KEY=VALUE lines → JSON object (W4 flag 2)
+  # --- env_vars ---
   if [[ -n "${env_vars_ml}" ]]; then
     local env_json="{}"
     local line
@@ -1229,7 +1362,824 @@ _settings_save_app() {
     done <<< "${env_vars_ml}"
     wb_gui_settings_set_app "${app_id}" env_vars "${env_json}" 2>/dev/null || true
   fi
+
+  # --- Phase C: Overlay panel ---
+  # Assemble overlays JSON object from form fields
+  local mh_enabled="false" vkb_enabled="false" osc_enabled="false"
+  [[ "${mh_chk}" == "TRUE" ]]  && mh_enabled="true"
+  [[ "${vkb_chk}" == "TRUE" ]] && vkb_enabled="true"
+  [[ "${osc_chk}" == "TRUE" ]] && osc_enabled="true"
+
+  local mh_bundled="true"
+  [[ "${mh_src_cb}" == "System" ]] && mh_bundled="false"
+  local vkb_bundled="true"
+  [[ "${vkb_src_cb}" == "System" ]] && vkb_bundled="false"
+
+  # Version: "latest" sentinel → null (means "highest installed")
+  local mh_ver="null" vkb_ver="null" osc_ver="null"
+  [[ -n "${mh_ver_cb}" && "${mh_ver_cb}" != "latest" ]] && mh_ver="\"${mh_ver_cb}\""
+  [[ -n "${vkb_ver_cb}" && "${vkb_ver_cb}" != "latest" ]] && vkb_ver="\"${vkb_ver_cb}\""
+  [[ -n "${osc_ver_cb}" && "${osc_ver_cb}" != "latest" ]] && osc_ver="\"${osc_ver_cb}\""
+
+  # MangoHud config path: strip placeholder text; use actual path only
+  local mh_config_placeholder="${HOME}/.config/MangoHud/MangoHud.conf (optional)"
+  local mh_config_path="null"
+  if [[ -n "${mh_config}" && "${mh_config}" != "${mh_config_placeholder}" ]]; then
+    mh_config_path="\"${mh_config}\""
+  fi
+
+  # Build overlays JSON
+  local overlays_json
+  overlays_json="$(jq -cn \
+    --argjson mh_enabled "${mh_enabled}" \
+    --argjson mh_bundled "${mh_bundled}" \
+    --argjson mh_ver "${mh_ver}" \
+    --argjson mh_config "${mh_config_path}" \
+    --argjson vkb_enabled "${vkb_enabled}" \
+    --argjson vkb_bundled "${vkb_bundled}" \
+    --argjson vkb_ver "${vkb_ver}" \
+    --argjson osc_enabled "${osc_enabled}" \
+    --argjson osc_ver "${osc_ver}" \
+    '{
+      mangohud: {enabled: $mh_enabled, bundled: $mh_bundled, version: $mh_ver, config_path: $mh_config},
+      vkbasalt: {enabled: $vkb_enabled, bundled: $vkb_bundled, version: $vkb_ver},
+      optiscaler: {enabled: $osc_enabled, version: $osc_ver}
+    }' 2>/dev/null || echo 'null')"
+
+  if [[ "${overlays_json}" != "null" ]]; then
+    # Conflict detection: warn user before save if managed env keys have manual values
+    _overlay_conflict_check_and_warn "${app_id}" "${overlays_json}" || true
+
+    # Check if MangoHud enabled but not installed → A3a flow
+    local mh_action_btn
+    mh_action_btn="$(_overlay_action_label mangohud)"
+    if [[ "${mh_enabled}" == "true" && "${mh_action_btn}" == "Install" ]]; then
+      local mh_avail_ver
+      mh_avail_ver="$(jq -r \
+        '.overlays[] | select(.name=="mangohud") | .available_version // "(unknown version)"' \
+        "${WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" 2>/dev/null || echo '(unknown version)')"
+      local rc_prompt=0
+      wb_gui_dialog_overlay_install_prompt "MangoHud" "${mh_avail_ver}" || rc_prompt=$?
+      case "${rc_prompt}" in
+        0)   # Install now then save
+             _overlay_run_install_with_log "mangohud" "latest" || true
+             ;;
+        10)  # Save without installing — proceed to bake
+             ;;
+        *)   return 0 ;; # Cancel
+      esac
+    fi
+
+    # Same check for VKBasalt
+    local vkb_action_btn
+    vkb_action_btn="$(_overlay_action_label vkbasalt)"
+    if [[ "${vkb_enabled}" == "true" && "${vkb_action_btn}" == "Install" ]]; then
+      local vkb_avail_ver
+      vkb_avail_ver="$(jq -r \
+        '.overlays[] | select(.name=="vkbasalt") | .available_version // "(unknown version)"' \
+        "${WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" 2>/dev/null || echo '(unknown version)')"
+      local rc_vkb=0
+      wb_gui_dialog_overlay_install_prompt "VKBasalt" "${vkb_avail_ver}" || rc_vkb=$?
+      case "${rc_vkb}" in
+        0)   _overlay_run_install_with_log "vkbasalt" "latest" || true ;;
+        10)  ;;
+        *)   return 0 ;;
+      esac
+    fi
+
+    # Same check for OptiScaler
+    local osc_action_btn
+    osc_action_btn="$(_overlay_action_label optiscaler)"
+    if [[ "${osc_enabled}" == "true" && "${osc_action_btn}" == "Install" ]]; then
+      local osc_avail_ver
+      osc_avail_ver="$(jq -r \
+        '.overlays[] | select(.name=="optiscaler") | .available_version // "(unknown version)"' \
+        "${WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" 2>/dev/null || echo '(unknown version)')"
+      local rc_osc=0
+      wb_gui_dialog_overlay_install_prompt "OptiScaler" "${osc_avail_ver}" || rc_osc=$?
+      case "${rc_osc}" in
+        0)   _overlay_run_install_with_log "optiscaler" "latest" || true ;;
+        10)  ;;
+        *)   return 0 ;;
+      esac
+    fi
+
+    # System MangoHud not detected warning (Flow B, non-blocking)
+    if [[ "${mh_enabled}" == "true" && "${mh_bundled}" == "false" ]]; then
+      local sys_mh_found=false
+      if [[ -f "/usr/share/vulkan/implicit_layer.d/MangoHud.json" ]] || \
+         command -v mangohud >/dev/null 2>&1; then
+        sys_mh_found=true
+      fi
+      if [[ "${sys_mh_found}" == "false" ]]; then
+        wb_gui_dialog_info "wb-gui — System MangoHud not detected" \
+          "No system MangoHud installation found.
+If MangoHud is not installed via your package manager,
+the overlay will not appear when the game runs.
+Install MangoHud via your package manager, or switch back to Bundled."
+      fi
+    fi
+
+    # Bake overlays into env_vars (Path B) — single atomic write
+    wb_gui_overlays_save_env_bake "${app_id}" "${overlays_json}" 2>/dev/null || true
+  fi
 }
+
+# ===========================================================================
+# PHASE C: Per-App Overlay Panel + Update-Check Dialog Chain (v1.8.0)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# _overlay_phase_c_banner
+# Show the one-time "New in v1.8.0" info banner (W2 BLK-3).
+# Guards via $WB_HOME/etc/wb-gui-seen-phase-c.flag sentinel.
+# Creates the flag on dismissal so it is never shown again.
+# ---------------------------------------------------------------------------
+_overlay_phase_c_banner() {
+  # Test-mode suppression: skip banner when WB_GUI_NO_DESKTOP_SHORTCUT=1 or
+  # WB_GUI_NO_OVERLAY_BANNER=1 to avoid consuming fake-yad response slots.
+  [[ "${WB_GUI_NO_DESKTOP_SHORTCUT:-0}" == "1" ]] && return 0
+  [[ "${WB_GUI_NO_OVERLAY_BANNER:-0}" == "1" ]] && return 0
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+  local flag_dir="${wb_home}/etc"
+  local flag_file="${flag_dir}/wb-gui-seen-phase-c.flag"
+
+  [[ -e "${flag_file}" ]] && return 0
+
+  wb_gui_yad \
+    --title="wb-gui — New in v1.8.0: Per-app overlays" \
+    --no-markup \
+    --image=dialog-information \
+    --text="You can now enable MangoHud, VKBasalt, and OptiScaler
+per game — with automatic updates from GitHub.
+
+Open Settings, select a game, and go to the Per-App tab to find
+the Overlays panel." \
+    --button="Got it:0" 2>/dev/null || true
+
+  mkdir -p "${flag_dir}" && touch "${flag_file}" || true
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_conflict_check_and_warn <app_id> <overlays_json>
+# Check if any overlay-managed env keys exist in env_vars outside the current
+# managed-keys list. Show a one-time info dialog per conflict key (W2 BLK-1).
+# Returns 0 always (non-blocking; save proceeds regardless).
+# ---------------------------------------------------------------------------
+_overlay_conflict_check_and_warn() {
+  local app_id="${1:-}"
+  local overlays_json="${2:-null}"
+
+  [[ -z "${app_id}" ]] && return 0
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+  local app_file="${wb_home}/settings/apps/${app_id}.json"
+
+  [[ -f "${app_file}" ]] || return 0
+
+  # Current env_vars and managed keys from the app file
+  local env_vars_json managed_keys_json
+  env_vars_json="$(jq '.env_vars // {}' "${app_file}" 2>/dev/null || echo '{}')"
+  managed_keys_json="$(jq '._wb_overlay_managed_env_keys // []' "${app_file}" 2>/dev/null || echo '[]')"
+
+  # Overlay-managed keys the save_env_bake will write
+  # These are the canonical overlay env keys per W2 §0 Path B table
+  local -a candidate_keys=(MANGOHUD ENABLE_VKBASALT VK_LAYER_PATH LD_LIBRARY_PATH MANGOHUD_CONFIG WINEDLLOVERRIDES)
+
+  local key
+  for key in "${candidate_keys[@]}"; do
+    # If key is already in the managed list, the bake knows about it — no conflict
+    local already_managed
+    already_managed="$(printf '%s' "${managed_keys_json}" | jq --arg k "${key}" 'index($k) != null' 2>/dev/null || echo "false")"
+    [[ "${already_managed}" == "true" ]] && continue
+
+    # If key is in env_vars (user-set manually), that's a conflict to surface
+    local key_val
+    key_val="$(printf '%s' "${env_vars_json}" | jq -r --arg k "${key}" '.[$k] // empty' 2>/dev/null || true)"
+    [[ -z "${key_val}" ]] && continue
+
+    # Show one info dialog per conflicting key
+    wb_gui_dialog_info "wb-gui — Overlay conflict resolved" \
+      "The overlay panel removed a conflicting manual setting:
+  env_vars.${key} was set to \"${key_val}\"
+The overlay toggle is now the source of truth for this setting.
+If you need custom configuration, use the overlay panel fields instead."
+  done
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_build_version_cb <name>
+# Build the :<CB> value string for the version dropdown of an overlay.
+# Returns "latest" as sole item when no versions installed (MAJ-2 fix).
+# Returns "latest!ver1!ver2..." when installed versions exist.
+# ---------------------------------------------------------------------------
+_overlay_build_version_cb() {
+  local name="${1:-}"
+  local reg_file
+  reg_file="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}/overlays.json"
+
+  if [[ ! -f "${reg_file}" ]]; then
+    printf 'latest'
+    return 0
+  fi
+
+  local ver_list
+  ver_list="$(jq -r \
+    --arg n "${name}" \
+    '.overlays[] | select(.name == $n) | .installed_versions | map(.version) | if length == 0 then "" else ["latest"] + . | join("!") end' \
+    "${reg_file}" 2>/dev/null || true)"
+
+  if [[ -z "${ver_list}" ]]; then
+    printf 'latest'
+  else
+    printf '%s' "${ver_list}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_action_label <name>
+# Compute the action-button label for an overlay row based on registry state.
+# Outputs: Install | Update | Up to date | Reinstall | Installing...
+# ---------------------------------------------------------------------------
+_overlay_action_label() {
+  local name="${1:-}"
+  local reg_file
+  reg_file="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}/overlays.json"
+
+  if [[ ! -f "${reg_file}" ]]; then
+    printf 'Install'
+    return 0
+  fi
+
+  local entry
+  entry="$(jq -c --arg n "${name}" '.overlays[] | select(.name == $n)' "${reg_file}" 2>/dev/null || true)"
+
+  if [[ -z "${entry}" ]]; then
+    printf 'Install'
+    return 0
+  fi
+
+  local broken installed_count available
+  broken="$(printf '%s' "${entry}" | jq -r '.broken // false')"
+  installed_count="$(printf '%s' "${entry}" | jq '.installed_versions | length' 2>/dev/null || echo 0)"
+  available="$(printf '%s' "${entry}" | jq -r '.available_version // empty' 2>/dev/null || true)"
+
+  if [[ "${installed_count}" -eq 0 ]]; then
+    printf 'Install'
+    return 0
+  fi
+
+  if [[ "${broken}" == "true" ]]; then
+    printf 'Reinstall'
+    return 0
+  fi
+
+  # Compare highest installed version to available
+  local highest_installed
+  highest_installed="$(printf '%s' "${entry}" | jq -r '.installed_versions[0].version // empty' 2>/dev/null || true)"
+
+  if [[ -n "${available}" && -n "${highest_installed}" && "${highest_installed}" != "${available}" ]]; then
+    printf 'Update'
+  else
+    printf 'Up to date'
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_last_checked_text
+# Compute the "Last checked: ..." label (O23).
+# ---------------------------------------------------------------------------
+_overlay_last_checked_text() {
+  local reg_file
+  reg_file="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}/overlays.json"
+
+  if [[ ! -f "${reg_file}" ]]; then
+    printf 'Last checked: never'
+    return 0
+  fi
+
+  # Find earliest (min) last_checked_utc across the three overlays
+  local min_ts
+  min_ts="$(jq -r '[.overlays[].last_checked_utc | select(. != null)] | if length == 0 then "" else sort | .[0] end' \
+    "${reg_file}" 2>/dev/null || true)"
+
+  if [[ -z "${min_ts}" ]]; then
+    printf 'Last checked: never'
+  else
+    # Show the UTC timestamp as-is (no relative time calculation in bash)
+    printf 'Last checked: %s' "${min_ts}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_check_all_dialog
+# Stage 1 + 2: bulk check-for-updates dialog chain.
+# Stage 1: progress dialog while wb_gui_overlays_check_updates runs.
+# Stage 2: checklist of available updates (yad --list --checklist).
+# Returns 0 if user proceeds to install (sets _OVERLAY_INSTALL_LIST global),
+# returns 1 if cancelled or all up-to-date.
+# ---------------------------------------------------------------------------
+# Global: _OVERLAY_INSTALL_LIST — newline-separated "<name> <version>" pairs
+_OVERLAY_INSTALL_LIST=""
+
+_overlay_check_all_dialog() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+  local reg_file="${wb_home}/overlays.json"
+
+  # Stage 1: run check in background, show a progress info dialog
+  local tmp_check_log
+  tmp_check_log="$(mktemp)"
+
+  # Run check_updates in background, log output to temp file
+  {
+    wb_gui_overlays_check_updates 2>&1 || printf 'CHECK_ERROR\n'
+    printf 'CHECK_DONE\n'
+  } > "${tmp_check_log}" &
+  local check_pid=$!
+
+  # Show a simple info-while-checking progress dialog (Phase C: simpler approach
+  # is wb_gui_dialog_log_tail; for check we use yad --info with auto-close)
+  wb_gui_yad \
+    --title="wb-gui — Checking for overlay updates" \
+    --no-markup \
+    --text="Checking the internet for newer versions of your game overlays...
+
+Querying GitHub for overlay releases. This usually takes a few seconds." \
+    --width=500 --height=160 \
+    --image=dialog-information \
+    --button="Cancel:1" \
+    --timeout=30 \
+    --timeout-indicator=top \
+    2>/dev/null &
+  local progress_yad_pid=$!
+
+  # Wait for check_pid, kill progress dialog when done
+  wait "${check_pid}" 2>/dev/null || true
+  kill "${progress_yad_pid}" 2>/dev/null || true
+  wait "${progress_yad_pid}" 2>/dev/null || true
+
+  # Check if user cancelled (progress_yad closed with rc=1)
+  # We just continue regardless since check may have completed already
+  rm -f "${tmp_check_log}"
+
+  # Stage 2: read updated registry and show checklist
+  if [[ ! -f "${reg_file}" ]]; then
+    wb_gui_dialog_error "wb-gui — Check failed" \
+      "Cannot reach api.github.com.
+
+Check your network connection and try again."
+    return 1
+  fi
+
+  # Build checklist rows
+  local -a row_data=()
+  local all_up_to_date=true
+  local net_error=false
+  local name
+  for name in mangohud vkbasalt optiscaler; do
+    local entry
+    entry="$(jq -c --arg n "${name}" '.overlays[] | select(.name == $n)' "${reg_file}" 2>/dev/null || true)"
+    [[ -z "${entry}" ]] && continue
+
+    local installed_count available last_error
+    installed_count="$(printf '%s' "${entry}" | jq '.installed_versions | length' 2>/dev/null || echo 0)"
+    available="$(printf '%s' "${entry}" | jq -r '.available_version // "—"' 2>/dev/null || echo '—')"
+    last_error="$(printf '%s' "${entry}" | jq -r '.last_check_error // empty' 2>/dev/null || true)"
+
+    local installed_ver="not installed"
+    if [[ "${installed_count}" -gt 0 ]]; then
+      installed_ver="$(printf '%s' "${entry}" | jq -r '.installed_versions[0].version // "?"' 2>/dev/null || echo '?')"
+    fi
+
+    local action_label check_default="FALSE"
+    if [[ -n "${last_error}" ]]; then
+      action_label="check failed"
+      available="—"
+      net_error=true
+    elif [[ "${installed_ver}" == "not installed" ]]; then
+      action_label="install"
+      # Only pre-check if available version known
+      [[ "${available}" != "—" ]] && check_default="FALSE"  # default unchecked for fresh installs
+    elif [[ "${available}" != "—" && "${installed_ver}" != "${available}" ]]; then
+      action_label="update"
+      check_default="TRUE"
+      all_up_to_date=false
+    else
+      action_label="up to date"
+    fi
+
+    local display_name
+    case "${name}" in
+      mangohud)   display_name="MangoHud" ;;
+      vkbasalt)   display_name="VKBasalt" ;;
+      optiscaler) display_name="OptiScaler" ;;
+      *)          display_name="${name}" ;;
+    esac
+
+    row_data+=("${check_default}" "${display_name}" "${installed_ver}" "${available}" "${action_label}" "${name}")
+  done
+
+  if [[ "${all_up_to_date}" == "true" && "${net_error}" == "false" ]]; then
+    wb_gui_dialog_info "wb-gui — Overlays up to date" \
+      "All overlays are at the latest available version."
+    return 1
+  fi
+
+  local header_text="Check complete. Select overlays to install or update."
+  if [[ "${net_error}" == "true" ]]; then
+    header_text="${header_text}
+Note: one or more overlays could not be checked (network error)."
+  fi
+
+  local yad_out rc_cl=0
+  yad_out="$(wb_gui_yad \
+    --list --checklist \
+    --title="wb-gui — Overlay updates available" \
+    --text="${header_text}" \
+    --no-markup \
+    --width=640 --height=300 \
+    --separator="|" \
+    --print-all \
+    --column="Install:CHK" \
+    --column="Overlay" \
+    --column="Installed" \
+    --column="Available" \
+    --column="Action" \
+    --column="name:HD" \
+    --button="Cancel:1" \
+    --button="Install selected:0" \
+    "${row_data[@]+"${row_data[@]}"}" 2>/dev/null)" || rc_cl=$?
+
+  if [[ "${rc_cl}" -ne 0 ]]; then
+    return 1
+  fi
+
+  # Collect selected overlays for install
+  _OVERLAY_INSTALL_LIST=""
+  local chk _display _installed avail _action name_hidden
+  while IFS="|" read -r chk _display _installed avail _action name_hidden _trail; do
+    [[ "${chk}" == "TRUE" ]] || continue
+    [[ -z "${name_hidden}" ]] && continue
+    _OVERLAY_INSTALL_LIST+="${name_hidden} ${avail}"$'\n'
+  done <<< "${yad_out}"
+
+  if [[ -z "${_OVERLAY_INSTALL_LIST}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_run_install_with_log <name> <version>
+# Stage 3: run wb_gui_overlays_install for a single overlay with live log tail.
+# Reuses Phase B's P1 auto-close pattern (builder exits → kill yad).
+# Returns the installer's exit code.
+# ---------------------------------------------------------------------------
+_overlay_run_install_with_log() {
+  local name="${1:-}"
+  local version="${2:-latest}"
+
+  local display_name
+  case "${name}" in
+    mangohud)   display_name="MangoHud" ;;
+    vkbasalt)   display_name="VKBasalt" ;;
+    optiscaler) display_name="OptiScaler" ;;
+    *)          display_name="${name}" ;;
+  esac
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local log_file="${tmp_dir}/wb-overlay-install.log"
+  local event_pipe="${tmp_dir}/wb-overlay-events"
+  mkfifo "${event_pipe}"
+
+  printf 'Installing %s %s\n' "${display_name}" "${version}" > "${log_file}"
+
+  # Event reader: translate PROGRESS/LOG/WARN/ERROR lines → log file
+  _wb_gui_overlay_event_reader() {
+    local pipe="${1}"
+    local lf="${2}"
+    local line prefix_tok rest
+    while IFS= read -r line || true; do
+      [[ -z "${line}" ]] && continue
+      prefix_tok="${line%%: *}"
+      rest="${line#*: }"
+      case "${prefix_tok}" in
+        PROGRESS)
+          local pct_str="${rest%% *}"
+          local msg_part="${rest#* }"
+          if [[ "${pct_str}" =~ ^[0-9]+$ ]]; then
+            printf '[%3d%%] %s\n' "${pct_str}" "${msg_part}" >> "${lf}" || true
+          fi
+          ;;
+        LOG)  printf '        %s\n' "${rest}" >> "${lf}" || true ;;
+        WARN) printf '  WARN  %s\n' "${rest}" >> "${lf}" || true ;;
+        ERROR) printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true ;;
+        *) ;;
+      esac
+    done < "${pipe}" || true
+  }
+  export -f _wb_gui_overlay_event_reader
+  _wb_gui_overlay_event_reader "${event_pipe}" "${log_file}" &
+  local reader_pid=$!
+
+  # Start installer in background with progress-fd piped through event_pipe
+  local installer_exit=0
+  (
+    exec 3>"${event_pipe}"
+    WB_OVERLAY_PROGRESS_FD=3 wb_gui_overlays_install "${name}" "${version}" \
+      >"${log_file}.rawout" 2>&1
+  ) &
+  local installer_pid=$!
+
+  # Open log-tail dialog (P1 pattern: auto-close when installer exits)
+  wb_gui_dialog_log_tail \
+    "wb-gui — Installing ${display_name} ${version}" \
+    "${log_file}" &
+  local yad_pid=$!
+
+  # Poll: either yad closes (user cancel) or installer finishes
+  while kill -0 "${yad_pid}" 2>/dev/null && kill -0 "${installer_pid}" 2>/dev/null; do
+    sleep "${WB_GUI_BUILD_POLL_SEC:-0.3}"
+  done
+
+  if kill -0 "${installer_pid}" 2>/dev/null; then
+    # yad closed first — user cancelled; SIGTERM → 5s watchdog → SIGKILL
+    kill -TERM -- "-${installer_pid}" 2>/dev/null || kill -TERM "${installer_pid}" 2>/dev/null || true
+    local watchdog_secs=5 elapsed=0
+    while kill -0 "${installer_pid}" 2>/dev/null && [[ "${elapsed}" -lt "${watchdog_secs}" ]]; do
+      sleep 1; (( elapsed++ )) || true
+    done
+    kill -0 "${installer_pid}" 2>/dev/null && kill -KILL "${installer_pid}" 2>/dev/null || true
+  else
+    # Installer finished — drain briefly, close yad
+    sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
+    kill "${yad_pid}" 2>/dev/null || true
+  fi
+
+  wait "${yad_pid}" 2>/dev/null || true
+  wait "${installer_pid}" 2>/dev/null || installer_exit=$?
+
+  kill "${reader_pid}" 2>/dev/null || true
+  wait "${reader_pid}" 2>/dev/null || true
+
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+  return "${installer_exit}"
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_install_selected_flow <name_ver_list_newline>
+# Stage 3 (sequential) + Stage 4 summary for a set of overlays.
+# Each line of name_ver_list: "<name> <version>"
+# ---------------------------------------------------------------------------
+_overlay_install_selected_flow() {
+  local name_ver_list="${1:-}"
+
+  local -a succeeded=() failed=()
+  local line name ver
+
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    name="${line%% *}"
+    ver="${line#* }"
+    [[ -z "${ver}" || "${ver}" == "${name}" ]] && ver="latest"
+
+    local rc_install=0
+    _overlay_run_install_with_log "${name}" "${ver}" || rc_install=$?
+
+    local display_name
+    case "${name}" in
+      mangohud)   display_name="MangoHud" ;;
+      vkbasalt)   display_name="VKBasalt" ;;
+      optiscaler) display_name="OptiScaler" ;;
+      *)          display_name="${name}" ;;
+    esac
+
+    case "${rc_install}" in
+      0)    succeeded+=("${display_name} ${ver}") ;;
+      2)    failed+=("${display_name}: cancelled") ;;
+      72)   failed+=("${display_name}: GitHub rate limit reached (60 req/hr). Try again later or set GITHUB_TOKEN. Your token may be throttled by GitHub organization policies. Try again later or check your token scopes at github.com/settings/tokens.") ;;
+      73)   failed+=("${display_name}: cannot reach api.github.com. Check your network connection and try again.") ;;
+      74)   failed+=("${display_name}: SHA256 mismatch — the downloaded archive did not match the expected checksum. Usually a temporary network or CDN issue. Try again, or report at the project tracker if it persists.") ;;
+      *)    failed+=("${display_name}: installation failed (code ${rc_install}). Run fetch-overlay.sh from a terminal for details.") ;;
+    esac
+  done <<< "${name_ver_list}"
+
+  # Stage 4: summary dialog
+  local summary_text="Overlay installation complete."
+  if [[ "${#succeeded[@]}" -gt 0 ]]; then
+    summary_text+="
+
+Installed successfully:"
+    local item
+    for item in "${succeeded[@]}"; do
+      summary_text+="
+  ${item}"
+    done
+    summary_text+="
+
+Your per-app overlay settings have been updated. Changes take effect on the next game launch."
+  fi
+
+  if [[ "${#failed[@]}" -gt 0 ]]; then
+    summary_text+="
+
+Could not install:"
+    local item
+    for item in "${failed[@]}"; do
+      summary_text+="
+  ${item}"
+    done
+  fi
+
+  wb_gui_dialog_info "wb-gui — Install complete" "${summary_text}"
+}
+
+# ---------------------------------------------------------------------------
+# _overlay_single_update_flow <name> <available_version>
+# Flow C2 (MAJ-1 fix): single-overlay update — skip Stage 2 checklist,
+# show a direct confirm-and-install dialog for that one overlay.
+# ---------------------------------------------------------------------------
+_overlay_single_update_flow() {
+  local name="${1:-}"
+  local available_version="${2:-}"
+
+  local display_name
+  case "${name}" in
+    mangohud)   display_name="MangoHud" ;;
+    vkbasalt)   display_name="VKBasalt" ;;
+    optiscaler) display_name="OptiScaler" ;;
+    *)          display_name="${name}" ;;
+  esac
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+  local reg_file="${wb_home}/overlays.json"
+
+  local installed_ver="not installed"
+  if [[ -f "${reg_file}" ]]; then
+    local installed_count
+    installed_count="$(jq --arg n "${name}" \
+      '.overlays[] | select(.name == $n) | .installed_versions | length' \
+      "${reg_file}" 2>/dev/null || echo 0)"
+    if [[ "${installed_count:-0}" -gt 0 ]]; then
+      installed_ver="$(jq -r --arg n "${name}" \
+        '.overlays[] | select(.name == $n) | .installed_versions[0].version' \
+        "${reg_file}" 2>/dev/null || echo '?')"
+    fi
+  fi
+
+  # Check for available update first if we don't know the version
+  if [[ -z "${available_version}" || "${available_version}" == "—" ]]; then
+    wb_gui_overlays_check_updates "${name}" 2>/dev/null || true
+    if [[ -f "${reg_file}" ]]; then
+      available_version="$(jq -r --arg n "${name}" \
+        '.overlays[] | select(.name == $n) | .available_version // empty' \
+        "${reg_file}" 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ -z "${available_version}" ]]; then
+    wb_gui_dialog_error "wb-gui — Check failed" \
+      "Cannot reach api.github.com.
+
+Check your network connection and try again."
+    return 1
+  fi
+
+  local confirm_text
+  if [[ "${installed_ver}" == "not installed" ]]; then
+    confirm_text="${display_name} ${available_version} is available.
+Install now?"
+  else
+    confirm_text="${display_name} ${installed_ver} is installed.
+${display_name} ${available_version} is available.
+Install now?"
+  fi
+
+  local rc_confirm=0
+  wb_gui_yad \
+    --title="wb-gui — ${display_name} update available" \
+    --no-markup \
+    --image=dialog-question \
+    --text="${confirm_text}" \
+    --button="Cancel:1" \
+    --button="Install:0" 2>/dev/null || rc_confirm=$?
+
+  [[ "${rc_confirm}" -ne 0 ]] && return 1
+
+  local install_list="${name} ${available_version}"
+  _overlay_install_selected_flow "${install_list}"
+}
+
+# ---------------------------------------------------------------------------
+# Error dialogs for overlay install failures (W2 error-copy spec)
+# ---------------------------------------------------------------------------
+
+# E1: offline
+wb_gui_overlay_error_offline() {
+  wb_gui_dialog_error "wb-gui — Cannot reach GitHub" \
+    "Cannot reach api.github.com.
+
+Check your network connection and try again."
+}
+
+# E2: rate-limited
+wb_gui_overlay_error_rate_limited() {
+  wb_gui_dialog_error "wb-gui — GitHub rate limit reached" \
+    "GitHub rate limit reached (60 req/hr).
+
+You can:
+  1. Wait an hour and try again.
+  2. Set the GITHUB_TOKEN environment variable to increase your limit.
+  3. Use a cached version if one is installed.
+
+Your token may be throttled by GitHub organization policies.
+Check your token scopes at github.com/settings/tokens."
+}
+
+# E3: sha256 mismatch
+wb_gui_overlay_error_sha_mismatch() {
+  local overlay_name="${1:-overlay}"
+  local version="${2:-}"
+  wb_gui_dialog_error "wb-gui — Verification failed" \
+    "${overlay_name}${version:+ ${version}} could not be verified.
+The downloaded archive did not match the expected checksum.
+Usually a temporary network or CDN issue.
+
+Try again. If the problem persists, report it at the project tracker."
+}
+
+# E4: degradation (bundled install missing — fell back to system)
+wb_gui_overlay_error_degradation() {
+  local overlay_name="${1:-overlay}"
+  wb_gui_dialog_error "wb-gui — Bundled install missing" \
+    "${overlay_name}: bundled install not found. The last launch fell back to
+the system-installed version (if any).
+
+Click Install in the overlay panel to restore the bundled version."
+}
+
+# ---------------------------------------------------------------------------
+# Overlay action button callbacks — called by yad :BTN fields via bash -c.
+# These run in a subshell spawned by yad; they must source the libs themselves
+# and read context from exported env vars (_WB_OVERLAY_APP_ID, etc.).
+# ---------------------------------------------------------------------------
+_wb_overlay_btn_mangohud() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh" 2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null || return 1
+  local app_id="${_WB_OVERLAY_APP_ID:-}"
+  local avail
+  avail="$(jq -r \
+    '.overlays[] | select(.name=="mangohud") | .available_version // empty' \
+    "${_WB_OVERLAY_WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" \
+    2>/dev/null || true)"
+  _overlay_single_update_flow "mangohud" "${avail}" 2>/dev/null || true
+}
+export -f _wb_overlay_btn_mangohud
+
+_wb_overlay_btn_vkbasalt() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh" 2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null || return 1
+  local avail
+  avail="$(jq -r \
+    '.overlays[] | select(.name=="vkbasalt") | .available_version // empty' \
+    "${_WB_OVERLAY_WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" \
+    2>/dev/null || true)"
+  _overlay_single_update_flow "vkbasalt" "${avail}" 2>/dev/null || true
+}
+export -f _wb_overlay_btn_vkbasalt
+
+_wb_overlay_btn_optiscaler() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh" 2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null || return 1
+  local avail
+  avail="$(jq -r \
+    '.overlays[] | select(.name=="optiscaler") | .available_version // empty' \
+    "${_WB_OVERLAY_WB_HOME:-${HOME}/.local/share/wine-bleeding}/overlays.json" \
+    2>/dev/null || true)"
+  _overlay_single_update_flow "optiscaler" "${avail}" 2>/dev/null || true
+}
+export -f _wb_overlay_btn_optiscaler
+
+_wb_overlay_btn_check_all() {
+  source "${_WB_GUI_LIB_DIR}/wb-gui-dialogs.sh" 2>/dev/null || return 1
+  source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh" 2>/dev/null || return 1
+  source "${_WB_LIB_DIR}/wb-json.sh" 2>/dev/null || return 1
+  if _overlay_check_all_dialog; then
+    _overlay_install_selected_flow "${_OVERLAY_INSTALL_LIST}" 2>/dev/null || true
+  fi
+}
+export -f _wb_overlay_btn_check_all
 
 # ---------------------------------------------------------------------------
 # _cmd_settings_v2 [<scope> [<id>]]
@@ -2234,6 +3184,8 @@ _cmd_main_window() {
   # Phase A: purge stale detection snapshot dirs (crash recovery)
   wb_detect_sweep_stale 24 >/dev/null 2>&1 || true
   _wb_gui_place_desktop_shortcut
+  # Phase C: one-time "New in v1.8.0" overlay discoverability banner (W2 BLK-3)
+  _overlay_phase_c_banner
 
   while true; do
     # Build app rows for this iteration
