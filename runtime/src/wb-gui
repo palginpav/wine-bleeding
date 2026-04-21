@@ -2242,6 +2242,22 @@ _cmd_settings_v2() {
   tab3_pid="$(_launch_tab_prefix "${yad_key}" "${prefix_id}" "${pipe3}")"
   tab4_pid="$(_launch_tab_app "${yad_key}" "${app_id}" "${pipe4}")"
 
+  # Test-harness sync. When the bats fake-yad fixture serialises responses via
+  # an incrementing counter (WB_TEST_YAD_RESPONSES_DIR), the 4 background plug
+  # processes race the foreground notebook call for the next slot. Wait (up
+  # to 2s) for the counter to register all 4 plug invocations before we
+  # issue the notebook. No-op outside the test harness.
+  if [[ -n "${WB_TEST_YAD_RESPONSES_DIR:-}" ]]; then
+    local _wbsv2_waited=0
+    while [[ "${_wbsv2_waited}" -lt 20 ]]; do
+      local _wbsv2_counter
+      _wbsv2_counter="$(cat "${WB_TEST_YAD_RESPONSES_DIR}/.counter" 2>/dev/null || echo 1)"
+      [[ "${_wbsv2_counter}" -gt 4 ]] && break
+      sleep 0.1
+      _wbsv2_waited=$(( _wbsv2_waited + 1 ))
+    done
+  fi
+
   # Track current tab (shell-side tracking per W5 architect note).
   # yad 14.x notebook emits the active tab index as an integer line on stdout
   # when the user switches tabs. We read the last such line after each notebook
