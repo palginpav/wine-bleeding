@@ -51,6 +51,9 @@ GCC struggles to bootstrap older MinGW GCC.
 ### Managed build-tools (fixes)
 
 - **`wb-tools-manager.py install` no longer hangs in `safe_extract`** — `tarfile.open(fileobj=proc.stdout, mode="r|*")` is an external-fileobj reader that stops at the tar logical EOF markers and does NOT close the pipe, so zstd kept writing trailing padding until the 64 KB kernel pipe buffer filled and blocked in `write()`; `proc.wait(timeout=600)` then polled forever via `waitpid(WNOHANG)` on a live-but-blocked zstd. Fix: close `proc.stdout` before `proc.wait()` so zstd gets SIGPIPE and exits; close `proc.stderr` after the rc check; accept `-SIGPIPE` as a normal exit on the happy path. Also raise `_EXTRACT_RATIO_LIMIT` 3 → 20 because real zstd-compressed toolchain tarballs reach 6–12× (glslang 15.0.0 measured 6.65×); 20 still detects true zip bombs (1000×+). End-to-end verified against the live tools-v20260424 release: `install glslang` now exits 0 in ~6s (was hanging indefinitely).
+- **`prune_old_versions` no longer WARNs about `current`** — `d.is_dir()` returns true for symlinks pointing at directories, so the `current` symlink was included in the prune candidate list; `shutil.rmtree` refused to remove it and emitted `Could not prune .../glslang/current: [Errno None] None:`. Fix: filter out `d.is_symlink()` in the iteration.
+- **Download progress reaches 100%** — the previous `min(99, …)` cap clamped the final tick; the `PROGRESS:` stream now shows `Downloading... 100%` before `Verifying SHA-256`.
+- **New `40_tools_manager.bats` test 11** — happy-path `safe_extract` regression guard. Builds a small valid `.tar.zst` fixture with 10 files, calls `safe_extract` directly, asserts ≤10 s wall time and 10 extracted files. This is the regression test that would have caught the original install hang; all prior `safe_extract` tests only exercised the error path (sha256 mismatch, path traversal).
 
 ### Build-env self-sufficiency (wb-gui → builds anywhere)
 

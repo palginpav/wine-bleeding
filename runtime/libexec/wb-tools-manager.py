@@ -612,7 +612,7 @@ def download_tarball(
                     out.write(chunk)
                     bytes_written += len(chunk)
                     if size_bytes > 0:
-                        pct = min(99, int(bytes_written * 100 / size_bytes))
+                        pct = int(bytes_written * 100 / size_bytes)
                         if pct >= last_pct + _PROGRESS_STEP_PCT:
                             reporter.progress(20 + int(pct * 0.4), f"Downloading... {pct}%")
                             last_pct = pct
@@ -997,10 +997,11 @@ def prune_old_versions(
 
     retained = {v for v in [current_ver, prev_ver] if v}
 
-    # Find all version directories
+    # Find all version directories. Exclude symlinks — `current` is a symlink
+    # pointing at a version dir, and shutil.rmtree refuses to remove symlinks.
     version_dirs = [
         d for d in tool_dir.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
+        if d.is_dir() and not d.is_symlink() and not d.name.startswith(".")
     ]
 
     for vd in version_dirs:

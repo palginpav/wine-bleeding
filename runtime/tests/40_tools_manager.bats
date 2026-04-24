@@ -622,3 +622,83 @@ PYEOF
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"correctly removes"* ]]
 }
+
+# ===========================================================================
+# Case 11: happy-path safe_extract — valid .tar.zst extracts cleanly AND
+# returns in bounded time. This test would have caught the install-hang bug
+# where safe_extract's `finally: proc.wait(timeout=600)` polled forever after
+# zstd blocked on a full pipe buffer. Without a 60s-wall bats timeout wrapping
+# the file, this test would hang indefinitely before the fix.
+# ===========================================================================
+
+@test "manager safe-extract happy path extracts valid tarball and returns within 30s" {
+  command -v zstd >/dev/null 2>&1 || skip "zstd not installed"
+
+  run python3 - "${MANAGER}" "${TOOLS_DIR}" <<'PYEOF'
+import sys, importlib.util, pathlib, subprocess, tarfile, io, time
+
+manager_path = sys.argv[1]
+stage_parent = pathlib.Path(sys.argv[2])
+
+spec = importlib.util.spec_from_file_location("wb_tools_manager", manager_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class _NullReporter:
+    def warn(self, msg): pass
+    def log(self, msg): pass
+    def error(self, msg): pass
+    def progress(self, pct, msg): pass
+
+reporter = _NullReporter()
+
+# Build a tiny but non-trivial .tar.zst: 10 files, each 4 KiB, under a top-level dir.
+raw_tar = stage_parent / "fixture.tar"
+content = b"x" * 4096
+with tarfile.open(raw_tar, "w") as tf:
+    for i in range(10):
+        ti = tarfile.TarInfo(name=f"payload/file-{i:02d}.bin")
+        ti.size = len(content)
+        ti.mode = 0o644
+        tf.addfile(ti, io.BytesIO(content))
+
+zst_path = stage_parent / "fixture.tar.zst"
+r = subprocess.run(["zstd", "-q", "-f", str(raw_tar), "-o", str(zst_path)], capture_output=True)
+if r.returncode != 0:
+    print(f"FAIL: zstd compression failed: {r.stderr.decode()}", file=sys.stderr)
+    sys.exit(1)
+
+extract_dir = stage_parent / "extract"
+extract_dir.mkdir(parents=True, exist_ok=True)
+
+# Pass size_bytes=0 to disable the zip-bomb ratio guard for this fixture;
+# the guard is already exercised by tests 8 and 9. Here we're testing the
+# happy-path pipe teardown, not the size heuristic.
+start = time.time()
+try:
+    mod.safe_extract(zst_path, extract_dir, 0, reporter)
+except Exception as exc:
+    print(f"FAIL: safe_extract raised: {exc}", file=sys.stderr)
+    sys.exit(1)
+elapsed = time.time() - start
+
+# The whole thing must finish fast. Before the SIGPIPE fix this hung forever;
+# a 10s ceiling is 100x the expected runtime and still catches regressions.
+if elapsed > 10.0:
+    print(f"FAIL: safe_extract took {elapsed:.1f}s — install-hang regression?", file=sys.stderr)
+    sys.exit(1)
+
+# All 10 files must be present (top-level `payload/` dir is stripped by
+# _extract_from_pipe; files land at extract/file-NN.bin).
+found = sorted(p.name for p in extract_dir.rglob("file-*.bin"))
+if len(found) != 10:
+    print(f"FAIL: expected 10 files, got {len(found)}: {found}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"extracted 10 files in {elapsed:.2f}s; safe_extract happy-path OK")
+sys.exit(0)
+PYEOF
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"happy-path OK"* ]]
+}
