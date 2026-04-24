@@ -208,7 +208,11 @@ fi
 bc_emit_progress 25 "Fetching SPIRV-Tools + SPIRV-Headers via update_glslang_sources.py"
 
 if [[ -f "${SRC_DIR}/update_glslang_sources.py" ]]; then
-  python3 "${SRC_DIR}/update_glslang_sources.py" 2>&1 \
+  # update_glslang_sources.py reads known_good.json via a relative path, so
+  # it must run from the glslang source root — otherwise it raises
+  # FileNotFoundError and SPIRV-Tools never gets fetched, which makes cmake
+  # fail later with "ENABLE_OPT set but SPIR-V tools not found".
+  ( cd "${SRC_DIR}" && python3 ./update_glslang_sources.py ) 2>&1 \
     | while IFS= read -r line; do bc_emit_log "${line}"; done \
     || bc_emit_warn "update_glslang_sources.py reported an error — will attempt cmake configure anyway"
 else

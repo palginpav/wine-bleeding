@@ -51,8 +51,8 @@ jobs:
           apt-get update -q
           apt-get install -y --no-install-recommends \
             gcc g++ make bison flex git texinfo m4 bzip2 curl \
-            diff zstd wget ca-certificates \
-            cmake ninja-build python3 \
+            diffutils zstd wget ca-certificates \
+            cmake meson ninja-build python3 \
             pkg-config xz-utils
 
       - name: Install build prerequisites (Fedora)
@@ -61,7 +61,7 @@ jobs:
           dnf install -y \
             gcc gcc-c++ make bison flex git texinfo m4 bzip2 curl \
             diffutils zstd wget ca-certificates \
-            cmake ninja-build python3 \
+            cmake meson ninja-build python3 \
             pkg-config xz
 
       - uses: actions/checkout@v4
@@ -114,9 +114,12 @@ jobs:
         run: |
           case "${{ matrix.tool }}" in
             mingw-w64)
-              # build-full-wine-deps.sh installs MinGW into build-deps/x86_64-w64-mingw32-cross
-              # (and i686 cross). Collect both cross roots as the managed payload.
-              OUTPUT="${GITHUB_WORKSPACE}/build-deps/x86_64-w64-mingw32-cross"
+              # build-full-wine-deps.sh --build-mingw-from-source installs
+              # MinGW into build-deps/mingw64-cross (holds both x86_64 and i686
+              # cross toolchains, per Zeranoe mingw-w64-build layout). The
+              # musl.cc fallback path uses x86_64-w64-mingw32-cross, but that
+              # statically links against musl and defeats per-glibc flavoring.
+              OUTPUT="${GITHUB_WORKSPACE}/build-deps/mingw64-cross"
               ;;
             glslang)
               OUTPUT="${GITHUB_WORKSPACE}/build-deps/glslang"

@@ -115,6 +115,19 @@ awkward ones (glslang, MinGW-w64, meson) from source.
   / `DXVK-NVAPI` `::CHK` fields) instead of the obsolete single
   `Component:CB` combo; marked Stage-3 dialog tests 6–9 `skip "FIXME:
   log-tail event-pipe teardown race"` pending a proper harness rewrite.
+- `build-tools.yml` — so the managed-tool matrix actually produces
+  artifacts. Added `meson` to the apt/dnf prereq lists (the unconditional
+  `check_command meson` in `build-full-wine-deps.sh` tripped all 4
+  `mingw-w64/*` cells), replaced the non-existent Debian `diff` package
+  with `diffutils`, and pointed the mingw "Locate build output directory"
+  step at `build-deps/mingw64-cross` (the Zeranoe `--build-mingw-from-source`
+  install root) instead of the musl.cc fallback path
+  `build-deps/x86_64-w64-mingw32-cross`.
+- `tools/build-glslang.sh` — `cd` into `${SRC_DIR}` before invoking
+  `update_glslang_sources.py`; the script reads `known_good.json` via a
+  relative path, so running it from elsewhere raised `FileNotFoundError`
+  and let cmake fail later with "ENABLE_OPT set but SPIR-V tools not
+  found" (all 4 `glslang/*` cells).
 
 ### Known follow-ups (v1.7.2)
 
