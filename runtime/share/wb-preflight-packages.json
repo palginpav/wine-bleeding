@@ -876,6 +876,7 @@
         "package_name_extra": null,
         "install_cmd_template": null,
         "source_build_fallback": "wb-build-glslang",
+        "managed_fallback": true,
         "notes": null,
         "floor_override": null
       },
@@ -884,6 +885,7 @@
         "package_name_extra": null,
         "install_cmd_template": null,
         "source_build_fallback": "build-mingw-from-source",
+        "managed_fallback": true,
         "notes": null,
         "floor_override": null
       },
