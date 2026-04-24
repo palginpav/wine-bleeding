@@ -48,6 +48,10 @@ GCC struggles to bootstrap older MinGW GCC.
   Release (`tools-vYYYYMMDD`). First real run is a manual kick-off; until
   that happens, managed-tool buttons stay hidden (empty fallback manifest).
 
+### Managed build-tools (fixes)
+
+- **`wb-tools-manager.py install` no longer hangs in `safe_extract`** — `tarfile.open(fileobj=proc.stdout, mode="r|*")` is an external-fileobj reader that stops at the tar logical EOF markers and does NOT close the pipe, so zstd kept writing trailing padding until the 64 KB kernel pipe buffer filled and blocked in `write()`; `proc.wait(timeout=600)` then polled forever via `waitpid(WNOHANG)` on a live-but-blocked zstd. Fix: close `proc.stdout` before `proc.wait()` so zstd gets SIGPIPE and exits; close `proc.stderr` after the rc check; accept `-SIGPIPE` as a normal exit on the happy path. Also raise `_EXTRACT_RATIO_LIMIT` 3 → 20 because real zstd-compressed toolchain tarballs reach 6–12× (glslang 15.0.0 measured 6.65×); 20 still detects true zip bombs (1000×+). End-to-end verified against the live tools-v20260424 release: `install glslang` now exits 0 in ~6s (was hanging indefinitely).
+
 ### Build-env self-sufficiency (wb-gui → builds anywhere)
 
 Component Builder and Build Dist from Source no longer require a pre-curated

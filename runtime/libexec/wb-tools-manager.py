@@ -60,6 +60,7 @@ import pathlib
 import platform
 import re
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
@@ -82,8 +83,11 @@ DEFAULT_TOOLS_DIR = pathlib.Path.home() / ".local" / "share" / "wine-bleeding" /
 DEFAULT_MANIFEST_TTL_SEC = 600
 DEFAULT_DISK_BUDGET_BYTES = 500 * 1024 * 1024  # 500 MB
 
-# Zip-bomb guard: extracted bytes must not exceed compressed_size * 3
-_EXTRACT_RATIO_LIMIT = 3
+# Zip-bomb guard: extracted bytes must not exceed compressed_size * N.
+# Real zstd-compressed toolchain tarballs routinely reach 6-12x (glslang ~6.7x,
+# mingw-w64 higher). True zip bombs reach 1000x+, so 20 keeps meaningful
+# protection while accommodating all known build-tool payloads.
+_EXTRACT_RATIO_LIMIT = 20
 # Zip-bomb guard: max number of entries
 _EXTRACT_ENTRY_LIMIT = 50_000
 
@@ -702,16 +706,27 @@ def safe_extract(
         try:
             _extract_from_pipe(proc.stdout, stage_dir, size_bytes, reporter)
         finally:
+            # Close stdout first so zstd gets SIGPIPE and exits; tarfile r|*
+            # streaming mode stops at the tar EOF markers and does NOT close
+            # the external fileobj, so zstd would otherwise block forever
+            # writing trailing padding into a full pipe buffer.
+            proc.stdout.close()
             try:
                 proc.wait(timeout=600)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 reporter.warn("zstd process timed out and was killed.")
-            if proc.returncode not in (0, None):
+            # -SIGPIPE is expected: after tarfile r|* hits the logical tar
+            # end-of-archive markers, we close proc.stdout above, and zstd
+            # exits with SIGPIPE on its next write of trailing padding.
+            ok_rc = (0, None, -signal.SIGPIPE)
+            if proc.returncode not in ok_rc:
                 stderr_msg = proc.stderr.read(4096).decode("utf-8", errors="replace").strip()
+                proc.stderr.close()
                 raise RuntimeError(
                     f"zstd decompression failed (exit code {proc.returncode}): {stderr_msg}"
                 )
+            proc.stderr.close()
 
 
 def _safe_entry(tarinfo: "tarfile.TarInfo", base: pathlib.Path) -> "tarfile.TarInfo":
