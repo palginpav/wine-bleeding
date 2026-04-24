@@ -196,8 +196,23 @@ wb_gui_build_env_run_source_build() {
       mkdir -p "${_wb_home_export}" 2>/dev/null || true
       export WB_HOME="${_wb_home_export}"
       _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical) under ${WB_HOME}/build-deps"
-      "${deps_script}" --only-mingw --build-mingw-from-source
-      return $?
+      # build-full-wine-deps.sh is a legacy script (no Phase-B event emission).
+      # Route its stdout+stderr into the progress fd so the live log-tail sees
+      # what's happening — the event reader has a fallthrough for unprefixed
+      # lines. Without this, the dialog freezes after our startup LOG line
+      # because the script's output is only visible in a discarded file.
+      # Use stdbuf -oL to force line buffering so progress appears in real time.
+      local _mingw_rc=0
+      if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
+        if command -v stdbuf >/dev/null 2>&1; then
+          stdbuf -oL -eL "${deps_script}" --only-mingw --build-mingw-from-source >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
+        else
+          "${deps_script}" --only-mingw --build-mingw-from-source >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
+        fi
+      else
+        "${deps_script}" --only-mingw --build-mingw-from-source || _mingw_rc=$?
+      fi
+      return "${_mingw_rc}"
       ;;
 
     pip-install-meson)
