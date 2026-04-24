@@ -429,21 +429,13 @@ add it to the built-in list."
   fi
 
   # ------------------------------------------------------------------
-  # Build field_args array (per w2-preflight-dialog.md §3 / §4)
+  # Build TSV rows for yad --list (one row per tool: Tool | Status | Fix)
+  # Rendered via stdin rather than --field LBL/RO/BTN because yad --form
+  # --columns=N does COLUMN-MAJOR layout (fills each column top-to-bottom),
+  # not row-major — so the 3-columns-per-tool grid collapses visually.
   # ------------------------------------------------------------------
-  local -a field_args=(
-    --field="Distro::LBL"       ""
-    --field="::RO"              "${distro_pretty}"
-    --field="Build type::LBL"   ""
-    --field="::RO"              "${context_label}"
-    --field="Tool::LBL"         ""
-    --field="Status::LBL"       ""
-    --field="Fix::LBL"          ""
-  )
-
-  # Collect source-build slugs for per-row BTN (max 3: meson, glslang, mingw)
-  # We expose them via rc=50,51,52 — the caller maps rc to slug
-  local -a src_slugs_present=()
+  local list_rows=""
+  local -a src_slugs_present=()   # rc=50,51,52 map by position
 
   for (( i=0; i<tool_count; i++ )); do
     local name="${t_name[${i}]}"
@@ -453,7 +445,6 @@ add it to the built-in list."
     local min_ver="${t_min_version[${i}]}"
     local install_cmd="${t_install_cmd[${i}]}"
     local src_slug="${t_src_slug[${i}]}"
-    local src_label="${t_src_label[${i}]}"
     local notes="${t_notes[${i}]}"
 
     # Status text (col 2)
@@ -482,36 +473,24 @@ add it to the built-in list."
       fi
     fi
 
-    # Col 1: tool name (LBL)
-    field_args+=(--field="${name}::LBL" "")
-
-    # Col 2: status (RO)
-    field_args+=(--field="${name}_status::RO" "${status_text}")
-
-    # Col 3: fix (LBL for ok/no-src-build; BTN for source-build tools)
+    # Track source-build-capable not-ok tools in JSON order so per-slug
+    # footer buttons keep the rc=50/51/52 index semantics the caller expects.
     if [[ -n "${src_slug}" && "${ok}" != "true" ]]; then
-      # Per-row source-build BTN — rc will be 50 + index in src_slugs_present
-      local btn_rc=$(( 50 + ${#src_slugs_present[@]} ))
       src_slugs_present+=("${src_slug}")
-      local btn_label="${src_label:-Build from source}"
-      field_args+=(--field="${btn_label}::BTN" "exit ${btn_rc}")
-    else
-      field_args+=(--field="${name}_fix::LBL" "${fix_text}")
     fi
 
-    # Notes sub-row (spans col 2-3 via additional LBL)
+    # Main row (Tool | Status | Fix), TAB-separated.
+    list_rows+="${name}	${status_text}	${fix_text}"$'\n'
+
+    # Per-tool note as a sub-row prefixed with "  note:" in the Tool column.
     if [[ -n "${notes}" ]]; then
-      field_args+=(--field="::LBL" "" --field="${notes}::LBL" "" --field="::LBL" "")
+      list_rows+="  note:	${notes}	"$'\n'
     fi
   done
 
   # Distro-unrecognized banner (BE11)
   if [[ "${distro_recognized}" != "true" ]]; then
-    field_args+=(
-      --field="::LBL" ""
-      --field="Note: your distro is not recognized. Commands above are generic.::LBL" ""
-      --field="::LBL" ""
-    )
+    list_rows+="⚠	Distro not recognized	Commands above are generic fallbacks"$'\n'
   fi
 
   # Overlay error rows (BE12, up to 3)
@@ -523,18 +502,10 @@ add it to the built-in list."
       local ov_path ov_msg
       ov_path="$(jq -r ".overlay_errors[${ov_i}].path // \"\"" "${json_file}" 2>/dev/null || echo "")"
       ov_msg="$(jq -r ".overlay_errors[${ov_i}].message // \"\"" "${json_file}" 2>/dev/null || echo "")"
-      field_args+=(
-        --field="::LBL" ""
-        --field="Warning: ignored overlay ${ov_path} (${ov_msg}). Using built-in package map.::LBL" ""
-        --field="::LBL" ""
-      )
+      list_rows+="⚠	Overlay ignored	${ov_path}: ${ov_msg}"$'\n'
     done
     if [[ "${overlay_error_count}" -gt 3 ]]; then
-      field_args+=(
-        --field="::LBL" ""
-        --field="... and $(( overlay_error_count - 3 )) more overlay error(s).::LBL" ""
-        --field="::LBL" ""
-      )
+      list_rows+="⚠	More overlay errors	$(( overlay_error_count - 3 )) more ignored. See logs."$'\n'
     fi
   fi
 
@@ -566,12 +537,32 @@ add it to the built-in list."
   # ------------------------------------------------------------------
   # Button row
   # ------------------------------------------------------------------
-  local -a btn_args=(
-    --button="Copy all install commands:30"
-  )
-  if [[ "${has_src_builds}" -eq 1 ]]; then
+  local -a btn_args=()
+  if [[ "${overall_ok}" != "true" ]]; then
+    btn_args+=(--button="Copy all install commands:30")
+  fi
+
+  # Per-slug source-build buttons — rc=50/51/52 by position in
+  # src_slugs_present (the caller looks up the Nth non-ok source-build
+  # tool in JSON order, matching the rc offset).
+  local _bs_idx=0
+  local _bs_slug
+  for _bs_slug in "${src_slugs_present[@]+"${src_slugs_present[@]}"}"; do
+    local _bs_label
+    case "${_bs_slug}" in
+      wb-build-glslang)        _bs_label="Build glslang from source (~${_WB_BUILD_TIME_GLSLANG_MIN} min)" ;;
+      build-mingw-from-source) _bs_label="Build MinGW-w64 from source (~${_WB_BUILD_TIME_MINGW_MIN} min)" ;;
+      pip-install-meson)       _bs_label="Install meson via pip" ;;
+      *)                       _bs_label="Build ${_bs_slug} from source" ;;
+    esac
+    btn_args+=(--button="${_bs_label}:$(( 50 + _bs_idx ))")
+    _bs_idx=$(( _bs_idx + 1 ))
+  done
+  # Offer "Build all" as a shortcut when 2+ source-builds are applicable.
+  if [[ "${#src_slugs_present[@]}" -ge 2 ]]; then
     btn_args+=(--button="Build all from source (~${est_min} min):40")
   fi
+
   btn_args+=(
     --button="Cancel:1"
     --button="Re-check:20"
@@ -583,18 +574,26 @@ add it to the built-in list."
   fi
 
   # ------------------------------------------------------------------
-  # Invoke yad
+  # Invoke yad --list (proper 3-column table layout; avoids yad --form
+  # --columns=N column-major issue where each tool's 3 fields appear
+  # as 3 separate rows with single-colon orphan labels).
   # ------------------------------------------------------------------
   local rc=0
-  wb_gui_yad \
-    --form \
+  printf '%b' "${list_rows}" | wb_gui_yad \
+    --list \
     --title="Build environment — ${context_label}" \
-    --text="${header_text}" \
-    --no-markup \
+    --text="<b>Distro:</b> ${distro_pretty}    <b>Build type:</b> ${context_label}
+
+${header_text}" \
+    --no-selection \
+    --expand-column=3 \
+    --ellipsize=END \
+    --column="Tool" \
+    --column="Status" \
+    --column="Fix / Install command" \
     --separator="|" \
-    --columns=3 \
-    --width=680 \
-    "${field_args[@]}" \
+    --width=860 --height=460 \
+    --buttons-layout=spread \
     "${btn_args[@]}" 2>/dev/null || rc=$?
 
   return "${rc}"

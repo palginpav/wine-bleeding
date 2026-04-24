@@ -34,6 +34,29 @@ if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Capture stdin only for widgets that read from stdin (--list, --notebook).
+# Other widgets (--form, --info, --entry, --file, --text-info) do NOT read
+# from stdin; draining would block when the caller doesn't redirect fd 0.
+# Logged as STDIN: lines so tests can assert on piped row content.
+# ---------------------------------------------------------------------------
+if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
+  _fake_yad_reads_stdin=0
+  for _fy_arg in "$@"; do
+    case "${_fy_arg}" in
+      --list|--notebook|--text-info) _fake_yad_reads_stdin=1; break ;;
+    esac
+  done
+  if [[ ${_fake_yad_reads_stdin} -eq 1 ]] && [[ ! -t 0 ]]; then
+    _fake_yad_stdin="$(cat 2>/dev/null || true)"
+    if [[ -n "${_fake_yad_stdin}" ]]; then
+      while IFS= read -r _fy_line; do
+        printf 'STDIN: %s\n' "${_fy_line}"
+      done <<< "${_fake_yad_stdin}" >> "${WB_TEST_YAD_LOG}"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Determine response (multi-response takes priority)
 # ---------------------------------------------------------------------------
 _yad_response=""
