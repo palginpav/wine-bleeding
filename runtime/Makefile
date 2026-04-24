@@ -245,8 +245,10 @@ install:
 	install -Dm644 $(RUNTIME_DIR)README.md \
 	  $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding/README.md
 	@# Install the wine-bleeding-wb-build subpackage README (its sole payload file).
-	@if test -f $(RUNTIME_DIR)packaging/rpm/wine-bleeding-wb-build-README; then \
-	  install -Dm644 $(RUNTIME_DIR)packaging/rpm/wine-bleeding-wb-build-README \
+	@# Kept at runtime/ (not runtime/packaging/) so it survives the build.sh tarball
+	@# staging which excludes the entire packaging/ tree.
+	@if test -f $(RUNTIME_DIR)wine-bleeding-wb-build-README; then \
+	  install -Dm644 $(RUNTIME_DIR)wine-bleeding-wb-build-README \
 	    $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding-wb-build/README; \
 	fi
 	@echo "Install complete."

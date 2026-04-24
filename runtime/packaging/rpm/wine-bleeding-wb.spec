@@ -58,8 +58,15 @@ desktop entry, icon, and Steam compatibility tool support.
 
 %package -n wine-bleeding-wb-build
 Summary:        Recommended build-tool dependencies for wine-bleeding wb-gui
+Group:          Development/Tools
 BuildArch:      noarch
 
+# Soft-dependency list. `Recommends:` was added in RPM 4.13 (2016); older
+# rpmbuild (e.g. ALT Linux 4.0.4) errors on the tag. Guarded by Fedora /
+# RHEL / openSUSE detection — on distros without Recommends: support the
+# subpackage still builds (just without the recommendation list); users
+# fall through to wb-preflight at first-run for the install hints anyway.
+%if 0%{?fedora} >= 24 || 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500
 # Core build tools — present on virtually every RPM-based distro.
 Recommends:     gcc
 Recommends:     gcc-c++
@@ -85,6 +92,7 @@ Recommends:     git
 Recommends:     flex
 Recommends:     bison
 Recommends:     autoconf
+%endif
 
 %description -n wine-bleeding-wb-build
 wine-bleeding-wb-build is a metapackage that pulls in the build tools
