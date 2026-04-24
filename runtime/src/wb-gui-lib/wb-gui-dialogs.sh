@@ -21,12 +21,15 @@ _WB_GUI_YAD_COMMON=(
   --window-icon=wine-bleeding
   --class=wine-bleeding
   --width=600
-  # Keep wb-gui windows above file managers / terminals that are typically
-  # already open. Without this, new dialogs (especially short-lived ones
-  # launched from the main window) get buried behind Dolphin / Konsole
-  # under most KDE and GNOME WM focus policies.
-  --on-top
+  # Note: --on-top was previously added to keep short-lived dialogs from being
+  # buried under Dolphin/Konsole, but it makes EVERY wb-gui window stay above
+  # other applications even when unfocused — which is the wrong default for
+  # the main window and long-running dialogs (log-tails, Component Builder).
+  # Users can set WB_GUI_ON_TOP=1 to opt back in globally.
 )
+if [[ "${WB_GUI_ON_TOP:-0}" == "1" ]]; then
+  _WB_GUI_YAD_COMMON+=(--on-top)
+fi
 
 # ---------------------------------------------------------------------------
 # wb_gui_yad — call yad with common style flags prepended.
