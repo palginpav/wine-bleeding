@@ -194,8 +194,13 @@ install:
 	@if test -d $(RUNTIME_DIR)../tools; then \
 	  for f in $(RUNTIME_DIR)../tools/build-component.sh \
 	           $(RUNTIME_DIR)../tools/fetch-overlay.sh \
-	           $(RUNTIME_DIR)../tools/run-winetricks.sh; do \
-	    if test -x "$$f"; then \
+	           $(RUNTIME_DIR)../tools/run-winetricks.sh \
+	           $(RUNTIME_DIR)../tools/full-build.sh \
+	           $(RUNTIME_DIR)../tools/build-full-wine-deps.sh \
+	           $(RUNTIME_DIR)../tools/configure-wine-full.sh \
+	           $(RUNTIME_DIR)../tools/install-wine-icu.sh \
+	           $(RUNTIME_DIR)../tools/install-wine-mono.sh; do \
+	    if test -x "$$f" || test -r "$$f"; then \
 	      install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/tools/$$(basename $$f)"; \
 	    fi; \
 	  done; \
