@@ -479,18 +479,25 @@ add it to the built-in list."
       src_slugs_present+=("${src_slug}")
     fi
 
-    # Main row (Tool | Status | Fix), TAB-separated.
-    list_rows+="${name}	${status_text}	${fix_text}"$'\n'
+    # yad --list protocol: ONE cell per stdin line. With 3 columns, every
+    # 3 consecutive lines form one row. Do NOT use tab separators.
+    list_rows+="${name}"$'\n'
+    list_rows+="${status_text}"$'\n'
+    list_rows+="${fix_text}"$'\n'
 
-    # Per-tool note as a sub-row prefixed with "  note:" in the Tool column.
+    # Per-tool note as a sub-row: blank tool cell + "note:" in status cell.
     if [[ -n "${notes}" ]]; then
-      list_rows+="  note:	${notes}	"$'\n'
+      list_rows+=""$'\n'
+      list_rows+="note:"$'\n'
+      list_rows+="${notes}"$'\n'
     fi
   done
 
   # Distro-unrecognized banner (BE11)
   if [[ "${distro_recognized}" != "true" ]]; then
-    list_rows+="⚠	Distro not recognized	Commands above are generic fallbacks"$'\n'
+    list_rows+="⚠"$'\n'
+    list_rows+="Distro not recognized"$'\n'
+    list_rows+="Commands above are generic fallbacks"$'\n'
   fi
 
   # Overlay error rows (BE12, up to 3)
@@ -502,10 +509,14 @@ add it to the built-in list."
       local ov_path ov_msg
       ov_path="$(jq -r ".overlay_errors[${ov_i}].path // \"\"" "${json_file}" 2>/dev/null || echo "")"
       ov_msg="$(jq -r ".overlay_errors[${ov_i}].message // \"\"" "${json_file}" 2>/dev/null || echo "")"
-      list_rows+="⚠	Overlay ignored	${ov_path}: ${ov_msg}"$'\n'
+      list_rows+="⚠"$'\n'
+      list_rows+="Overlay ignored"$'\n'
+      list_rows+="${ov_path}: ${ov_msg}"$'\n'
     done
     if [[ "${overlay_error_count}" -gt 3 ]]; then
-      list_rows+="⚠	More overlay errors	$(( overlay_error_count - 3 )) more ignored. See logs."$'\n'
+      list_rows+="⚠"$'\n'
+      list_rows+="More overlay errors"$'\n'
+      list_rows+="$(( overlay_error_count - 3 )) more ignored. See logs."$'\n'
     fi
   fi
 
