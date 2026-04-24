@@ -60,7 +60,9 @@ SHELLCHECK_TARGETS := \
   $(PACKAGING_DIR)/deb/build.sh \
   $(PACKAGING_DIR)/appimage/build-appimage.sh \
   $(PACKAGING_DIR)/appimage/AppRun \
-  $(RUNTIME_DIR)../tools/run-winetricks.sh
+  $(RUNTIME_DIR)../tools/run-winetricks.sh \
+  $(SRC_DIR)/wb-gui-lib/wb-gui-build-env.sh \
+  $(RUNTIME_DIR)../tools/build-glslang.sh
 
 FLATPAK_DIR      := $(RUNTIME_DIR)flatpak
 FLATPAK_MANIFEST := $(FLATPAK_DIR)/org.wine_bleeding.wb.yaml
@@ -190,7 +192,9 @@ install:
 	@# run-winetricks.sh) + their shared helper. Sit under $(LIBDIR)/wine-bleeding/tools/
 	@# where wb-gui's resolver picks them up.
 	@if test -d $(RUNTIME_DIR)../tools; then \
-	  for f in $(RUNTIME_DIR)../tools/build-component.sh $(RUNTIME_DIR)../tools/fetch-overlay.sh $(RUNTIME_DIR)../tools/run-winetricks.sh; do \
+	  for f in $(RUNTIME_DIR)../tools/build-component.sh \
+	           $(RUNTIME_DIR)../tools/fetch-overlay.sh \
+	           $(RUNTIME_DIR)../tools/run-winetricks.sh; do \
 	    if test -x "$$f"; then \
 	      install -Dm755 "$$f" "$(DESTDIR)$(LIBDIR)/wine-bleeding/tools/$$(basename $$f)"; \
 	    fi; \
@@ -199,9 +203,18 @@ install:
 	    install -Dm644 $(RUNTIME_DIR)../tools/lib/build-common.sh \
 	      $(DESTDIR)$(LIBDIR)/wine-bleeding/tools/lib/build-common.sh; \
 	  fi; \
+	  if test -f $(RUNTIME_DIR)../tools/build-glslang.sh; then \
+	    install -Dm755 $(RUNTIME_DIR)../tools/build-glslang.sh \
+	      $(DESTDIR)$(LIBDIR)/wine-bleeding/tools/build-glslang.sh; \
+	  fi; \
 	fi
 	install -Dm644 $(RUNTIME_DIR)share/defaults.conf \
 	  $(DESTDIR)$(SHAREDIR)/wine-bleeding/defaults.conf
+	@# Install the distro package map (wb-preflight.py data file — read-only).
+	@if test -f $(RUNTIME_DIR)share/wb-preflight-packages.json; then \
+	  install -Dm644 $(RUNTIME_DIR)share/wb-preflight-packages.json \
+	    $(DESTDIR)$(SHAREDIR)/wine-bleeding/wb-preflight-packages.json; \
+	fi
 	@for f in $(RUNTIME_DIR)share/schemas/*.json; do \
 	  install -Dm644 "$$f" "$(DESTDIR)$(SHAREDIR)/wine-bleeding/schemas/$$(basename $$f)"; \
 	done
@@ -231,6 +244,11 @@ install:
 	  $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding/CHANGELOG.md
 	install -Dm644 $(RUNTIME_DIR)README.md \
 	  $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding/README.md
+	@# Install the wine-bleeding-wb-build subpackage README (its sole payload file).
+	@if test -f $(RUNTIME_DIR)packaging/rpm/wine-bleeding-wb-build-README; then \
+	  install -Dm644 $(RUNTIME_DIR)packaging/rpm/wine-bleeding-wb-build-README \
+	    $(DESTDIR)$(SHAREDIR)/doc/wine-bleeding-wb-build/README; \
+	fi
 	@echo "Install complete."
 
 dist-rpm:

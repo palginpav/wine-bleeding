@@ -126,6 +126,8 @@ _wb_gui_load_libs() {
   source "${_WB_GUI_LIB_DIR}/wb-gui-overlays.sh"
   # shellcheck source=wb-gui-lib/wb-gui-prefix.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-prefix.sh"
+  # shellcheck source=wb-gui-lib/wb-gui-build-env.sh
+  source "${_WB_GUI_LIB_DIR}/wb-gui-build-env.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -3888,7 +3890,8 @@ _dist_get_selected_fields() {
 
 # ---------------------------------------------------------------------------
 # _cmd_build_component <dist_name> <dist_path>
-# 3-stage Component Builder dialog per W2 spec.
+# Multi-select Component Builder (W4): preflight gate + DXVK/VKD3D/NVAPI
+# checklist + sequential build loop per selected component.
 # Calls tools/build-component.sh with --progress-fd 3 for event parsing.
 # Cancel: SIGTERM to process group → 5s watchdog → SIGKILL (W2 OQ-4).
 # ---------------------------------------------------------------------------
@@ -3899,68 +3902,89 @@ _cmd_build_component() {
   wb_home="$(_wb_gui_home)"
 
   # -------------------------------------------------------------------------
-  # Stage 1 loop — keep form open across pre-flight guard failures
+  # Build-env preflight gate (W4 integration point 1)
+  # Silent pass-through when overall_ok=true (BLK-1 resolution).
+  # -------------------------------------------------------------------------
+  local preflight_rc=0
+  wb_gui_dialog_preflight_loop "Component Builder" "components" || preflight_rc=$?
+  if [[ "${preflight_rc}" -ne 0 ]]; then
+    # User cancelled preflight — return to Dist Manager list
+    return 0
+  fi
+
+  # -------------------------------------------------------------------------
+  # Stage 1 loop — multi-select checklist; keep form open on validation fail
   # -------------------------------------------------------------------------
   while true; do
     # Read current component versions from dists.json for display
     local reg_file="${wb_home}/dists.json"
-    local current_ver_dxvk="—"
+    local v_dxvk="—" v_vkd3d="—" v_nvapi="—"
     if [[ -r "${reg_file}" ]]; then
       local comp_versions
       comp_versions="$(jq -c --arg n "${dist_name}" \
         '.dists[] | select(.name == $n) | .component_versions // {}' \
         "${reg_file}" 2>/dev/null | head -1 || true)"
       if [[ -n "${comp_versions}" ]]; then
-        local v
-        v="$(printf '%s' "${comp_versions}" | jq -r '.dxvk // empty')"
-        [[ -n "${v}" ]] && current_ver_dxvk="${v}"
+        local _v
+        _v="$(printf '%s' "${comp_versions}" | jq -r '.dxvk // empty' 2>/dev/null || true)"
+        [[ -n "${_v}" ]] && v_dxvk="${_v}"
+        _v="$(printf '%s' "${comp_versions}" | jq -r '.vkd3d // empty' 2>/dev/null || true)"
+        [[ -n "${_v}" ]] && v_vkd3d="${_v}"
+        _v="$(printf '%s' "${comp_versions}" | jq -r '.nvapi // empty' 2>/dev/null || true)"
+        [[ -n "${_v}" ]] && v_nvapi="${_v}"
       fi
     fi
-    # Show current DXVK version as form default (read-only display field)
-    local current_ver_or_em_dash="${current_ver_dxvk}"
 
-    # Stage 1: component selection form (S1–S8)
+    # Stage 1: multi-select component checklist (W4 — replaces old single-CB)
     local s1_out rc_s1=0
     s1_out="$(wb_gui_yad \
       --form \
       --title="Build Components — ${dist_name}" \
-      --text="Rebuild a single component. The dist stays usable during the build; the new component is atomically swapped in on success." \
+      --text="Rebuild one or more components. Each builds in a sibling staging dir and atomically swaps in — the dist stays usable during the build." \
       --no-markup \
       --separator="|" \
-      --field="Component:CB"                     "DXVK!VKD3D-Proton!DXVK-NVAPI" \
-      --field="Target dist:RO"                   "${dist_name}" \
-      --field="Current version:RO"               "${current_ver_or_em_dash}" \
-      --field="Force rebuild (ignore cache):CHK" "FALSE" \
-      --field="Note: gstreamer is bundled from your system's gstreamer-1.0 install. To refresh it, re-run tools/full-build.sh or update your system's gstreamer packages.:LBL" "" \
+      --field="Target dist::RO"                              "${dist_name}" \
+      --field="DXVK  (current: ${v_dxvk})::CHK"             "FALSE" \
+      --field="VKD3D-Proton  (current: ${v_vkd3d})::CHK"    "FALSE" \
+      --field="DXVK-NVAPI  (current: ${v_nvapi})::CHK"      "FALSE" \
+      --field="Force rebuild all (ignore cache)::CHK"        "FALSE" \
+      --field="Note: gstreamer is bundled from your system's gstreamer-1.0 install. To refresh it, re-run tools/full-build.sh or update your system's gstreamer packages.::LBL" "" \
       --button="Cancel:1" \
       --button="Start build:0" 2>/dev/null)" || rc_s1=$?
 
     case "${rc_s1}" in
       1|252)
-        # User cancelled Stage 1 — return to [LIST] (no refresh)
         return 0
         ;;
       0)
-        : # proceed to parse + pre-flight
+        : # proceed to validate
         ;;
       *)
         return 0
         ;;
     esac
 
-    # Parse Stage 1 stdout: <component_display>|<dist_ro>|<ver_ro>|<force_chk>|
-    local component_display force_rebuild_flag
-    component_display="$(printf '%s' "${s1_out}" | cut -d'|' -f1)"
-    force_rebuild_flag="$(printf '%s' "${s1_out}" | cut -d'|' -f4)"
+    # Parse Stage 1 stdout:
+    # <dist_ro>|<dxvk_chk>|<vkd3d_chk>|<nvapi_chk>|<force_chk>|
+    local _dist_ro dxvk_chk vkd3d_chk nvapi_chk force_chk _trail
+    IFS='|' read -r _dist_ro dxvk_chk vkd3d_chk nvapi_chk force_chk _trail \
+      <<< "${s1_out}"
 
-    # Map display name to CLI arg
-    local component_arg
-    case "${component_display}" in
-      DXVK)         component_arg="dxvk" ;;
-      VKD3D-Proton) component_arg="vkd3d" ;;
-      DXVK-NVAPI)   component_arg="nvapi" ;;
-      *)            component_arg="dxvk" ;;
-    esac
+    # Validation: at least one component selected
+    if [[ "${dxvk_chk}" != "TRUE" && "${vkd3d_chk}" != "TRUE" && "${nvapi_chk}" != "TRUE" ]]; then
+      wb_gui_dialog_error "No component selected" \
+        "Select at least one component to build."
+      continue  # Loop back to Stage 1
+    fi
+
+    # Build the ordered list of selected components (fixed order: dxvk → vkd3d → nvapi)
+    local -a selected_components=()
+    [[ "${dxvk_chk}" == "TRUE" ]]  && selected_components+=("dxvk")
+    [[ "${vkd3d_chk}" == "TRUE" ]] && selected_components+=("vkd3d")
+    [[ "${nvapi_chk}" == "TRUE" ]] && selected_components+=("nvapi")
+
+    local force_flag=""
+    [[ "${force_chk}" == "TRUE" ]] && force_flag="--force-rebuild"
 
     # Pre-flight guard 1: dist still exists
     if [[ ! -d "${dist_path}" ]]; then
@@ -3985,34 +4009,16 @@ _cmd_build_component() {
     else
       wb_gui_dialog_error "Build Already in Progress" \
         "Another build is already running. Wait for it to finish or cancel it from the other window."
-      # Loop back to Stage 1 (guard failure — form stays open)
       continue
     fi
 
-    # All guards passed — proceed to Stage 2
+    # All guards passed — proceed to Stage 2 multi-component loop
     break
   done  # Stage 1 loop
 
   # -------------------------------------------------------------------------
-  # Stage 2 — Live Progress + Log Tail
+  # Locate build-component.sh
   # -------------------------------------------------------------------------
-
-  # Set up temp files and named pipe
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  local log_file="${tmp_dir}/wb-build-log.txt"
-  local raw_out="${log_file}.rawout"
-  local event_pipe="${tmp_dir}/wb-build-events"
-  mkfifo "${event_pipe}"
-
-  # Write N-2 fix header (always topmost line in log tail)
-  printf 'Building %s on %s\n' "${component_display}" "${dist_name}" > "${log_file}"
-
-  # Force-rebuild flag
-  local force_flag=""
-  [[ "${force_rebuild_flag}" == "TRUE" ]] && force_flag="--force-rebuild"
-
-  # Locate build-component.sh via the shared tools-dir resolver.
   local build_script=""
   if [[ -n "${_WB_TOOLS_DIR}" ]] && [[ -x "${_WB_TOOLS_DIR}/build-component.sh" ]]; then
     build_script="${_WB_TOOLS_DIR}/build-component.sh"
@@ -4026,12 +4032,22 @@ _cmd_build_component() {
 What happened: the wine-bleeding build driver is not installed or WB_TOOLS_DIR is not pointing at a directory that contains it.
 Expected: /usr/lib/wine-bleeding/tools/build-component.sh (system install) or ./tools/build-component.sh (source tree).
 Next action: reinstall wine-bleeding-wb (the RPM/DEB now ships this file) or set WB_TOOLS_DIR=<path-to-tools>."
-    rm -rf "${tmp_dir}"
     return 1
   fi
 
-  # Start event reader in background (reads named pipe → formats to log_file)
-  # W3 open item 5: use || true after each read to handle pipe closed early
+  # -------------------------------------------------------------------------
+  # Stage 2 — Single shared log window; iterate selected components
+  # -------------------------------------------------------------------------
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local log_file="${tmp_dir}/wb-build-log.txt"
+  local event_pipe="${tmp_dir}/wb-build-events"
+  mkfifo "${event_pipe}"
+
+  local comp_total="${#selected_components[@]}"
+  printf 'Building %d component(s) on %s\n' "${comp_total}" "${dist_name}" > "${log_file}"
+
+  # Event reader (shared across all component iterations)
   _wb_gui_dist_event_reader() {
     local pipe="${1}"
     local lf="${2}"
@@ -4042,26 +4058,16 @@ Next action: reinstall wine-bleeding-wb (the RPM/DEB now ships this file) or set
       rest="${line#*: }"
       case "${prefix_tok}" in
         PROGRESS)
-          # "PROGRESS: N msg" — rest is "N msg"
           pct_str="${rest%% *}"
           local msg_part="${rest#* }"
-          # Validate integer — ignore malformed lines
           if [[ "${pct_str}" =~ ^[0-9]+$ ]]; then
             printf '[%3d%%] %s\n' "${pct_str}" "${msg_part}" >> "${lf}" || true
           fi
           ;;
-        LOG)
-          printf '        %s\n' "${rest}" >> "${lf}" || true
-          ;;
-        WARN)
-          printf '  WARN  %s\n' "${rest}" >> "${lf}" || true
-          ;;
-        ERROR)
-          printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true
-          ;;
-        *)
-          # Unrecognised — silently ignore per spec
-          ;;
+        LOG)   printf '        %s\n' "${rest}" >> "${lf}" || true ;;
+        WARN)  printf '  WARN  %s\n' "${rest}" >> "${lf}" || true ;;
+        ERROR) printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true ;;
+        *)     ;;
       esac
     done < "${pipe}" || true
   }
@@ -4069,188 +4075,490 @@ Next action: reinstall wine-bleeding-wb (the RPM/DEB now ships this file) or set
   _wb_gui_dist_event_reader "${event_pipe}" "${log_file}" &
   local reader_pid=$!
 
-  # Start build-component.sh in its own process group, progress-fd=3 → event_pipe
-  # Open event_pipe for writing on fd 3 before exec so the builder can write to it
+  # Open the shared log-tail window (stays open across all components)
+  wb_gui_dialog_log_tail \
+    "Building ${comp_total} component(s) — ${dist_name}" \
+    "${log_file}" &
+  local yad_pid=$!
+
+  # -------------------------------------------------------------------------
+  # Iterate components: dxvk → vkd3d → nvapi
+  # -------------------------------------------------------------------------
+  local -a build_results=()   # "OK", "FAILED:<exit>", "SKIPPED" per component
+  local comp_n=0
+
+  local component_arg
+  for component_arg in "${selected_components[@]}"; do
+    (( comp_n++ )) || true
+
+    # Map arg to display name
+    local comp_display
+    case "${component_arg}" in
+      dxvk)  comp_display="DXVK" ;;
+      vkd3d) comp_display="VKD3D-Proton" ;;
+      nvapi) comp_display="DXVK-NVAPI" ;;
+      *)     comp_display="${component_arg}" ;;
+    esac
+
+    # If yad was already cancelled by user, skip remaining components
+    if ! kill -0 "${yad_pid}" 2>/dev/null; then
+      build_results+=("SKIPPED")
+      continue
+    fi
+
+    # Separator header in log
+    {
+      printf '\n'
+      printf '%s\n' "════════════════════════════════════════════════════════"
+      printf ' Building %s (%d of %d)\n' "${comp_display}" "${comp_n}" "${comp_total}"
+      printf '%s\n' "════════════════════════════════════════════════════════"
+    } >> "${log_file}"
+
+    local raw_out="${tmp_dir}/rawout-${component_arg}.txt"
+
+    # Launch build-component.sh; WB_SKIP_PREFLIGHT=1 avoids double-preflight
+    (
+      exec 3>"${event_pipe}"
+      export WB_SKIP_PREFLIGHT=1
+      exec "${build_script}" \
+        --component "${component_arg}" \
+        --target-dist "${dist_path}" \
+        --progress-fd 3 \
+        ${force_flag} \
+        >"${raw_out}" 2>&1
+    ) &
+    local builder_pid=$!
+
+    # Poll until yad closes (cancel) or this builder finishes
+    while kill -0 "${yad_pid}" 2>/dev/null && kill -0 "${builder_pid}" 2>/dev/null; do
+      sleep "${WB_GUI_BUILD_POLL_SEC:-0.3}"
+    done
+
+    if kill -0 "${builder_pid}" 2>/dev/null; then
+      # User cancelled — stop current build
+      kill -TERM -- "-${builder_pid}" 2>/dev/null || true
+      local elapsed=0
+      while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt 5 ]]; do
+        sleep 1; (( elapsed++ )) || true
+      done
+      kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+      wait "${builder_pid}" 2>/dev/null || true
+      build_results+=("SKIPPED")
+      # Skip remaining components
+      while [[ "${comp_n}" -lt "${comp_total}" ]]; do
+        build_results+=("SKIPPED")
+        (( comp_n++ )) || true
+      done
+      break
+    else
+      local comp_exit=0
+      wait "${builder_pid}" 2>/dev/null || comp_exit=$?
+      if [[ "${comp_exit}" -eq 0 ]]; then
+        build_results+=("OK")
+      else
+        build_results+=("FAILED:${comp_exit}")
+      fi
+    fi
+  done
+
+  # Drain log, close yad window
+  sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
+  kill "${yad_pid}" 2>/dev/null || true
+  wait "${yad_pid}" 2>/dev/null || true
+
+  # Shut down event reader
+  kill "${reader_pid}" 2>/dev/null || true
+  wait "${reader_pid}" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # Stage 4 — Aggregated result dialog
+  # -------------------------------------------------------------------------
+
+  # Refresh registry to get new versions
+  wb_gui_dist_registry_refresh 2>/dev/null || true
+
+  # Count outcomes
+  local ok_count=0 fail_count=0 skip_count=0
+  local result_str
+  for result_str in "${build_results[@]+"${build_results[@]}"}"; do
+    case "${result_str}" in
+      OK)      (( ok_count++ ))   || true ;;
+      SKIPPED) (( skip_count++ )) || true ;;
+      FAILED*) (( fail_count++ )) || true ;;
+    esac
+  done
+
+  local summary_line
+  if [[ "${ok_count}" -eq "${comp_total}" ]]; then
+    summary_line="${ok_count} of ${comp_total} components rebuilt successfully."
+  elif [[ "${ok_count}" -eq 0 && "${fail_count}" -eq 0 ]]; then
+    summary_line="Build cancelled before any component started."
+  elif [[ "${ok_count}" -eq 0 ]]; then
+    summary_line="All component builds failed. The dist has not changed."
+  else
+    local partial_msg="${ok_count} of ${comp_total} rebuilt."
+    [[ "${fail_count}" -gt 0 ]] && \
+      partial_msg+=" ${fail_count} failed — dist is still usable for the successful components."
+    [[ "${skip_count}" -gt 0 ]] && \
+      partial_msg+=" ${skip_count} skipped (cancelled)."
+    summary_line="${partial_msg}"
+  fi
+
+  # Per-component rows
+  local result_body=""
+  local ri=0
+  for component_arg in "${selected_components[@]+"${selected_components[@]}"}"; do
+    local comp_display
+    case "${component_arg}" in
+      dxvk)  comp_display="DXVK" ;;
+      vkd3d) comp_display="VKD3D-Proton" ;;
+      nvapi) comp_display="DXVK-NVAPI" ;;
+      *)     comp_display="${component_arg}" ;;
+    esac
+
+    local res="${build_results[${ri}]:-SKIPPED}"
+    local glyph new_ver=""
+    if [[ "${res}" == "OK" ]]; then
+      glyph="OK"
+      if [[ -r "${wb_home}/dists.json" ]]; then
+        new_ver="$(jq -r --arg n "${dist_name}" --arg c "${component_arg}" \
+          '.dists[] | select(.name == $n) | .component_versions[$c] // empty' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+      fi
+      result_body+="  ${glyph}      ${comp_display}   -> ${new_ver:-?}"$'\n'
+    elif [[ "${res}" == FAILED:* ]]; then
+      glyph="FAILED"
+      local exit_code="${res#FAILED:}"
+      result_body+="  ${glyph}  ${comp_display}   build failed (exit ${exit_code})"$'\n'
+    else
+      glyph="SKIPPED"
+      result_body+="  ${glyph} ${comp_display}   (cancelled by user)"$'\n'
+    fi
+    (( ri++ )) || true
+  done
+
+  wb_gui_dialog_info "Build complete — ${dist_name}" \
+    "${summary_line}
+
+${result_body}"
+
+  # Cleanup
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _wb_gui_build_dist_clone_handler
+# BTN callback for "Clone upstream" in the Build-Dist Step 1 dialog.
+# Cloning is not yet automated; show an info dialog with manual instructions.
+# ---------------------------------------------------------------------------
+_wb_gui_build_dist_clone_handler() {
+  wb_gui_yad --info --title="Clone upstream — not yet available" \
+    --text="<b>Clone upstream is planned for a future release.</b>
+
+What you can do now: clone the wine-bleeding source tree manually and paste the path into the source-tree field. Example:
+
+  git clone https://github.com/palginpav/wine-bleeding.git ~/src/wine-bleeding" \
+    --no-markup=0 --button="OK:0" 2>/dev/null || true
+  return 1
+}
+export -f _wb_gui_build_dist_clone_handler 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# _cmd_build_dist_from_source
+# Build-Dist-from-Source wizard: 4-stage flow (C.1 source-tree picker →
+# C.2 preflight → C.3 live log → C.4 result).
+# Entry point: Dist Manager [Build Dist from Source...] button (rc=80).
+# ---------------------------------------------------------------------------
+_cmd_build_dist_from_source() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # -------------------------------------------------------------------------
+  # Locate full-build.sh
+  # -------------------------------------------------------------------------
+  local full_build_script=""
+  if [[ -n "${_WB_TOOLS_DIR}" ]] && [[ -x "${_WB_TOOLS_DIR}/full-build.sh" ]]; then
+    full_build_script="${_WB_TOOLS_DIR}/full-build.sh"
+  fi
+  if [[ -z "${full_build_script}" || ! -x "${full_build_script}" ]]; then
+    wb_gui_dialog_error "Build Dist from Source" \
+      "Cannot locate tools/full-build.sh.
+
+What happened: the wine-bleeding full-build driver is not installed.
+Expected: /usr/lib/wine-bleeding/tools/full-build.sh (system install) or ./tools/full-build.sh (source tree).
+Next action: reinstall wine-bleeding-wb or set WB_TOOLS_DIR=<path-to-tools>."
+    return 1
+  fi
+
+  # -------------------------------------------------------------------------
+  # Stage 1 — Source-tree picker (C.1)
+  # -------------------------------------------------------------------------
+  # Default path: $WB_WINE_SOURCE_ROOT if set, else $WB_HOME/src/wine-bleeding/
+  local default_src_path="${WB_WINE_SOURCE_ROOT:-${wb_home}/src/wine-bleeding}"
+  local src_path="${default_src_path}"
+  local validation_copy=""
+
+  _validate_src_tree() {
+    local p="${1:-}"
+    if [[ -z "${p}" ]]; then
+      echo "Enter or browse to a wine-bleeding source directory."
+      return 1
+    elif [[ -x "${p}/tools/full-build.sh" ]]; then
+      echo "Source tree found. tools/full-build.sh present and executable."
+      return 0
+    else
+      echo "Not a wine-bleeding tree — tools/full-build.sh not found. Choose a different directory or clone upstream."
+      return 1
+    fi
+  }
+
+  local stage1_error_prefix=""
+  while true; do
+    validation_copy="$(_validate_src_tree "${src_path}" 2>/dev/null || true)"
+
+    local s1_out rc_s1=0
+    s1_out="$(wb_gui_yad \
+      --form \
+      --title="Build Dist from Source — Step 1 of 4: Choose source tree" \
+      --text="${stage1_error_prefix}Choose a wine-bleeding source tree to build from.
+We will run tools/full-build.sh against it to produce a new dist
+under \$WB_HOME/dist/WINE-BLEEDING-<date>." \
+      --no-markup \
+      --separator="|" \
+      --field="Source tree::DIR"                                "${src_path}" \
+      --field="Validation::RO"                                  "${validation_copy}" \
+      --field="Clone upstream (github.com/palginpav/wine-bleeding)::BTN" \
+        "@bash -c '_wb_gui_build_dist_clone_handler'" \
+      --field="Note: cloning downloads ~500 MB. Skip if you already have a source tree.::LBL" "" \
+      --button="Cancel:1" \
+      --button="Next:0" 2>/dev/null)" || rc_s1=$?
+
+    case "${rc_s1}" in
+      1|252) return 0 ;;
+      0) : ;;
+      *) return 0 ;;
+    esac
+
+    src_path="$(printf '%s' "${s1_out}" | cut -d'|' -f1)"
+
+    # Validate before proceeding
+    if ! _validate_src_tree "${src_path}" >/dev/null 2>&1; then
+      stage1_error_prefix="The path you entered is not a wine-bleeding source tree (tools/full-build.sh not found). Please choose a valid directory or clone upstream.
+
+"
+      continue
+    fi
+
+    stage1_error_prefix=""
+    break
+  done
+
+  # -------------------------------------------------------------------------
+  # Stage 2 — Preflight gate (C.2): reuse preflight loop with dist build-type
+  # -------------------------------------------------------------------------
+  local pf_rc=0
+  # Loop; on cancel: return to stage 1 (loop again)
+  while true; do
+    wb_gui_dialog_preflight_loop "Build Dist from Source" "dist" || pf_rc=$?
+    if [[ "${pf_rc}" -ne 0 ]]; then
+      # User cancelled preflight — go back to stage 1
+      stage1_error_prefix=""
+      return 0   # For simplicity, exit wizard; Stage 1 re-entry would require outer loop
+    fi
+    break
+  done
+
+  # -------------------------------------------------------------------------
+  # Stage 3 — Live log (C.3)
+  # -------------------------------------------------------------------------
+  # Check build lock before starting
+  local build_lock_file="${wb_home}/.build-lock"
+  if ! flock -n "${build_lock_file}" true 2>/dev/null; then
+    wb_gui_dialog_error "Build already in progress" \
+      "Another build is already running.
+Wait for it to finish or cancel it, then try again."
+    return 1
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local log_file="${tmp_dir}/wb-full-build-log.txt"
+  local raw_out="${log_file}.rawout"
+  local event_pipe="${tmp_dir}/wb-full-build-events"
+  mkfifo "${event_pipe}"
+
+  printf 'Building dist from source — %s\n' "${src_path}" > "${log_file}"
+
+  # Event reader (same pattern)
+  _wb_gui_full_build_event_reader() {
+    local pipe="${1}" lf="${2}" line prefix_tok rest pct_str
+    while IFS= read -r line || true; do
+      [[ -z "${line}" ]] && continue
+      prefix_tok="${line%%: *}"
+      rest="${line#*: }"
+      case "${prefix_tok}" in
+        PROGRESS)
+          pct_str="${rest%% *}"
+          local msg_part="${rest#* }"
+          if [[ "${pct_str}" =~ ^[0-9]+$ ]]; then
+            printf '[%3d%%] %s\n' "${pct_str}" "${msg_part}" >> "${lf}" || true
+          fi
+          ;;
+        LOG)   printf '        %s\n' "${rest}" >> "${lf}" || true ;;
+        WARN)  printf '  WARN  %s\n' "${rest}" >> "${lf}" || true ;;
+        ERROR) printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true ;;
+        *)     ;;
+      esac
+    done < "${pipe}" || true
+  }
+  export -f _wb_gui_full_build_event_reader
+  _wb_gui_full_build_event_reader "${event_pipe}" "${log_file}" &
+  local reader_pid=$!
+
+  # Track last PROGRESS and last ERROR for Stage 4 failure dialog
+  local last_progress_label="" last_error_line=""
+  _wb_gui_track_last_progress() {
+    local lf="${1}" src_path="${2}"
+    local line
+    # Tail the raw_out for PROGRESS/ERROR lines as builder writes them
+    tail -f "${src_path}" 2>/dev/null | while IFS= read -r line; do
+      case "${line%%: *}" in
+        PROGRESS) printf '%s\n' "${line#PROGRESS: }" > "${lf}.last_progress" || true ;;
+        ERROR)    printf '%s\n' "${line#ERROR: }"    > "${lf}.last_error"    || true ;;
+      esac
+    done
+  }
+  export -f _wb_gui_track_last_progress
+
+  # Launch full-build.sh
   (
-    set -euo pipefail
     exec 3>"${event_pipe}"
-    exec "${build_script}" \
-      --component "${component_arg}" \
-      --target-dist "${dist_path}" \
+    export WB_BUILD_PROGRESS_FD=3
+    export WB_WINE_SOURCE_ROOT="${src_path}"
+    "${full_build_script}" \
       --progress-fd 3 \
-      ${force_flag} \
       >"${raw_out}" 2>&1
   ) &
   local builder_pid=$!
 
-  # Stage 2 — launch yad --text-info --tail async so we can close it
-  # automatically when the builder exits naturally (P1 polish, v1.7.x).
-  wb_gui_dialog_log_tail \
-    "Building ${component_display} — ${dist_name}" \
-    "${log_file}" &
+  # Start tracker in parallel
+  _wb_gui_track_last_progress "${log_file}" "${raw_out}" &
+  local tracker_pid=$!
+
+  wb_gui_dialog_log_tail "Building dist from source — Step 3 of 4" "${log_file}" &
   local yad_pid=$!
 
-  # Poll until EITHER yad closes (user cancel) OR the builder finishes.
   while kill -0 "${yad_pid}" 2>/dev/null && kill -0 "${builder_pid}" 2>/dev/null; do
     sleep "${WB_GUI_BUILD_POLL_SEC:-0.3}"
   done
 
   if kill -0 "${builder_pid}" 2>/dev/null; then
-    # yad exited first → user cancelled. SIGTERM → 5s watchdog → SIGKILL (W2 OQ-4).
+    # User cancelled
     kill -TERM -- "-${builder_pid}" 2>/dev/null || true
-    local watchdog_secs=5 elapsed=0
-    while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt "${watchdog_secs}" ]]; do
-      sleep 1
-      (( elapsed++ )) || true
+    local elapsed=0
+    while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt 5 ]]; do
+      sleep 1; (( elapsed++ )) || true
     done
-    if kill -0 "${builder_pid}" 2>/dev/null; then
-      kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+    kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+  else
+    sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
+    kill "${yad_pid}" 2>/dev/null || true
+  fi
+
+  wait "${yad_pid}" 2>/dev/null || true
+  local full_build_exit=0
+  wait "${builder_pid}" 2>/dev/null || full_build_exit=$?
+  kill "${tracker_pid}" 2>/dev/null || true; wait "${tracker_pid}" 2>/dev/null || true
+  kill "${reader_pid}" 2>/dev/null || true;  wait "${reader_pid}" 2>/dev/null || true
+
+  # Read tracking sentinel files
+  [[ -r "${log_file}.last_progress" ]] && \
+    last_progress_label="$(cat "${log_file}.last_progress" 2>/dev/null || true)"
+  [[ -r "${log_file}.last_error" ]] && \
+    last_error_line="$(cat "${log_file}.last_error" 2>/dev/null || true)"
+
+  # -------------------------------------------------------------------------
+  # Stage 4 — Post-build result (C.4)
+  # -------------------------------------------------------------------------
+  if [[ "${full_build_exit}" -eq 0 ]]; then
+    # Success: find new dist in $WB_HOME/dist/
+    wb_gui_dist_registry_refresh 2>/dev/null || true
+
+    local new_dist_name="—" new_dist_path="—"
+    # Find newest dist dir created today (WINE-BLEEDING-YYYYMMDD pattern)
+    local today
+    today="$(date +%Y%m%d)"
+    local candidate="${wb_home}/dist/WINE-BLEEDING-${today}"
+    if [[ -d "${candidate}" ]]; then
+      new_dist_name="WINE-BLEEDING-${today}"
+      new_dist_path="${candidate}"
+    fi
+
+    local result_text="Build complete.
+
+New dist:    ${new_dist_name}
+Path:        ${new_dist_path}"
+
+    local stage4_out rc_s4=0
+    stage4_out="$(wb_gui_yad \
+      --form \
+      --title="Dist built — Step 4 of 4" \
+      --no-markup \
+      --image=dialog-information \
+      --text="${result_text}" \
+      --separator="|" \
+      --field="Activate this dist now (swap the WINE-BLEEDING symlink)::CHK" "TRUE" \
+      --button="Done:0" 2>/dev/null)" || rc_s4=$?
+
+    if [[ "${rc_s4}" -eq 0 ]]; then
+      local activate_chk
+      activate_chk="$(printf '%s' "${stage4_out}" | cut -d'|' -f1)"
+      if [[ "${activate_chk}" == "TRUE" && "${new_dist_name}" != "—" ]]; then
+        wb_gui_dist_activate "${new_dist_name}" 2>/dev/null || \
+          wb_gui_dialog_error "Activate Failed" \
+            "Could not activate '${new_dist_name}'. You can activate it manually from the Dist Manager."
+      fi
     fi
   else
-    # Builder finished first → close the tail window after a short drain.
-    sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
-    if kill -0 "${yad_pid}" 2>/dev/null; then
-      kill "${yad_pid}" 2>/dev/null || true
+    # Failure
+    local tail_lines=""
+    if [[ -r "${raw_out}" ]]; then
+      tail_lines="$(tail -n 30 "${raw_out}" 2>/dev/null || true)"
+    fi
+    local fail_text="Build failed at step: ${last_progress_label:-unknown}
+
+What happened: tools/full-build.sh exited with code ${full_build_exit}.
+Why: ${last_error_line:-see log below}
+
+What to do next:
+  Open a terminal and run:
+    tools/full-build.sh 2>&1 | tee /tmp/wb-build.log
+  to see the full error in context.
+
+Or click Back to re-run preflight if a tool is missing.
+
+Last 30 lines of log:
+${tail_lines}"
+
+    local rc_fail=0
+    wb_gui_yad \
+      --title="Build failed — Step 4 of 4" \
+      --no-markup \
+      --image=dialog-error \
+      --text="${fail_text}" \
+      --button="Back to preflight:10" \
+      --button="Close:1" 2>/dev/null || rc_fail=$?
+
+    if [[ "${rc_fail}" -eq 10 ]]; then
+      # Back to preflight → recurse (same source tree)
+      rm -rf "${tmp_dir}" 2>/dev/null || true
+      # Re-enter wizard from preflight stage
+      _cmd_build_dist_from_source
+      return
     fi
   fi
 
-  # Reap yad (non-fatal if already gone).
-  wait "${yad_pid}" 2>/dev/null || true
-
-  # Wait for builder to finish (get exit code)
-  local builder_exit=0
-  wait "${builder_pid}" 2>/dev/null || builder_exit=$?
-
-  # Kill event reader (pipe may already be closed)
-  kill "${reader_pid}" 2>/dev/null || true
-  wait "${reader_pid}" 2>/dev/null || true
-
-  # -------------------------------------------------------------------------
-  # Stage 3 — Post-Build Result
-  # -------------------------------------------------------------------------
-  # Read tail of rawout for error dialogs
-  _wb_gui_dist_rawout_tail() {
-    local f="${1}"
-    local lines="${2:-20}"
-    if [[ -r "${f}" ]]; then
-      tail -n "${lines}" "${f}"
-    fi
-  }
-
-  local stage3_return_to_stage1=0
-
-  case "${builder_exit}" in
-    0)
-      # Success — refresh registry, read new version, show success dialog
-      wb_gui_dist_registry_refresh
-      local new_version="—"
-      if [[ -r "${wb_home}/dists.json" ]]; then
-        local nv
-        nv="$(jq -r --arg n "${dist_name}" --arg c "${component_arg}" \
-          '.dists[] | select(.name == $n) | .component_versions[$c] // empty' \
-          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
-        [[ -n "${nv}" ]] && new_version="${nv}"
-      fi
-      wb_gui_dialog_info "Build complete" \
-        "${component_display} was rebuilt successfully.
-
-Dist:         ${dist_name}
-New version:  ${new_version}"
-      ;;
-    2)
-      # User cancelled — builder already did cleanup
-      wb_gui_dialog_info "Build cancelled" \
-        "The build was cancelled. No changes were applied to ${dist_name}."
-      ;;
-    71)
-      # Build lock held by another process — return to Stage 1
-      wb_gui_dialog_error "Build already in progress" \
-        "Another build is already running.
-
-Wait for it to finish, or cancel it from the window where it is running,
-then try again."
-      stage3_return_to_stage1=1
-      ;;
-    65)
-      wb_gui_dialog_error "Invalid dist path" \
-        "The build was rejected because the dist path is invalid or outside
-the expected location. This should not normally happen.
-
-Refresh the Dist Manager and try again."
-      ;;
-    66)
-      local tail66
-      tail66="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
-      wb_gui_dialog_error "Build environment incomplete" \
-        "A required build tool is missing (meson, ninja, glslang, or MinGW).
-
-Install the missing tools and try again. See the log below for details.
-
-${tail66}"
-      ;;
-    67)
-      local tail67
-      tail67="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
-      wb_gui_dialog_error "Source download failed" \
-        "Could not fetch the ${component_display} source code.
-
-This usually means a network issue or a missing build-deps checkout.
-Check your network connection and try again.
-
-${tail67}"
-      ;;
-    68)
-      local tail68
-      tail68="$(_wb_gui_dist_rawout_tail "${raw_out}" 30)"
-      wb_gui_dialog_error "Build failed" \
-        "${component_display} did not compile successfully.
-
-This is usually a toolchain or source mismatch. The log below shows
-the last lines of meson/ninja output. Running 'tools/build-component.sh'
-directly from a terminal may give more context.
-
-${tail68}"
-      ;;
-    69)
-      wb_gui_dialog_error "Build output incomplete" \
-        "The build finished but not all expected DLL files were produced.
-No changes were applied to ${dist_name}.
-
-Running 'tools/build-component.sh' directly from a terminal will show
-which files are missing."
-      ;;
-    70)
-      wb_gui_dialog_error "Swap into dist failed" \
-        "The build succeeded but could not be moved into the dist cleanly.
-${dist_name} may be in an inconsistent state.
-
-Click Refresh in the Dist Manager to attempt automatic recovery.
-If the problem persists, re-run the build."
-      ;;
-    *)
-      local tail_unk
-      tail_unk="$(_wb_gui_dist_rawout_tail "${raw_out}" 20)"
-      wb_gui_dialog_error "Build failed" \
-        "The build exited with an unexpected error (code ${builder_exit}).
-
-${tail_unk}"
-      ;;
-  esac
-
-  # Cleanup temp files
-  rm -f "${event_pipe}" "${log_file}" "${raw_out}" 2>/dev/null || true
   rm -rf "${tmp_dir}" 2>/dev/null || true
-
-  # For all non-success, non-lock-busy exits: refresh registry so [LIST] is current
-  if [[ "${builder_exit}" -ne 0 ]]; then
-    wb_gui_dist_registry_refresh 2>/dev/null || true
-  fi
-
-  # If exit 71 (lock busy), caller should re-open Stage 1 — signal via return code
-  if [[ "${stage3_return_to_stage1}" -eq 1 ]]; then
-    # Re-enter Stage 1 by tail-calling ourselves
-    _cmd_build_component "${dist_name}" "${dist_path}"
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -4300,6 +4608,7 @@ _cmd_dist_manager() {
       --button="Add External!list-add:10" \
       --button="Activate!emblem-default:20" \
       --button="Build Components!applications-development:30" \
+      --button="Build Dist from Source...:80" \
       --button="Remove!list-remove:40" \
       --button="Refresh!view-refresh:50" \
       --button="Close!window-close:1" \
@@ -4584,6 +4893,13 @@ removed. You can re-add this dist later from the same path." \
         continue
         ;;
       # ------------------------------------------------------------------
+      80)
+        # Build Dist from Source... — 4-stage wizard (W4 integration point 2)
+        _cmd_build_dist_from_source
+        wb_gui_dist_registry_refresh 2>/dev/null || true
+        continue
+        ;;
+      # ------------------------------------------------------------------
       *)
         break
         ;;
@@ -4725,6 +5041,10 @@ Usage:
 
 Phase B (v1.7.0):
   Main window [Dists] button     Open Dist Manager (rc=70)
+
+Phase B / W4 (v1.7.x):
+  Dist Manager [Build Components]          Multi-select DXVK/VKD3D/NVAPI build with preflight gate
+  Dist Manager [Build Dist from Source...] Build a full dist via tools/full-build.sh (4-stage wizard)
 
 This tool requires yad (install: apt/dnf install yad).
 EOF

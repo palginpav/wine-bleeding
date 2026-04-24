@@ -10,29 +10,96 @@
 #   --copy-native-from=DIR     — взять нативные lib из готового дистрибутива
 #   --no-wine-icu              — не ставить wine-icu (системная libicu, x86_64 + i386) в дистрибутив
 #   --no-wine-mono             — не собирать и не устанавливать локальный wine-mono в дистрибутив
+#   --progress-fd N            — additive: emit Phase-B PROGRESS:/LOG:/WARN:/ERROR: events on fd N
 #
 # See README.md for details.
 
 set -e
 
 WINE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# If WB_WINE_SOURCE_ROOT is set, use it as the source root (installed-package case
+# where WINE_ROOT from dirname $0 points to the install dir, not the source tree).
+WINE_ROOT="${WB_WINE_SOURCE_ROOT:-${WINE_ROOT}}"
 DEPS_DIR="$WINE_ROOT/build-deps"
 PASSTHROUGH=()
+_FB_PROGRESS_FD=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --build-mingw-from-source|--no-install-wine|--no-bundle-system-libs|--force-rebuild|--no-wine-icu|--no-wine-mono) PASSTHROUGH+=("$1") ;;
         --copy-native-from=*) PASSTHROUGH+=("$1") ;;
         --copy-native-from) [ -n "${2:-}" ] && PASSTHROUGH+=("$1" "$2") && shift || { echo "Требуется аргумент для --copy-native-from" >&2; exit 1; }; shift ;;
+        --progress-fd)
+            [ -n "${2:-}" ] || { echo "full-build: --progress-fd requires a value" >&2; exit 1; }
+            _FB_PROGRESS_FD="$2"; shift ;;
+        --progress-fd=*)
+            _FB_PROGRESS_FD="${1#--progress-fd=}" ;;
+        --help|-h)
+            cat <<'HELP'
+Usage: tools/full-build.sh [OPTIONS]
+
+Full build pipeline: env check -> MinGW -> Wine configure -> Wine build -> DXVK/VKD3D/NVAPI -> dist.
+
+Options:
+  --build-mingw-from-source   Build MinGW toolchain from source (~30-60 min)
+  --no-install-wine           Skip Wine installation into dist
+  --force-rebuild             Always rebuild DXVK / VKD3D-Proton / DXVK-NVAPI
+  --no-bundle-system-libs     Do not copy native libs from system
+  --copy-native-from=DIR      Copy native libs from an existing dist
+  --no-wine-icu               Skip wine-icu installation
+  --no-wine-mono              Skip wine-mono build/installation
+  --progress-fd N             Emit Phase-B PROGRESS:/LOG:/WARN:/ERROR: events on fd N.
+                              Default behavior (stdout human-readable) is byte-identical when unset.
+  --help, -h                  Show this message.
+HELP
+            exit 0 ;;
         *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;
     esac
     shift
 done
 
-echo "========== Полная сборка (Wine + DXVK + VKD3D + DXVK-NVAPI + дистрибутив) =========="
+# ---------------------------------------------------------------------------
+# Phase-B event protocol (additive -- only active when --progress-fd is set)
+# ---------------------------------------------------------------------------
+if [ -n "${_FB_PROGRESS_FD}" ]; then
+    export WB_BUILD_PROGRESS_FD="${_FB_PROGRESS_FD}"
+    # Source build-common.sh for bc_emit_* helpers
+    if [ -f "${WINE_ROOT}/tools/lib/build-common.sh" ]; then
+        # shellcheck source=lib/build-common.sh
+        source "${WINE_ROOT}/tools/lib/build-common.sh"
+    fi
+fi
+
+# _fb_echo: emit a human-readable line (stdout always) AND optionally a Phase-B event
+_fb_echo() {
+    local msg="$1"
+    echo "${msg}"
+    if [ -n "${WB_BUILD_PROGRESS_FD:-}" ] && command -v bc_emit_log &>/dev/null; then
+        bc_emit_log "${msg}"
+    fi
+}
+
+_fb_progress() {
+    local pct="$1"
+    local msg="$2"
+    echo "${msg}"
+    if [ -n "${WB_BUILD_PROGRESS_FD:-}" ] && command -v bc_emit_progress &>/dev/null; then
+        bc_emit_progress "${pct}" "${msg}"
+    fi
+}
+
+_fb_error() {
+    local msg="$1"
+    echo "${msg}" >&2
+    if [ -n "${WB_BUILD_PROGRESS_FD:-}" ] && command -v bc_emit_error &>/dev/null; then
+        bc_emit_error "${msg}"
+    fi
+}
+
+_fb_progress 0 "========== Полная сборка (Wine + DXVK + VKD3D + DXVK-NVAPI + дистрибутив) =========="
 echo ""
 
 # --- Шаг 1: Проверка окружения ---
-echo "[1/6] Проверка окружения..."
+_fb_progress 5 "[1/6] Проверка окружения..."
 
 REQUIRED="meson ninja gcc g++ make flex bison pkg-config"
 MISSING=""
@@ -42,7 +109,7 @@ for cmd in $REQUIRED; do
     fi
 done
 if [ -n "$MISSING" ]; then
-    echo "Ошибка: не найдены обязательные команды:$MISSING" >&2
+    _fb_error "Ошибка: не найдены обязательные команды:$MISSING"
     echo "  Установите пакеты (gcc, gcc-c++, make, flex, bison, meson, ninja-build, pkg-config)." >&2
     echo "  See README.md for recommended packages." >&2
     exit 1
@@ -59,14 +126,14 @@ if ! pkg-config --exists vulkan 2>/dev/null && [ ! -f /usr/include/vulkan/vulkan
 fi
 
 if [ ! -f "$WINE_ROOT/configure" ] || [ ! -d "$WINE_ROOT/tools" ]; then
-    echo "Ошибка: запускайте скрипт из корня дерева Wine (где есть configure и tools/)." >&2
+    _fb_error "Ошибка: запускайте скрипт из корня дерева Wine (где есть configure и tools/)."
     exit 1
 fi
-echo "  Ок."
+_fb_echo "  Ок."
 echo ""
 
 # --- Шаг 2: Подготовка MinGW ---
-echo "[2/6] Подготовка MinGW (скачивание/сборка при необходимости)..."
+_fb_progress 5 "[2/6] Подготовка MinGW (скачивание/сборка при необходимости)..."
 
 if [ -f "$DEPS_DIR/.mingw-path" ]; then
     # Используем ранее сохранённый PATH, если компиляторы на месте
@@ -85,11 +152,11 @@ if ! command -v x86_64-w64-mingw32-gcc &>/dev/null; then
     echo "  или с --build-mingw-from-source для сборки из исходников." >&2
     exit 1
 fi
-echo "  MinGW: $(command -v x86_64-w64-mingw32-gcc)"
+_fb_echo "  MinGW: $(command -v x86_64-w64-mingw32-gcc)"
 echo ""
 
 # --- Шаг 3: Конфигурация Wine ---
-echo "[3/6] Конфигурация Wine..."
+_fb_progress 15 "[3/6] Конфигурация Wine..."
 
 NEED_CONFIGURE=0
 COMPILER_CHANGED=0
@@ -133,12 +200,12 @@ if [ ! -x "$WINE_ROOT/loader/wine" ] || [ ! -x "$WINE_ROOT/server/wineserver" ];
     echo "Ошибка: Wine не собран (нет loader/wine или server/wineserver)." >&2
     exit 1
 fi
-echo "  Wine собран."
+_fb_echo "  Wine собран."
 echo ""
 
 # --- Шаг 5 и 6: DXVK/VKD3D/NVAPI + дистрибутив ---
-echo "[5/6] Сборка DXVK, VKD3D-Proton, DXVK-NVAPI и формирование дистрибутива..."
-echo "[6/6] Установка Wine в dist и копирование нативных lib (если включено)..."
+_fb_progress 55 "[5/6] Сборка DXVK, VKD3D-Proton, DXVK-NVAPI и формирование дистрибутива..."
+_fb_progress 85 "[6/6] Установка Wine в dist и копирование нативных lib (если включено)..."
 echo ""
 
 "$WINE_ROOT/tools/build-full-wine-deps.sh" "${PASSTHROUGH[@]}"
@@ -165,8 +232,7 @@ with open('$dll', 'r+b') as f:
 done
 echo "  DXVK/VKD3D/NVAPI: stripped Wine builtin markers for native loading"
 
-echo ""
-echo "========== Готово =========="
+_fb_progress 100 "========== Готово =========="
 DIST_NAME="${DIST_NAME:-WINE-BLEEDING-$(date +%d%m%Y)}"
 echo "Дистрибутив: $WINE_ROOT/dist/$DIST_NAME"
 echo "Запуск: $WINE_ROOT/dist/$DIST_NAME/bin/wine --version"

@@ -1,0 +1,956 @@
+{
+  "schema_version": 1,
+  "_comment": "Distro-to-tool package map for wb-preflight.py. See .orchestray/kb/facts/w1-distro-package-map.md.",
+  "_floors": {
+    "meson":         "0.60.0",
+    "ninja":         "1.10.0",
+    "glslang":       "11.0.0",
+    "mingw-w64-gcc": "9.0.0",
+    "gcc":           "9.0.0",
+    "make":          "3.82",
+    "pkg-config":    "0.29",
+    "git":           "2.17",
+    "python3":       "3.8",
+    "flex":          "2.5.37",
+    "bison":         "3.0",
+    "autoconf":      "2.69"
+  },
+  "distros": {
+    "fedora": {
+      "display_name": "Fedora Linux",
+      "pkg_manager": "dnf",
+      "install_cmd_template": "sudo dnf install {packages}",
+      "refresh_cmd": "sudo dnf makecache",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": null,
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja-build",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw64-gcc",
+          "package_name_extra": ["mingw64-gcc-c++", "mingw32-gcc", "mingw32-gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkgconf-pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "rhel": {
+      "display_name": "RHEL / AlmaLinux / Rocky Linux",
+      "pkg_manager": "dnf",
+      "install_cmd_template": "sudo dnf install {packages}",
+      "refresh_cmd": "sudo dnf makecache",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": "RHEL / AlmaLinux / Rocky: system meson may be older than 0.60.0. Use pip fallback or enable PowerTools/CRB: sudo dnf config-manager --set-enabled crb",
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja-build",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": "Enable EPEL first: sudo dnf install epel-release",
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang",
+          "package_name_extra": null,
+          "install_cmd_template": "sudo dnf install --enablerepo=epel {packages}",
+          "source_build_fallback": "wb-build-glslang",
+          "notes": "glslang is not packaged in base RHEL repos. Enable EPEL first: sudo dnf install epel-release. If unavailable, use Build from source.",
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw64-gcc-c++",
+          "package_name_extra": ["mingw32-gcc", "mingw32-gcc-c++"],
+          "install_cmd_template": "sudo dnf install --enablerepo=epel {packages}",
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": "mingw-w64 packages live in EPEL. Enable EPEL first: sudo dnf install epel-release",
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkgconf-pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "debian": {
+      "display_name": "Debian",
+      "pkg_manager": "apt",
+      "install_cmd_template": "sudo apt install {packages}",
+      "refresh_cmd": "sudo apt update",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": "Debian stable may ship meson < 0.60.0. Use the pip fallback if so.",
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja-build",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang-tools",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw-w64",
+          "package_name_extra": ["mingw-w64-tools"],
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["g++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "ubuntu": {
+      "display_name": "Ubuntu",
+      "pkg_manager": "apt",
+      "install_cmd_template": "sudo apt install {packages}",
+      "refresh_cmd": "sudo apt update",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": "Ubuntu 22.04 LTS ships meson 0.61.x which is close to the floor. Ubuntu 20.04 LTS ships meson < 0.60.0 — use pip fallback.",
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja-build",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang-tools",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw-w64",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["g++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "arch": {
+      "display_name": "Arch Linux",
+      "pkg_manager": "pacman",
+      "install_cmd_template": "sudo pacman -S --needed {packages}",
+      "refresh_cmd": "sudo pacman -Sy",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": null,
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw-w64-gcc",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkgconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "opensuse-tumbleweed": {
+      "display_name": "openSUSE Tumbleweed",
+      "pkg_manager": "zypper",
+      "install_cmd_template": "sudo zypper install {packages}",
+      "refresh_cmd": "sudo zypper refresh",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": "openSUSE Leap users: system meson may be older than Tumbleweed — use pip fallback if version check fails.",
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang-devel",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw64-cross-gcc",
+          "package_name_extra": ["mingw64-cross-gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "altlinux": {
+      "display_name": "ALT Linux",
+      "pkg_manager": "apt-get",
+      "install_cmd_template": "sudo apt-get install {packages}",
+      "refresh_cmd": "sudo apt-get update",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": null,
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "ninja-build",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": null,
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw64-gcc-c++",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": null,
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["gcc-c++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkgconf-pkg-config",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    },
+    "alpine": {
+      "display_name": "Alpine Linux",
+      "pkg_manager": "apk",
+      "install_cmd_template": "sudo apk add {packages}",
+      "refresh_cmd": "sudo apk update",
+      "tools": {
+        "meson": {
+          "package_name": "meson",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "pip-install-meson",
+          "notes": null,
+          "floor_override": null
+        },
+        "ninja": {
+          "package_name": "samurai",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": "Alpine provides samurai as a ninja-compatible build tool. glslangValidator may call 'ninja' by name; install both samurai and create a symlink if needed.",
+          "floor_override": null
+        },
+        "glslang": {
+          "package_name": "glslang",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "wb-build-glslang",
+          "notes": "glslang is not in Alpine's main repos. Use Build from source.",
+          "floor_override": null
+        },
+        "mingw-w64-gcc": {
+          "package_name": "mingw-w64-gcc",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": "build-mingw-from-source",
+          "notes": "mingw-w64-gcc is not packaged in Alpine main repos. Use Build from source.",
+          "floor_override": null
+        },
+        "gcc": {
+          "package_name": "gcc",
+          "package_name_extra": ["g++"],
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "make": {
+          "package_name": "make",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "pkg-config": {
+          "package_name": "pkgconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "git": {
+          "package_name": "git",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "python3": {
+          "package_name": "python3",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "flex": {
+          "package_name": "flex",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "bison": {
+          "package_name": "bison",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        },
+        "autoconf": {
+          "package_name": "autoconf",
+          "package_name_extra": null,
+          "install_cmd_template": null,
+          "source_build_fallback": null,
+          "notes": null,
+          "floor_override": null
+        }
+      }
+    }
+  },
+  "fallback": {
+    "display_name": "Your distro",
+    "pkg_manager": "unknown",
+    "install_cmd_template": "Use your distro's package manager to install: {packages}",
+    "refresh_cmd": null,
+    "tools": {
+      "meson": {
+        "package_name": "meson",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": "pip-install-meson",
+        "notes": null,
+        "floor_override": null
+      },
+      "ninja": {
+        "package_name": "ninja",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "glslang": {
+        "package_name": "glslang",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": "wb-build-glslang",
+        "notes": null,
+        "floor_override": null
+      },
+      "mingw-w64-gcc": {
+        "package_name": "mingw-w64 cross compiler",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": "build-mingw-from-source",
+        "notes": null,
+        "floor_override": null
+      },
+      "gcc": {
+        "package_name": "gcc and g++",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "make": {
+        "package_name": "make",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "pkg-config": {
+        "package_name": "pkg-config or pkgconf",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "git": {
+        "package_name": "git",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "python3": {
+        "package_name": "python3",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "flex": {
+        "package_name": "flex",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "bison": {
+        "package_name": "bison",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      },
+      "autoconf": {
+        "package_name": "autoconf",
+        "package_name_extra": null,
+        "install_cmd_template": null,
+        "source_build_fallback": null,
+        "notes": null,
+        "floor_override": null
+      }
+    }
+  }
+}

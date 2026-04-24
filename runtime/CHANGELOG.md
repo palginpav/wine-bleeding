@@ -1,6 +1,66 @@
 # wine-bleeding Runtime Layer Changelog
 
-## [Unreleased] — v1.8.0-dev
+## [Unreleased] — v1.7.1-dev
+
+### Build-env self-sufficiency (wb-gui → builds anywhere)
+
+Component Builder and Build Dist from Source no longer require a pre-curated
+build-time environment. On first use wb-gui probes the toolchain, tells you
+exactly which packages to install for your distro, and offers to build the
+awkward ones (glslang, MinGW-w64, meson) from source.
+
+- **Three-tier preflight** (`runtime/libexec/wb-preflight.py`, Python stdlib
+  only) — detect / version-check / fall back. Reads `/etc/os-release`,
+  probes a tool set (gcc, make, meson, ninja, glslang, mingw-w64-gcc,
+  pkg-config, git; +flex/bison/autoconf for full dist builds), emits
+  stable JSON. Seeded with package names for Fedora, RHEL (+EPEL), Debian,
+  Ubuntu, Arch, openSUSE Tumbleweed, ALT Linux, Alpine; everything else
+  falls through to the generic tier-3 prompt.
+- **Editable distro package map** at
+  `/usr/share/wine-bleeding/wb-preflight-packages.json` — edit or drop an
+  overlay into `$XDG_CONFIG_HOME/wine-bleeding/wb-preflight-packages.d/`
+  without touching Python.
+- **Preflight dialog** — three-column "tool / fix / alternative" table,
+  "Copy all install commands" button (clipboard via wl-copy/xclip/xsel,
+  $TMPDIR fallback), per-tool "Build from source" button where a fallback
+  exists. Silent pass-through when all tools are OK — no extra click.
+- **Source-build fallbacks** — new `tools/build-glslang.sh` clones KhronosGroup/glslang at a pinned tag (15.0.0) and cmake+ninja-builds into `$WB_HOME/build-deps/glslang/`, with a git-rev cache sentinel. MinGW reuses the existing `tools/build-full-wine-deps.sh --build-mingw-from-source`. meson upgrade via `pip install --user 'meson>=<floor>'`.
+- **Component Builder multi-select (Stage 1)** — build DXVK + VKD3D-Proton + DXVK-NVAPI in one go against the same dist; shared live-log dialog across all selected components; skip-and-continue on a per-component failure.
+- **Build Dist from Source** — new button in Dist Manager. Wizard picks a
+  source tree (`$WB_WINE_SOURCE_ROOT` aware), runs preflight, then drives
+  `tools/full-build.sh` with live Phase-B progress/log/error events
+  surfaced through the existing log-tail dialog.
+
+### Packaging
+
+- **New `wine-bleeding-wb-build` RPM subpackage** — declares `Recommends:`
+  on the Fedora names for the build-time tools (gcc, gcc-c++, make, meson,
+  ninja-build, glslang, mingw64-gcc, mingw64-gcc-c++, pkgconf-pkg-config,
+  git, flex, bison, autoconf). `dnf install wine-bleeding-wb-build` pulls
+  what your Fedora has; preflight fills the gaps. No hard Requires: on
+  build tools.
+
+### Tools
+
+- `tools/full-build.sh` — new `--progress-fd N` option emits Phase-B
+  `PROGRESS:/LOG:/WARN:/ERROR:` events on the given fd (additive; default
+  behavior is byte-identical). New `--help` message. Now honours
+  `WB_WINE_SOURCE_ROOT` for installed-package callers (the
+  `dirname $0` / `/usr/lib/wine-bleeding` installed path no longer wins
+  over an explicit source root from the GUI).
+- `tools/build-component.sh` — calls the preflight before the
+  `build-deps` check; on failure exits 66 with the structured preflight
+  JSON on stderr. Skippable via `WB_SKIP_PREFLIGHT=1` (used by the GUI
+  when it has already shown the preflight dialog).
+
+### Known follow-ups (v1.7.2)
+
+- Skipped Build-Dist happy-path bats (`39_build_env_frontend.bats` test 8)
+  — the fake-yad + event-pipe harness deadlocks in `wb_gui_dialog_log_tail`
+  when both fake-yad and fake builder exit simultaneously; needs a tighter
+  synchronisation pattern. The real flow works.
+- Clone-upstream button in the Build Dist wizard currently shows a
+  "not yet available" dialog with manual `git clone` instructions.
 
 ## [1.7.0] — 2026-04-21
 

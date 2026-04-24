@@ -47,6 +47,65 @@ supporting tooling for managing Wine prefixes and runtime distributions.
 Install via your package manager to get wb on PATH with full system integration:
 desktop entry, icon, and Steam compatibility tool support.
 
+# ---------------------------------------------------------------------------
+# wine-bleeding-wb-build — metapackage: recommended build dependencies
+# ---------------------------------------------------------------------------
+# This subpackage exists so users can run a single install command to pull
+# what their distro provides. Recommends: (not Requires:) means a missing
+# package on a lean distro (Alpine, Void) does not block the whole install.
+# wb-preflight.py fills any remaining gap at runtime with distro-specific
+# install hints and source-build fallbacks (glslang, MinGW-w64, meson-pip).
+
+%package -n wine-bleeding-wb-build
+Summary:        Recommended build-tool dependencies for wine-bleeding wb-gui
+BuildArch:      noarch
+
+# Core build tools — present on virtually every RPM-based distro.
+Recommends:     gcc
+Recommends:     gcc-c++
+Recommends:     make
+# Build system: meson + ninja. meson floor 0.60.0 (DXVK HEAD requirement).
+# If the distro meson is too old, wb-preflight offers pip-install-meson.
+Recommends:     meson
+Recommends:     ninja-build
+# GLSL→SPIR-V compiler required for DXVK shader compilation.
+# Not packaged on RHEL (no EPEL entry) or Alpine; wb-preflight offers
+# tools/build-glslang.sh source-build fallback for those distros.
+Recommends:     glslang
+# MinGW-w64 cross-compiler for Windows PE targets (DXVK, VKD3D-Proton DLLs).
+# On Fedora the split into mingw64-gcc + mingw64-gcc-c++ is intentional;
+# both are needed. RHEL users install from EPEL after enabling it.
+Recommends:     mingw64-gcc
+Recommends:     mingw64-gcc-c++
+# pkgconf compatibility shim — canonical name on Fedora/RHEL/ALT.
+Recommends:     pkgconf-pkg-config
+# Version control — required by build-component.sh and build-glslang.sh.
+Recommends:     git
+# Wine full-source-build prerequisites (only needed for Build Dist from Source).
+Recommends:     flex
+Recommends:     bison
+Recommends:     autoconf
+
+%description -n wine-bleeding-wb-build
+wine-bleeding-wb-build is a metapackage that pulls in the build tools
+recommended for wb-gui's Component Builder and Build Dist from Source
+features.
+
+All dependencies are declared as Recommends: (weak dependencies). A tool
+not available in your distro's repositories will not block installation;
+wb-preflight.py detects any gap at runtime and offers a distro-specific
+install command or a source-build fallback (glslang, MinGW-w64, meson).
+
+Install with: dnf install wine-bleeding-wb-build
+
+Then open wb-gui → Component Builder or Build Dist from Source. The
+preflight dialog will show any remaining gaps with actionable fix buttons.
+
+%files -n wine-bleeding-wb-build
+%{_datadir}/doc/wine-bleeding-wb-build/README
+
+# ---------------------------------------------------------------------------
+
 %prep
 %setup -q
 

@@ -1,0 +1,38 @@
+wine-bleeding-wb-build — recommended build dependencies metapackage
+==================================================================
+
+This metapackage declares Recommends: on the tools needed to build Wine
+components (DXVK, VKD3D-Proton, DXVK-NVAPI) and Wine itself from source
+using the wb Component Builder and Build Dist from Source dialogs.
+
+Installing this package pulls in what your distro provides. Any tool not
+available in your distro's repositories can be built from source: wb-gui
+runs wb-preflight at startup and offers per-tool "Build from source"
+buttons for glslang, MinGW-w64, and meson.
+
+Quick start
+-----------
+
+    dnf install wine-bleeding-wb-build   # Fedora / RHEL + EPEL
+    zypper install wine-bleeding-wb-build # openSUSE
+
+Then launch wb-gui and open Component Builder or Build Dist from Source.
+The preflight dialog will list any remaining gaps with actionable fixes.
+
+Tools covered
+-------------
+
+  gcc, gcc-c++          C / C++ compiler (Wine host build)
+  make                  Build orchestration
+  meson                 Build system (DXVK, VKD3D-Proton, DXVK-NVAPI)
+  ninja-build           Build backend for meson
+  glslang               GLSL→SPIR-V compiler (DXVK shaders)
+  mingw64-gcc           MinGW-w64 cross-compiler (Windows PE targets)
+  mingw64-gcc-c++       MinGW-w64 C++ cross-compiler
+  pkgconf-pkg-config    Package metadata queries
+  git                   Source tree management
+  flex, bison           Wine configure prerequisites (dist build only)
+  autoconf              Wine configure prerequisites (dist build only)
+
+Package names above are Fedora conventions. Other distros use equivalent
+packages; wb-preflight shows the distro-specific install command at runtime.

@@ -327,6 +327,761 @@ wb_gui_dialog_notebook() {
     "$@"
 }
 
+# ===========================================================================
+# Build-env preflight dialog helpers (W4 — Build-env frontend)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_preflight_table <context_label> <json_file> [<build_type>]
+#
+# Renders the three-column build-environment preflight dialog from a
+# wb-preflight.py JSON output file.
+#
+# Args:
+#   context_label  — appears in window title: "Build environment — <label>"
+#   json_file      — path to the JSON temp file set by wb_gui_build_env_preflight
+#   build_type     — "components" (default) or "dist" (adds header prefix for dist)
+#
+# Returns:
+#   0   — all-green (pass-through) or user chose Continue / Continue anyway
+#   1   — user clicked Cancel or closed the window
+#   10  — user chose "Continue anyway" (some tools still missing)
+#   20  — user clicked Re-check (caller re-runs preflight and calls us again)
+#   30  — user clicked "Copy all install commands"
+#   40  — user clicked "Build all from source"
+#   50..52 — per-row source-build button (slug index 0-2; caller dispatches)
+#
+# The caller is responsible for the re-check loop and source-build dispatch.
+# ---------------------------------------------------------------------------
+
+# Time estimates per source-build slug (minutes, upper bound)
+_WB_BUILD_TIME_GLSLANG_MIN=15
+_WB_BUILD_TIME_MINGW_MIN=45
+
+wb_gui_dialog_preflight_table() {
+  local context_label="${1:-Component Builder}"
+  local json_file="${2:-}"
+  local build_type="${3:-components}"
+
+  if [[ -z "${json_file}" || ! -r "${json_file}" ]]; then
+    return 1
+  fi
+
+  # ------------------------------------------------------------------
+  # Parse JSON into shell variables
+  # ------------------------------------------------------------------
+  local overall_ok distro_recognized distro_id distro_pretty
+  overall_ok="$(jq -r '.overall_ok' "${json_file}" 2>/dev/null || echo "false")"
+  distro_recognized="$(jq -r '.distro.recognized' "${json_file}" 2>/dev/null || echo "false")"
+  distro_id="$(jq -r '.distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
+  distro_pretty="$(jq -r '.distro.pretty_name // .distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
+
+  # Count tools and collect per-tool data
+  local tool_count
+  tool_count="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
+
+  # Arrays of per-tool data
+  local -a t_name=() t_ok=() t_reason=() t_version=() t_min_version=()
+  local -a t_install_cmd=() t_src_slug=() t_src_label=() t_notes=()
+  local i
+  for (( i=0; i<tool_count; i++ )); do
+    t_name+=("$(jq -r ".tools[${i}].name // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_ok+=("$(jq -r ".tools[${i}].ok // \"false\"" "${json_file}" 2>/dev/null || echo "false")")
+    t_reason+=("$(jq -r ".tools[${i}].reason // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_version+=("$(jq -r ".tools[${i}].version // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_min_version+=("$(jq -r ".tools[${i}].min_version // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_install_cmd+=("$(jq -r ".tools[${i}].distro_install_cmd // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_src_slug+=("$(jq -r ".tools[${i}].source_build_fallback // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_src_label+=("$(jq -r ".tools[${i}].source_build_fallback_label // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_notes+=("$(jq -r ".tools[${i}].notes // \"\"" "${json_file}" 2>/dev/null || echo "")")
+  done
+
+  # Overlay errors
+  local overlay_error_count
+  overlay_error_count="$(jq '.overlay_errors | length' "${json_file}" 2>/dev/null || echo "0")"
+
+  # ------------------------------------------------------------------
+  # Determine header copy (per w2-preflight-dialog.md §10)
+  # ------------------------------------------------------------------
+  local header_text=""
+  if [[ "${build_type}" == "dist" ]]; then
+    header_text="We will run tools/full-build.sh — the full Wine compile plus DXVK/VKD3D/NVAPI build. This takes 30-90 minutes depending on your machine.
+
+"
+  fi
+
+  if [[ "${distro_recognized}" != "true" ]]; then
+    header_text+="Your distro (${distro_id}) is not in our built-in package map.
+We cannot auto-detect install commands for your system.
+
+Install the following tools using your distro's package manager:
+  meson  ninja  glslang  mingw-w64  gcc  g++  make  pkg-config  git
+
+Or use the Build from source buttons below for tools with an
+automated fallback (glslang, MinGW-w64, meson via pip).
+
+Report your distro at github.com/palginpav/wine/issues so we can
+add it to the built-in list."
+  elif [[ "${overall_ok}" == "true" ]]; then
+    header_text+="Your system has everything needed to build components. Click Continue to proceed."
+  else
+    header_text+="Some build tools are missing or too old. Copy the install command for your distro (paste in a terminal), or click Build from source for a self-contained build inside wine-bleeding."
+  fi
+
+  # ------------------------------------------------------------------
+  # Build field_args array (per w2-preflight-dialog.md §3 / §4)
+  # ------------------------------------------------------------------
+  local -a field_args=(
+    --field="Distro::LBL"       ""
+    --field="::RO"              "${distro_pretty}"
+    --field="Build type::LBL"   ""
+    --field="::RO"              "${context_label}"
+    --field="Tool::LBL"         ""
+    --field="Status::LBL"       ""
+    --field="Fix::LBL"          ""
+  )
+
+  # Collect source-build slugs for per-row BTN (max 3: meson, glslang, mingw)
+  # We expose them via rc=50,51,52 — the caller maps rc to slug
+  local -a src_slugs_present=()
+
+  for (( i=0; i<tool_count; i++ )); do
+    local name="${t_name[${i}]}"
+    local ok="${t_ok[${i}]}"
+    local reason="${t_reason[${i}]}"
+    local version="${t_version[${i}]}"
+    local min_ver="${t_min_version[${i}]}"
+    local install_cmd="${t_install_cmd[${i}]}"
+    local src_slug="${t_src_slug[${i}]}"
+    local src_label="${t_src_label[${i}]}"
+    local notes="${t_notes[${i}]}"
+
+    # Status text (col 2)
+    local status_text
+    case "${reason}" in
+      not_found)       status_text="MISSING" ;;
+      version_too_old) status_text="OLD  ${version}  (need >= ${min_ver})" ;;
+      version_unknown) status_text="UNKNOWN VERSION" ;;
+      probe_failed)    status_text="PROBE FAILED" ;;
+      *)
+        if [[ "${ok}" == "true" ]]; then
+          status_text="OK  ${version}"
+        else
+          status_text="MISSING"
+        fi
+        ;;
+    esac
+
+    # Fix text (col 3)
+    local fix_text="—"
+    if [[ "${ok}" != "true" ]]; then
+      if [[ -n "${install_cmd}" ]]; then
+        fix_text="${install_cmd}"
+      elif [[ "${distro_recognized}" != "true" ]]; then
+        fix_text="Install using your distro's package manager"
+      fi
+    fi
+
+    # Col 1: tool name (LBL)
+    field_args+=(--field="${name}::LBL" "")
+
+    # Col 2: status (RO)
+    field_args+=(--field="${name}_status::RO" "${status_text}")
+
+    # Col 3: fix (LBL for ok/no-src-build; BTN for source-build tools)
+    if [[ -n "${src_slug}" && "${ok}" != "true" ]]; then
+      # Per-row source-build BTN — rc will be 50 + index in src_slugs_present
+      local btn_rc=$(( 50 + ${#src_slugs_present[@]} ))
+      src_slugs_present+=("${src_slug}")
+      local btn_label="${src_label:-Build from source}"
+      field_args+=(--field="${btn_label}::BTN" "exit ${btn_rc}")
+    else
+      field_args+=(--field="${name}_fix::LBL" "${fix_text}")
+    fi
+
+    # Notes sub-row (spans col 2-3 via additional LBL)
+    if [[ -n "${notes}" ]]; then
+      field_args+=(--field="::LBL" "" --field="${notes}::LBL" "" --field="::LBL" "")
+    fi
+  done
+
+  # Distro-unrecognized banner (BE11)
+  if [[ "${distro_recognized}" != "true" ]]; then
+    field_args+=(
+      --field="::LBL" ""
+      --field="Note: your distro is not recognized. Commands above are generic.::LBL" ""
+      --field="::LBL" ""
+    )
+  fi
+
+  # Overlay error rows (BE12, up to 3)
+  if [[ "${overlay_error_count}" -gt 0 ]]; then
+    local max_ov=3
+    [[ "${overlay_error_count}" -lt "${max_ov}" ]] && max_ov="${overlay_error_count}"
+    local ov_i
+    for (( ov_i=0; ov_i<max_ov; ov_i++ )); do
+      local ov_path ov_msg
+      ov_path="$(jq -r ".overlay_errors[${ov_i}].path // \"\"" "${json_file}" 2>/dev/null || echo "")"
+      ov_msg="$(jq -r ".overlay_errors[${ov_i}].message // \"\"" "${json_file}" 2>/dev/null || echo "")"
+      field_args+=(
+        --field="::LBL" ""
+        --field="Warning: ignored overlay ${ov_path} (${ov_msg}). Using built-in package map.::LBL" ""
+        --field="::LBL" ""
+      )
+    done
+    if [[ "${overlay_error_count}" -gt 3 ]]; then
+      field_args+=(
+        --field="::LBL" ""
+        --field="... and $(( overlay_error_count - 3 )) more overlay error(s).::LBL" ""
+        --field="::LBL" ""
+      )
+    fi
+  fi
+
+  # ------------------------------------------------------------------
+  # Compute time estimate for "Build all from source" button label
+  # ------------------------------------------------------------------
+  local has_src_builds=0
+  local est_min=0
+  local s
+  for s in "${src_slugs_present[@]+"${src_slugs_present[@]}"}"; do
+    has_src_builds=1
+    case "${s}" in
+      wb-build-glslang)       est_min=$(( est_min + _WB_BUILD_TIME_GLSLANG_MIN )) ;;
+      build-mingw-from-source) est_min=$(( est_min + _WB_BUILD_TIME_MINGW_MIN )) ;;
+      pip-install-meson)       est_min=$(( est_min + 1 )) ;;
+    esac
+  done
+  # Round up to nearest 5
+  if [[ "${est_min}" -gt 0 && $(( est_min % 5 )) -ne 0 ]]; then
+    est_min=$(( (est_min / 5 + 1) * 5 ))
+  fi
+  [[ "${est_min}" -eq 0 && "${has_src_builds}" -eq 1 ]] && est_min=1
+
+  # ------------------------------------------------------------------
+  # Collect all not-ok install commands for "Copy all" footer (rc=30)
+  # ------------------------------------------------------------------
+  # (The actual copy action is performed by the caller when it receives rc=30)
+
+  # ------------------------------------------------------------------
+  # Button row
+  # ------------------------------------------------------------------
+  local -a btn_args=(
+    --button="Copy all install commands:30"
+  )
+  if [[ "${has_src_builds}" -eq 1 ]]; then
+    btn_args+=(--button="Build all from source (~${est_min} min):40")
+  fi
+  btn_args+=(
+    --button="Cancel:1"
+    --button="Re-check:20"
+  )
+  if [[ "${overall_ok}" != "true" ]]; then
+    btn_args+=(--button="Continue anyway:10")
+  else
+    btn_args+=(--button="Continue:0")
+  fi
+
+  # ------------------------------------------------------------------
+  # Invoke yad
+  # ------------------------------------------------------------------
+  local rc=0
+  wb_gui_yad \
+    --form \
+    --title="Build environment — ${context_label}" \
+    --text="${header_text}" \
+    --no-markup \
+    --separator="|" \
+    --columns=3 \
+    --width=680 \
+    "${field_args[@]}" \
+    "${btn_args[@]}" 2>/dev/null || rc=$?
+
+  return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# _wb_gui_preflight_copy_install_cmds <json_file>
+#
+# Aggregates distro_install_cmd entries from all not-ok tools into a
+# pasteable shell block and copies it to clipboard (xclip / xsel / wl-copy).
+# Falls back to writing $TMPDIR/wb-preflight-install-cmds.txt and showing
+# a dialog with the file path.
+#
+# Returns 0. Caller does not need to inspect the return value.
+# ---------------------------------------------------------------------------
+_wb_gui_preflight_copy_install_cmds() {
+  local json_file="${1:-}"
+  [[ -z "${json_file}" || ! -r "${json_file}" ]] && return 1
+
+  local distro_pretty distro_id
+  distro_pretty="$(jq -r '.distro.pretty_name // .distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
+  distro_id="$(jq -r '.distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
+
+  # Collect refresh cmd and individual install cmds from not-ok tools
+  local refresh_cmd=""
+  refresh_cmd="$(jq -r '.distro.refresh_cmd // ""' "${json_file}" 2>/dev/null || echo "")"
+
+  local -a install_lines=()
+  local tool_count i
+  tool_count="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
+
+  for (( i=0; i<tool_count; i++ )); do
+    local ok cmd
+    ok="$(jq -r ".tools[${i}].ok" "${json_file}" 2>/dev/null || echo "true")"
+    cmd="$(jq -r ".tools[${i}].distro_install_cmd // \"\"" "${json_file}" 2>/dev/null || echo "")"
+    if [[ "${ok}" != "true" && -n "${cmd}" ]]; then
+      install_lines+=("${cmd}")
+    fi
+  done
+
+  # Deduplicate
+  local -a unique_lines=()
+  local seen_line
+  declare -A seen_map
+  for seen_line in "${install_lines[@]+"${install_lines[@]}"}"; do
+    if [[ -z "${seen_map[${seen_line}]+x}" ]]; then
+      seen_map["${seen_line}"]=1
+      unique_lines+=("${seen_line}")
+    fi
+  done
+
+  # Build output block
+  local block
+  block="# wine-bleeding build environment — install commands (${distro_pretty})"$'\n'
+  block+="# Paste these into a terminal and run them, then click Re-check."$'\n'
+  if [[ -n "${refresh_cmd}" ]]; then
+    block+="${refresh_cmd}"$'\n'
+  fi
+  local line
+  for line in "${unique_lines[@]+"${unique_lines[@]}"}"; do
+    block+="${line}"$'\n'
+  done
+
+  # Try clipboard tools in order
+  local copied=0
+  if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "${block}" | wl-copy 2>/dev/null && copied=1
+  fi
+  if [[ "${copied}" -eq 0 ]] && command -v xclip >/dev/null 2>&1; then
+    printf '%s' "${block}" | xclip -selection clipboard 2>/dev/null && copied=1
+  fi
+  if [[ "${copied}" -eq 0 ]] && command -v xsel >/dev/null 2>&1; then
+    printf '%s' "${block}" | xsel --clipboard --input 2>/dev/null && copied=1
+  fi
+
+  if [[ "${copied}" -eq 1 ]]; then
+    wb_gui_dialog_info "Copied to clipboard" \
+      "Install commands copied to clipboard.
+Paste them into a terminal, run them, then click Re-check."
+  else
+    # Fallback: write to temp file
+    local tmp_cmds="${TMPDIR:-/tmp}/wb-preflight-install-cmds.txt"
+    printf '%s' "${block}" > "${tmp_cmds}"
+    wb_gui_dialog_info "Install commands saved" \
+      "Could not access clipboard. Commands written to:
+${tmp_cmds}
+
+Open that file, copy the commands, paste into a terminal, run them,
+then click Re-check."
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# _wb_gui_preflight_confirm_source_build <slug> [<extra_slugs...>]
+#
+# Shows a confirmation dialog before any source build starts (BLK-2 resolution).
+# slug = one of: wb-build-glslang | build-mingw-from-source | pip-install-meson
+# Returns 0 if user confirmed, 1 if cancelled.
+# ---------------------------------------------------------------------------
+_wb_gui_preflight_confirm_source_build() {
+  local -a slugs=("$@")
+  local tool_list="" est_min=0
+
+  local slug
+  for slug in "${slugs[@]+"${slugs[@]}"}"; do
+    case "${slug}" in
+      wb-build-glslang)
+        tool_list+="  glslang  (~${_WB_BUILD_TIME_GLSLANG_MIN} min on 8-core hardware)"$'\n'
+        est_min=$(( est_min + _WB_BUILD_TIME_GLSLANG_MIN ))
+        ;;
+      build-mingw-from-source)
+        tool_list+="  MinGW-w64  (~${_WB_BUILD_TIME_MINGW_MIN} min on 8-core hardware)"$'\n'
+        est_min=$(( est_min + _WB_BUILD_TIME_MINGW_MIN ))
+        ;;
+      pip-install-meson)
+        tool_list+="  meson (via pip, user-level, ~1 min)"$'\n'
+        est_min=$(( est_min + 1 ))
+        ;;
+    esac
+  done
+
+  wb_gui_dialog_question \
+    "Build missing tools from source?" \
+    "This will build the following tools from source inside
+wine-bleeding's own directory. Depending on your machine this
+may take up to ~${est_min} minutes.
+
+Tools to build:
+${tool_list}
+After each tool is built, the preflight table updates automatically.
+You can cancel at any time from the build log window." \
+    "Build from source" "Cancel"
+}
+
+# ---------------------------------------------------------------------------
+# wb_gui_dialog_preflight_loop <context_label> <build_type>
+#
+# High-level orchestrator: calls wb_gui_build_env_preflight, then handles
+# the re-check loop, per-row source-build dispatch, copy-all, and build-all.
+#
+# Returns:
+#   0   — proceed with build (pass-through or user chose Continue/Continue anyway)
+#   1   — user cancelled; caller aborts
+#
+# This is the single entry point W4 call sites use. It owns the WB_PREFLIGHT_JSON_FILE
+# lifecycle (reads + rm -f).
+# ---------------------------------------------------------------------------
+wb_gui_dialog_preflight_loop() {
+  local context_label="${1:-Component Builder}"
+  local build_type="${2:-components}"
+
+  while true; do
+    # Run preflight backend
+    local pf_rc=0
+    wb_gui_build_env_preflight "${build_type}" || pf_rc=$?
+
+    case "${pf_rc}" in
+      0)
+        # All-green — silent pass-through (BLK-1)
+        rm -f "${WB_PREFLIGHT_JSON_FILE:-}" 2>/dev/null || true
+        return 0
+        ;;
+      1)
+        : # Some tools missing — fall through to dialog
+        ;;
+      2|99)
+        # Internal error — show diagnostic and abort
+        wb_gui_dialog_error "Build environment check failed" \
+          "The build environment checker could not run (exit ${pf_rc}).
+What happened: wb-preflight.py returned an unexpected error.
+Why: the tool may be missing or the installation may be incomplete.
+Next action: reinstall wine-bleeding or run wb-preflight.py manually."
+        rm -f "${WB_PREFLIGHT_JSON_FILE:-}" 2>/dev/null || true
+        return 1
+        ;;
+    esac
+
+    # Have JSON — show dialog
+    local json_file="${WB_PREFLIGHT_JSON_FILE:-}"
+    local dialog_rc=0
+    wb_gui_dialog_preflight_table "${context_label}" "${json_file}" "${build_type}" \
+      || dialog_rc=$?
+
+    case "${dialog_rc}" in
+      0|10)
+        # Continue / Continue anyway — proceed
+        rm -f "${json_file}" 2>/dev/null || true
+        return 0
+        ;;
+      1|252)
+        # Cancel
+        rm -f "${json_file}" 2>/dev/null || true
+        return 1
+        ;;
+      20)
+        # Re-check — re-run preflight (loop)
+        rm -f "${json_file}" 2>/dev/null || true
+        continue
+        ;;
+      30)
+        # Copy all install commands
+        _wb_gui_preflight_copy_install_cmds "${json_file}"
+        rm -f "${json_file}" 2>/dev/null || true
+        # Re-show dialog (loop back via re-run preflight)
+        continue
+        ;;
+      40)
+        # Build all from source — collect slugs from JSON, confirm, dispatch
+        local -a all_slugs=()
+        local slug
+        local tc
+        tc="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
+        local ti
+        for (( ti=0; ti<tc; ti++ )); do
+          local t_ok t_slug
+          t_ok="$(jq -r ".tools[${ti}].ok" "${json_file}" 2>/dev/null || echo "true")"
+          t_slug="$(jq -r ".tools[${ti}].source_build_fallback // \"\"" "${json_file}" 2>/dev/null || echo "")"
+          if [[ "${t_ok}" != "true" && -n "${t_slug}" ]]; then
+            all_slugs+=("${t_slug}")
+          fi
+        done
+
+        rm -f "${json_file}" 2>/dev/null || true
+
+        if [[ "${#all_slugs[@]}" -eq 0 ]]; then
+          continue
+        fi
+
+        # BLK-2: confirmation required
+        local confirm_rc=0
+        _wb_gui_preflight_confirm_source_build "${all_slugs[@]}" || confirm_rc=$?
+        if [[ "${confirm_rc}" -ne 0 ]]; then
+          continue  # User cancelled confirmation — back to preflight
+        fi
+
+        # Check build lock
+        local wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+        local build_lock_file="${wb_home}/.build-lock"
+        if ! flock -n "${build_lock_file}" true 2>/dev/null; then
+          wb_gui_dialog_error "Build already in progress" \
+            "Another build is already running.
+Wait for it to finish or cancel it, then try again."
+          continue
+        fi
+
+        # Dispatch each slug in pipeline order (glslang first, then mingw, then meson)
+        local -a ordered_slugs=()
+        local _s
+        for _s in wb-build-glslang build-mingw-from-source pip-install-meson; do
+          local found_s
+          for found_s in "${all_slugs[@]+"${all_slugs[@]}"}"; do
+            [[ "${found_s}" == "${_s}" ]] && ordered_slugs+=("${_s}") && break
+          done
+        done
+
+        local slug_i=0
+        local slug_total="${#ordered_slugs[@]}"
+        local _slug
+        for _slug in "${ordered_slugs[@]+"${ordered_slugs[@]}"}"; do
+          (( slug_i++ )) || true
+          _wb_gui_preflight_dispatch_source_build \
+            "${_slug}" "${slug_i}" "${slug_total}" || true
+        done
+
+        # After all builds: loop back to re-run preflight
+        continue
+        ;;
+      50|51|52)
+        # Per-row source-build BTN — rc encodes slug index
+        # Re-read the JSON for slug lookup (may have been updated)
+        local _slug_idx=$(( dialog_rc - 50 ))
+        local _per_row_slug=""
+        local _tc
+        _tc="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
+        local _seen_idx=-1
+        local _ti
+        for (( _ti=0; _ti<_tc; _ti++ )); do
+          local _t_ok _t_slug
+          _t_ok="$(jq -r ".tools[${_ti}].ok" "${json_file}" 2>/dev/null || echo "true")"
+          _t_slug="$(jq -r ".tools[${_ti}].source_build_fallback // \"\"" "${json_file}" 2>/dev/null || echo "")"
+          if [[ "${_t_ok}" != "true" && -n "${_t_slug}" ]]; then
+            (( _seen_idx++ )) || true
+            if [[ "${_seen_idx}" -eq "${_slug_idx}" ]]; then
+              _per_row_slug="${_t_slug}"
+              break
+            fi
+          fi
+        done
+
+        rm -f "${json_file}" 2>/dev/null || true
+
+        if [[ -z "${_per_row_slug}" ]]; then
+          continue
+        fi
+
+        # BLK-2: confirmation required for single-tool source build too
+        local _pr_confirm_rc=0
+        _wb_gui_preflight_confirm_source_build "${_per_row_slug}" || _pr_confirm_rc=$?
+        if [[ "${_pr_confirm_rc}" -ne 0 ]]; then
+          continue
+        fi
+
+        # Check build lock
+        local _pr_wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+        if ! flock -n "${_pr_wb_home}/.build-lock" true 2>/dev/null; then
+          wb_gui_dialog_error "Build already in progress" \
+            "Another build is already running.
+Wait for it to finish or cancel it, then try again."
+          continue
+        fi
+
+        _wb_gui_preflight_dispatch_source_build "${_per_row_slug}" 1 1 || true
+        continue
+        ;;
+      *)
+        rm -f "${json_file}" 2>/dev/null || true
+        return 1
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# _wb_gui_preflight_dispatch_source_build <slug> <step_n> <step_total>
+#
+# Launches a single source-build fallback wrapped in wb_gui_dialog_log_tail.
+# Handles PATH extension after glslang and pip PATH-gap detection after meson.
+# On exit non-zero shows an error dialog.
+# ---------------------------------------------------------------------------
+_wb_gui_preflight_dispatch_source_build() {
+  local slug="${1:-}"
+  local step_n="${2:-1}"
+  local step_total="${3:-1}"
+
+  local wb_home="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}"
+
+  # Title string per slug
+  local dialog_title
+  case "${slug}" in
+    wb-build-glslang)
+      dialog_title="Building glslang from source — Step ${step_n} of ${step_total}"
+      ;;
+    build-mingw-from-source)
+      dialog_title="Building MinGW-w64 from source (30-60 min on typical hardware — this is normal) — Step ${step_n} of ${step_total}"
+      ;;
+    pip-install-meson)
+      dialog_title="Installing meson via pip — Step ${step_n} of ${step_total}"
+      ;;
+    *)
+      dialog_title="Building tool from source — Step ${step_n} of ${step_total}"
+      ;;
+  esac
+
+  # Create temp files
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local log_file="${tmp_dir}/wb-src-build-log.txt"
+  local raw_out="${log_file}.rawout"
+  local event_pipe="${tmp_dir}/wb-src-build-events"
+  mkfifo "${event_pipe}"
+
+  # Write header to log
+  printf '%s\n' "${dialog_title}" > "${log_file}"
+  if [[ "${slug}" == "build-mingw-from-source" ]]; then
+    printf 'Output below is from the existing build system. English errors will appear if the build fails.\n' >> "${log_file}"
+    printf '\n' >> "${log_file}"
+  fi
+
+  # Event reader (reuse same pattern as _cmd_build_component)
+  _wb_gui_src_build_event_reader() {
+    local pipe="${1}"
+    local lf="${2}"
+    local line prefix_tok rest pct_str
+    while IFS= read -r line || true; do
+      [[ -z "${line}" ]] && continue
+      prefix_tok="${line%%: *}"
+      rest="${line#*: }"
+      case "${prefix_tok}" in
+        PROGRESS)
+          pct_str="${rest%% *}"
+          local msg_part="${rest#* }"
+          if [[ "${pct_str}" =~ ^[0-9]+$ ]]; then
+            printf '[%3d%%] %s\n' "${pct_str}" "${msg_part}" >> "${lf}" || true
+          fi
+          ;;
+        LOG)  printf '        %s\n' "${rest}" >> "${lf}" || true ;;
+        WARN) printf '  WARN  %s\n' "${rest}" >> "${lf}" || true ;;
+        ERROR) printf ' ERROR  %s\n' "${rest}" >> "${lf}" || true ;;
+        *)
+          # MinGW script emits raw lines without a prefix — pass through
+          printf '  %s\n' "${line}" >> "${lf}" || true
+          ;;
+      esac
+    done < "${pipe}" || true
+  }
+  export -f _wb_gui_src_build_event_reader
+
+  _wb_gui_src_build_event_reader "${event_pipe}" "${log_file}" &
+  local reader_pid=$!
+
+  # Launch source-build via W3 API, progress-fd → event_pipe
+  (
+    exec 3>"${event_pipe}"
+    export WB_BUILD_PROGRESS_FD=3
+    wb_gui_build_env_run_source_build "${slug}" >"${raw_out}" 2>&1
+  ) &
+  local builder_pid=$!
+
+  # Show log tail while building
+  wb_gui_dialog_log_tail "${dialog_title}" "${log_file}" &
+  local yad_pid=$!
+
+  while kill -0 "${yad_pid}" 2>/dev/null && kill -0 "${builder_pid}" 2>/dev/null; do
+    sleep "${WB_GUI_BUILD_POLL_SEC:-0.3}"
+  done
+
+  if kill -0 "${builder_pid}" 2>/dev/null; then
+    # User cancelled — SIGTERM → 5s → SIGKILL
+    kill -TERM -- "-${builder_pid}" 2>/dev/null || true
+    local elapsed=0
+    while kill -0 "${builder_pid}" 2>/dev/null && [[ "${elapsed}" -lt 5 ]]; do
+      sleep 1; (( elapsed++ )) || true
+    done
+    kill -KILL -- "-${builder_pid}" 2>/dev/null || true
+  else
+    sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
+    kill "${yad_pid}" 2>/dev/null || true
+  fi
+
+  wait "${yad_pid}" 2>/dev/null || true
+  local build_exit=0
+  wait "${builder_pid}" 2>/dev/null || build_exit=$?
+  kill "${reader_pid}" 2>/dev/null || true
+  wait "${reader_pid}" 2>/dev/null || true
+
+  case "${build_exit}" in
+    0)
+      # Success — post-build PATH + pip gap handling
+      case "${slug}" in
+        wb-build-glslang)
+          # Extend PATH in the current wb-gui process so re-probe finds the new binary
+          export PATH="${wb_home}/build-deps/glslang/bin:${PATH}"
+          ;;
+        pip-install-meson)
+          # Check for PATH gap (D.4)
+          if ! command -v meson &>/dev/null; then
+            local local_bin="${HOME}/.local/bin"
+            # Extend for this session
+            export PATH="${local_bin}:${PATH}"
+            wb_gui_dialog_info "meson installed — PATH update needed" \
+              "meson was installed to ${local_bin}/meson, but that directory
+was not on your PATH.
+
+To fix permanently: add this to your shell startup file
+(~/.bashrc or ~/.zshrc) and restart your terminal:
+  export PATH=\"${local_bin}:\$PATH\"
+
+For this session: wine-bleeding has already added it. Click OK and
+then Re-check — meson should appear as OK."
+          fi
+          ;;
+      esac
+      ;;
+    2)
+      # Cancelled by user — no error dialog
+      ;;
+    *)
+      # Build failure
+      local last_lines=""
+      if [[ -r "${raw_out}" ]]; then
+        last_lines="$(tail -n 30 "${raw_out}" 2>/dev/null || true)"
+      fi
+      wb_gui_dialog_error "Source build failed" \
+        "Build of ${slug} failed (exit ${build_exit}).
+What happened: the source build exited with a non-zero code.
+Why: see the last lines of output below.
+Next action: open a terminal and run the build command manually to see the full error.
+
+${last_lines}"
+      ;;
+  esac
+
+  rm -rf "${tmp_dir}" 2>/dev/null || true
+  return "${build_exit}"
+}
+
 # ---------------------------------------------------------------------------
 # wb_gui_dialog_picker_single <title> <text> [items...]
 #

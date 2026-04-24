@@ -200,6 +200,42 @@ export WB_BUILD_PROGRESS_FD="${PROGRESS_FD:-}"
 export FORCE_REBUILD_DEPS BUILD_MINGW_FROM_SOURCE
 
 # ---------------------------------------------------------------------------
+# Build-environment preflight (CLI belt-and-braces; GUI runs this before us)
+# Skip when WB_BUILD_SKIP_COMPILE=1 (tests) or WB_SKIP_PREFLIGHT=1 (GUI sets
+# this after its own rich-dialog preflight to avoid running twice).
+# ---------------------------------------------------------------------------
+if [[ "${WB_BUILD_SKIP_COMPILE:-0}" != "1" ]] \
+   && [[ "${WB_SKIP_PREFLIGHT:-0}" != "1" ]] \
+   && [[ "${COMPONENT}" == "dxvk" || "${COMPONENT}" == "vkd3d" || "${COMPONENT}" == "nvapi" ]]; then
+  _preflight_bin=""
+  _preflight_candidates=(
+    "${WINE_ROOT}/runtime/libexec/wb-preflight.py"
+    "/usr/lib/wine-bleeding/libexec/wb-preflight.py"
+    "/usr/local/lib/wine-bleeding/libexec/wb-preflight.py"
+  )
+  for _c in "${_preflight_candidates[@]}"; do
+    if [[ -f "${_c}" ]]; then
+      _preflight_bin="${_c}"
+      break
+    fi
+  done
+
+  if [[ -n "${_preflight_bin}" ]]; then
+    _preflight_json=""
+    _preflight_rc=0
+    _preflight_json="$(python3 "${_preflight_bin}" --json --build-type components 2>/dev/null)" \
+      || _preflight_rc=$?
+    if [[ "${_preflight_rc}" -ne 0 ]]; then
+      bc_emit_error "Build environment incomplete. What happened: wb-preflight.py reported missing or outdated tools. Why: required build tools (meson, ninja, glslang, mingw-w64-gcc, gcc, make, pkg-config, git) were not all found at the required version. Next action: run wb-gui → Dist Manager → Build Components to review and fix. (wb-preflight exit ${_preflight_rc})"
+      printf '%s\n' "${_preflight_json}" >&2
+      exit 66
+    fi
+    unset _preflight_json _preflight_rc
+  fi
+  unset _preflight_bin _preflight_candidates _c
+fi
+
+# ---------------------------------------------------------------------------
 # Set up component-specific constants
 # ---------------------------------------------------------------------------
 DEPS_DIR="${WB_BUILD_DEPS_DIR:-${WB_WINE_SOURCE_ROOT}/build-deps}"
