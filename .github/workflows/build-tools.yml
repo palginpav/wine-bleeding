@@ -85,8 +85,15 @@ jobs:
               TOOL_VER="$(cat runtime/VERSION | tr -d '[:space:]')"
               ;;
             glslang)
+              # build-glslang.sh pins the tag as
+              #   GLSLANG_TAG="${GLSLANG_TAG:-15.0.0}"
+              # The old regex tried to capture up to the first `}`, so it
+              # grabbed "${GLSLANG_TAG:-15.0.0" (unbalanced ${) and the
+              # unterminated parameter expansion propagated into later steps
+              # as `Syntax error: Unterminated quoted string`. Extract the
+              # default value that follows `:-` instead.
               TOOL_VER="$(grep -m1 'GLSLANG_TAG=' tools/build-glslang.sh \
-                          | head -1 | sed 's/.*GLSLANG_TAG[^=]*="\{0,1\}\([^"}\n]*\).*/\1/')"
+                          | sed -E 's/.*:-([^}]+)\}.*/\1/')"
               TOOL_VER="${TOOL_VER:-unknown}"
               ;;
           esac
