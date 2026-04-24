@@ -356,7 +356,9 @@ wb_gui_dialog_notebook() {
 
 # Time estimates per source-build slug (minutes, upper bound)
 _WB_BUILD_TIME_GLSLANG_MIN=15
-_WB_BUILD_TIME_MINGW_MIN=45
+# MinGW default path is musl.cc pre-built download (~2-5 min). Set
+# WB_MINGW_PREFER_SOURCE=1 in the env to opt into the ~45-min source compile.
+_WB_BUILD_TIME_MINGW_MIN=5
 
 wb_gui_dialog_preflight_table() {
   local context_label="${1:-Component Builder}"
@@ -562,7 +564,7 @@ add it to the built-in list."
     local _bs_label
     case "${_bs_slug}" in
       wb-build-glslang)        _bs_label="Build glslang from source (~${_WB_BUILD_TIME_GLSLANG_MIN} min)" ;;
-      build-mingw-from-source) _bs_label="Build MinGW-w64 from source (~${_WB_BUILD_TIME_MINGW_MIN} min)" ;;
+      build-mingw-from-source) _bs_label="Install MinGW-w64 (download pre-built, ~${_WB_BUILD_TIME_MINGW_MIN} min)" ;;
       pip-install-meson)       _bs_label="Install meson via pip" ;;
       *)                       _bs_label="Build ${_bs_slug} from source" ;;
     esac

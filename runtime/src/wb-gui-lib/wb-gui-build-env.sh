@@ -195,7 +195,19 @@ wb_gui_build_env_run_source_build() {
       _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
       mkdir -p "${_wb_home_export}" 2>/dev/null || true
       export WB_HOME="${_wb_home_export}"
-      _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical) under ${WB_HOME}/build-deps"
+      # Strategy: default to musl.cc pre-built download (~130 MB, ~2-5 min, near-100%
+      # success) rather than source compile (~45 min, fragile — modern host GCC often
+      # fails to bootstrap older MinGW GCC, as observed on ALT / Fedora / Arch). The
+      # script's `--only-mingw` without `--build-mingw-from-source` takes the musl.cc
+      # path. Source build is available via WB_MINGW_PREFER_SOURCE=1 for users whose
+      # glibc is too old for musl.cc binaries or who are offline.
+      local -a _mingw_args=(--only-mingw)
+      if [[ "${WB_MINGW_PREFER_SOURCE:-0}" == "1" ]]; then
+        _mingw_args+=(--build-mingw-from-source)
+        _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical) under ${WB_HOME}/build-deps"
+      else
+        _wgbe_emit "LOG" "Installing MinGW-w64 (downloading pre-built ~130 MB from musl.cc) into ${WB_HOME}/build-deps"
+      fi
       # build-full-wine-deps.sh is a legacy script (no Phase-B event emission).
       # Route its stdout+stderr into the progress fd so the live log-tail sees
       # what's happening — the event reader has a fallthrough for unprefixed
@@ -205,12 +217,12 @@ wb_gui_build_env_run_source_build() {
       local _mingw_rc=0
       if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
         if command -v stdbuf >/dev/null 2>&1; then
-          stdbuf -oL -eL "${deps_script}" --only-mingw --build-mingw-from-source >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
+          stdbuf -oL -eL "${deps_script}" "${_mingw_args[@]}" >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
         else
-          "${deps_script}" --only-mingw --build-mingw-from-source >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
+          "${deps_script}" "${_mingw_args[@]}" >&"${WB_BUILD_PROGRESS_FD}" 2>&1 || _mingw_rc=$?
         fi
       else
-        "${deps_script}" --only-mingw --build-mingw-from-source || _mingw_rc=$?
+        "${deps_script}" "${_mingw_args[@]}" || _mingw_rc=$?
       fi
       return "${_mingw_rc}"
       ;;

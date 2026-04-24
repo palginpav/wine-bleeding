@@ -133,6 +133,21 @@ if [ -z "$MINGW_BIN" ] && [ -x "$DEPS_DIR/mingw64-cross/bin/x86_64-w64-mingw32-g
     MINGW_BIN="$DEPS_DIR/mingw64-cross/bin"
 fi
 
+# Also probe a user-provided wine-bleeding source tree (WB_WINE_SOURCE_ROOT):
+# if the user has built MinGW there in a prior run of the source tree's own
+# full-build.sh, reuse those binaries instead of downloading or rebuilding.
+if [ -z "$MINGW_BIN" ] && [ -n "${WB_WINE_SOURCE_ROOT:-}" ]; then
+    for _src_mingw in \
+        "$WB_WINE_SOURCE_ROOT/build-deps/mingw64-cross/bin" \
+        "$WB_WINE_SOURCE_ROOT/build-deps/x86_64-w64-mingw32-cross/bin"; do
+        if [ -x "$_src_mingw/x86_64-w64-mingw32-gcc" ]; then
+            MINGW_BIN="$_src_mingw"
+            echo "Найден MinGW из исходников wine-bleeding: $MINGW_BIN"
+            break
+        fi
+    done
+fi
+
 if [ -n "$MINGW_BIN" ]; then
     export PATH="$MINGW_BIN:$PATH"
     echo "Используется MinGW: $MINGW_BIN/x86_64-w64-mingw32-gcc"

@@ -62,7 +62,7 @@ _SOURCE_BUILD_SLUGS: dict[str, str | None] = {
 _SOURCE_BUILD_LABELS: dict[str, str] = {
     "pip-install-meson": "Install meson >= {floor} via pip (user-level, no sudo)",
     "wb-build-glslang": "Build glslang from source (~15 min)",
-    "build-mingw-from-source": "Build MinGW-w64 from source (~30-60 min)",
+    "build-mingw-from-source": "Install MinGW-w64 (download pre-built, ~130 MB)",
 }
 
 _SOURCE_BUILD_CMDS: dict[str, str] = {
