@@ -384,6 +384,10 @@ wb_gui_dialog_preflight_table() {
   distro_id="$(jq -r '.distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
   distro_pretty="$(jq -r '.distro.pretty_name // .distro.id // "unknown"' "${json_file}" 2>/dev/null || echo "unknown")"
 
+  # Read managed_tools_dir from JSON (added by W4 preflight extension)
+  local managed_tools_dir=""
+  managed_tools_dir="$(jq -r '.managed_tools_dir // ""' "${json_file}" 2>/dev/null || echo "")"
+
   # Count tools and collect per-tool data
   local tool_count
   tool_count="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
@@ -391,6 +395,8 @@ wb_gui_dialog_preflight_table() {
   # Arrays of per-tool data
   local -a t_name=() t_ok=() t_reason=() t_version=() t_min_version=()
   local -a t_install_cmd=() t_src_slug=() t_src_label=() t_notes=()
+  # W4 additions: source, managed_fallback_available, managed_fallback_latest_version
+  local -a t_source=() t_mgr_available=() t_mgr_latest=()
   local i
   for (( i=0; i<tool_count; i++ )); do
     t_name+=("$(jq -r ".tools[${i}].name // \"\"" "${json_file}" 2>/dev/null || echo "")")
@@ -402,6 +408,10 @@ wb_gui_dialog_preflight_table() {
     t_src_slug+=("$(jq -r ".tools[${i}].source_build_fallback // \"\"" "${json_file}" 2>/dev/null || echo "")")
     t_src_label+=("$(jq -r ".tools[${i}].source_build_fallback_label // \"\"" "${json_file}" 2>/dev/null || echo "")")
     t_notes+=("$(jq -r ".tools[${i}].notes // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    # W4 additive fields (default-safe when absent from older JSON)
+    t_source+=("$(jq -r ".tools[${i}].source // \"\"" "${json_file}" 2>/dev/null || echo "")")
+    t_mgr_available+=("$(jq -r ".tools[${i}].managed_fallback.available // \"false\"" "${json_file}" 2>/dev/null || echo "false")")
+    t_mgr_latest+=("$(jq -r ".tools[${i}].managed_fallback.latest_version // \"\"" "${json_file}" 2>/dev/null || echo "")")
   done
 
   # Overlay errors
@@ -444,6 +454,9 @@ add it to the built-in list."
   # ------------------------------------------------------------------
   local list_rows=""
   local -a src_slugs_present=()   # rc=50,51,52 map by position
+  # W4: managed-install candidates — tools where managed_fallback.available=true and ok=false.
+  # Tracked in JSON order; rc=60 is shared for all; loop disambiguates by position.
+  local -a mgr_install_tools=()   # tool names eligible for "Install via manager"
 
   for (( i=0; i<tool_count; i++ )); do
     local name="${t_name[${i}]}"
@@ -454,6 +467,9 @@ add it to the built-in list."
     local install_cmd="${t_install_cmd[${i}]}"
     local src_slug="${t_src_slug[${i}]}"
     local notes="${t_notes[${i}]}"
+    local source_tag="${t_source[${i}]}"
+    local mgr_available="${t_mgr_available[${i}]}"
+    local mgr_latest="${t_mgr_latest[${i}]}"
 
     # Status text (col 2)
     local status_text
@@ -464,7 +480,11 @@ add it to the built-in list."
       probe_failed)    status_text="PROBE FAILED" ;;
       *)
         if [[ "${ok}" == "true" ]]; then
-          status_text="OK  ${version}"
+          if [[ "${source_tag}" == "managed" ]]; then
+            status_text="OK  ${version}  [managed]"
+          else
+            status_text="OK  ${version}"
+          fi
         else
           status_text="MISSING"
         fi
@@ -487,6 +507,11 @@ add it to the built-in list."
       src_slugs_present+=("${src_slug}")
     fi
 
+    # Track managed-install candidates (ok=false + managed_fallback.available=true)
+    if [[ "${ok}" != "true" && "${mgr_available}" == "true" ]]; then
+      mgr_install_tools+=("${name}")
+    fi
+
     # yad --list protocol: ONE cell per stdin line. With 3 columns, every
     # 3 consecutive lines form one row. Do NOT use tab separators.
     list_rows+="${name}"$'\n'
@@ -498,6 +523,13 @@ add it to the built-in list."
       list_rows+=""$'\n'
       list_rows+="note:"$'\n'
       list_rows+="${notes}"$'\n'
+    fi
+
+    # When managed flavor is available but tool is not ok, add a note row
+    if [[ "${ok}" != "true" && "${mgr_available}" == "true" && -n "${mgr_latest}" ]]; then
+      list_rows+=""$'\n'
+      list_rows+="managed:"$'\n'
+      list_rows+="Version ${mgr_latest} available via manager (click Install below)"$'\n'
     fi
   done
 
@@ -580,6 +612,19 @@ add it to the built-in list."
   # Offer "Build all" as a shortcut when 2+ source-builds are applicable.
   if [[ "${#src_slugs_present[@]}" -ge 2 ]]; then
     btn_args+=(--button="Build all from source (~${est_min} min):40")
+  fi
+
+  # W4: "Install via manager" buttons — rc=60, one per managed-capable missing tool.
+  # All share rc=60; the loop in wb_gui_dialog_preflight_loop disambiguates by
+  # counting click position in JSON order (same pattern as rc=50/51/52).
+  local _mi_tool
+  for _mi_tool in "${mgr_install_tools[@]+"${mgr_install_tools[@]}"}"; do
+    btn_args+=(--button="Install ${_mi_tool} via manager:60")
+  done
+
+  # W4: "Check for updates" — always visible when managed_tools_dir is set.
+  if [[ -n "${managed_tools_dir}" ]]; then
+    btn_args+=(--button="Check for updates:61")
   fi
 
   btn_args+=(
@@ -928,12 +973,160 @@ Wait for it to finish or cancel it, then try again."
         _wb_gui_preflight_dispatch_source_build "${_per_row_slug}" 1 1 || true
         continue
         ;;
+      60)
+        # W4: "Install via manager" — install the first eligible managed tool.
+        # When multiple tools have "Install via manager" buttons, all share rc=60.
+        # The first click installs the first eligible tool; subsequent re-probes
+        # reduce the list until no managed-install buttons remain.
+        local _mgr_tool=""
+        local _mgr_tc
+        _mgr_tc="$(jq '.tools | length' "${json_file}" 2>/dev/null || echo "0")"
+        local _mgr_ti
+        for (( _mgr_ti=0; _mgr_ti<_mgr_tc; _mgr_ti++ )); do
+          local _mgr_t_ok _mgr_t_available _mgr_t_name
+          _mgr_t_ok="$(jq -r ".tools[${_mgr_ti}].ok" "${json_file}" 2>/dev/null || echo "true")"
+          _mgr_t_available="$(jq -r ".tools[${_mgr_ti}].managed_fallback.available // \"false\"" "${json_file}" 2>/dev/null || echo "false")"
+          _mgr_t_name="$(jq -r ".tools[${_mgr_ti}].name // \"\"" "${json_file}" 2>/dev/null || echo "")"
+          if [[ "${_mgr_t_ok}" != "true" && "${_mgr_t_available}" == "true" && -n "${_mgr_t_name}" ]]; then
+            _mgr_tool="${_mgr_t_name}"
+            break
+          fi
+        done
+
+        rm -f "${json_file}" 2>/dev/null || true
+
+        if [[ -z "${_mgr_tool}" ]]; then
+          # No eligible tool found (stale button state) — just re-probe
+          continue
+        fi
+
+        # No build-lock check needed — manager uses its own flock internally
+        _wb_gui_preflight_dispatch_source_build "tools-manager-install:${_mgr_tool}" 1 1 || true
+        # Loop continues — re-probe will show updated status
+        continue
+        ;;
+      61)
+        # W4: "Check for updates" — fetch manifest, show update checklist.
+        # Security requirement: NEVER auto-install. Always confirm via list dialog.
+        rm -f "${json_file}" 2>/dev/null || true
+
+        # Run check --json to get available updates
+        local _chk_tmp
+        _chk_tmp="$(mktemp /tmp/wb-tools-check-XXXXXX.json)"
+        local _chk_rc=0
+        wb_gui_build_env_run_source_build "tools-manager-check" \
+          > "${_chk_tmp}" 2>/dev/null || _chk_rc=$?
+
+        case "${_chk_rc}" in
+          0)
+            # No updates available
+            wb_gui_dialog_info "Build tools up to date" \
+              "All managed build tools are up to date.
+No new versions are available in the manifest."
+            rm -f "${_chk_tmp}"
+            continue
+            ;;
+          10)
+            # Updates available — show selection dialog
+            _wb_gui_preflight_check_updates_dialog "${_chk_tmp}" || true
+            rm -f "${_chk_tmp}"
+            continue
+            ;;
+          66)
+            # Manager binary not found
+            wb_gui_dialog_error "Managed tools manager not found" \
+              "What happened: wb-tools-manager.py could not be located.
+Why: the installation may be incomplete.
+Next action: reinstall wine-bleeding, then try again."
+            rm -f "${_chk_tmp}"
+            continue
+            ;;
+          *)
+            # Network error or other failure
+            wb_gui_dialog_error "Check for updates failed" \
+              "What happened: wb-tools-manager.py check returned exit code ${_chk_rc}.
+Why: your network may be down, or github.com is temporarily unavailable.
+Next action: check your network connection and try again.
+You can still use Build from source buttons to install tools locally."
+            rm -f "${_chk_tmp}"
+            continue
+            ;;
+        esac
+        ;;
       *)
         rm -f "${json_file}" 2>/dev/null || true
         return 1
         ;;
     esac
   done
+}
+
+# ---------------------------------------------------------------------------
+# _wb_gui_preflight_check_updates_dialog <check_json_file>
+#
+# Called when rc=61 "Check for updates" receives a check --json result with
+# exit code 10 (updates available). Parses the JSON, shows a checklist of
+# available updates, and dispatches tools-manager-update:<tool> for each
+# selected tool. NEVER auto-installs — always requires user confirmation.
+# ---------------------------------------------------------------------------
+_wb_gui_preflight_check_updates_dialog() {
+  local check_json="${1:-}"
+  [[ -z "${check_json}" || ! -r "${check_json}" ]] && return 0
+
+  # Parse available updates from the check --json output.
+  # Expected shape: {"tools": {"<name>": {"installed": bool, "version": str,
+  #   "update_available": bool, "compatible_flavor_available": bool, ...}}}
+  local tool_count_raw=""
+  tool_count_raw="$(jq -r '
+    .tools // {} | to_entries[] |
+    select(.value.update_available == true) |
+    "\(.key)\t\(.value.version // "")"
+  ' "${check_json}" 2>/dev/null || echo "")"
+
+  if [[ -z "${tool_count_raw}" ]]; then
+    wb_gui_dialog_info "No updates found" \
+      "The manifest was checked but no updates are available for installed tools."
+    return 0
+  fi
+
+  # Build checklist rows: TRUE | tool | installed_version | label
+  local -a chk_rows=()
+  local -a chk_tools=()
+  while IFS=$'\t' read -r tool_name tool_ver; do
+    [[ -z "${tool_name}" ]] && continue
+    chk_rows+=("TRUE" "${tool_name}" "${tool_ver:-unknown}" "Update available")
+    chk_tools+=("${tool_name}")
+  done <<< "${tool_count_raw}"
+
+  if [[ "${#chk_tools[@]}" -eq 0 ]]; then
+    wb_gui_dialog_info "No updates found" \
+      "The manifest was checked but no updates are available for installed tools."
+    return 0
+  fi
+
+  # Show checklist — user picks which tools to update.
+  local selected_output=""
+  local dlg_rc=0
+  selected_output="$(wb_gui_dialog_overlay_updates_checklist \
+    "Build tool updates available" \
+    "The following managed build tools have updates available.
+Select which tools to update (this will download and install the new version)." \
+    "${chk_rows[@]+"${chk_rows[@]}"}" 2>/dev/null)" || dlg_rc=$?
+
+  if [[ "${dlg_rc}" -ne 0 || -z "${selected_output}" ]]; then
+    # User cancelled
+    return 0
+  fi
+
+  # Parse selected rows (CHK column = TRUE/FALSE, then tool name)
+  local _upd_tool
+  while IFS='|' read -r chk_val tool_name _rest; do
+    [[ "${chk_val}" != "TRUE" ]] && continue
+    [[ -z "${tool_name}" ]] && continue
+    _wb_gui_preflight_dispatch_source_build "tools-manager-update:${tool_name}" 1 1 || true
+  done <<< "${selected_output}"
+
+  return 0
 }
 
 # ---------------------------------------------------------------------------

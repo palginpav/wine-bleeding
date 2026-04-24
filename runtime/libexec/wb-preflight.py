@@ -35,7 +35,95 @@ import shutil
 import subprocess
 import sys
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
+
+# ---------------------------------------------------------------------------
+# Managed build-tools integration (W4 — tier 2.5 probe)
+# ---------------------------------------------------------------------------
+
+# Default managed-tools root (XDG_DATA_HOME / WB_MANAGED_TOOLS_DIR / WB_TOOLS_DIR override)
+_MANAGED_TOOLS_DEFAULT = pathlib.Path.home() / ".local" / "share" / "wine-bleeding" / "build-tools"
+
+
+def _resolve_managed_tools_dir() -> pathlib.Path:
+    """Resolve the managed-tools root directory from env vars."""
+    for env_var in ("WB_MANAGED_TOOLS_DIR", "WB_TOOLS_DIR"):
+        val = os.environ.get(env_var)
+        if val:
+            return pathlib.Path(val)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return pathlib.Path(xdg) / "wine-bleeding" / "build-tools"
+    return _MANAGED_TOOLS_DEFAULT
+
+
+def _managed_tool_binary(managed_root: pathlib.Path, tool_name: str, binary_name: str) -> pathlib.Path | None:
+    """
+    Return the managed binary path if it exists and is executable, else None.
+    Probes: <managed_root>/<tool_name>/current/bin/<binary_name>
+    """
+    candidate = managed_root / tool_name / "current" / "bin" / binary_name
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
+def _read_managed_version(managed_root: pathlib.Path, tool_name: str) -> str:
+    """Read VERSION file from managed install if present; return empty string on miss."""
+    version_file = managed_root / tool_name / "current" / "VERSION"
+    try:
+        return version_file.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def _load_manifest_cache(managed_root: pathlib.Path) -> dict:
+    """
+    Load the locally-cached manifest from <managed_root>/manifest.cache.json.
+    Never fetches from network — preflight is a pure function.
+    Returns an empty dict on miss or parse error.
+    """
+    cache_file = managed_root / "manifest.cache.json"
+    try:
+        with open(cache_file, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _compute_managed_fallback(tool_name: str, manifest_cache: dict) -> dict:
+    """
+    Compute the managed_fallback dict for a tool from the cached manifest.
+    Returns {available: bool, latest_version: str|null, manifest_url: str}.
+    Never fetches from network.
+    """
+    manifest_url = manifest_cache.get("manifest_url", "")
+    tools = manifest_cache.get("tools", {})
+    tool_data = tools.get(tool_name, {})
+    if not tool_data:
+        return {"available": False, "latest_version": None, "manifest_url": manifest_url}
+    latest_version = tool_data.get("latest_version") or None
+    # Determine if at least one flavor entry exists for the latest version
+    versions = tool_data.get("versions", {})
+    has_flavor = False
+    if latest_version and latest_version in versions:
+        flavors = versions[latest_version].get("flavors", [])
+        has_flavor = len(flavors) > 0
+    elif versions:
+        # Any version with flavors counts
+        for vdata in versions.values():
+            if vdata.get("flavors"):
+                has_flavor = True
+                break
+    return {
+        "available": has_flavor,
+        "latest_version": latest_version,
+        "manifest_url": manifest_url,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Tool ordering for --build-type (pipeline order, W1 design §4 OQ-2)
@@ -299,14 +387,24 @@ _WHICH_NAMES: dict[str, str] = {
 }
 
 
-def _probe_tool(name: str) -> tuple[bool, str | None, str | None]:
+def _probe_tool(
+    name: str,
+    managed_root: pathlib.Path | None = None,
+) -> tuple[bool, str | None, str | None, str | None]:
     """
     Probe a tool's presence and version.
-    Returns (found, path_or_None, version_or_None).
+
+    Returns (found, path_or_None, version_or_None, source).
+    source is one of: "system", "managed", None (not found).
+
+    Probe order:
+      1. shutil.which / PATH alternatives  → source="system"
+      2. managed install path              → source="managed"  (tier 2.5)
+      3. neither                           → found=False, source=None
     """
     which_name = _WHICH_NAMES.get(name, name)
 
-    # Find executable path
+    # --- Tier 1: system PATH ---
     tool_path = shutil.which(which_name)
 
     # For tools with alternatives, also try alternates for path discovery
@@ -317,33 +415,63 @@ def _probe_tool(name: str) -> tuple[bool, str | None, str | None]:
                 tool_path = alt_path
                 break
 
-    found = tool_path is not None
+    if tool_path is not None:
+        # Found on system PATH — extract version
+        cmds_to_try: list[list[str]] = [_PROBE_CMDS[name]]
+        if name in _PROBE_ALTERNATIVES:
+            cmds_to_try.extend(_PROBE_ALTERNATIVES[name])
+        for cmd in cmds_to_try:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                output = result.stdout + result.stderr
+                m = _VER_RE.search(output)
+                if m:
+                    return True, tool_path, m.group(0), "system"
+            except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
+                continue
+        # Found but version not extractable
+        return True, tool_path, None, "system"
 
-    if not found:
-        return False, None, None
+    # --- Tier 2.5: managed install path ---
+    if managed_root is not None:
+        binary_name = _WHICH_NAMES.get(name, name)
+        managed_bin = _managed_tool_binary(managed_root, name, binary_name)
 
-    # Extract version
-    cmds_to_try: list[list[str]] = [_PROBE_CMDS[name]]
-    if name in _PROBE_ALTERNATIVES:
-        cmds_to_try.extend(_PROBE_ALTERNATIVES[name])
+        # Also try alternative binary names for the managed path
+        if managed_bin is None and name in _PROBE_ALTERNATIVES:
+            for alt_cmd in _PROBE_ALTERNATIVES[name]:
+                alt_bin = _managed_tool_binary(managed_root, name, alt_cmd[0])
+                if alt_bin is not None:
+                    managed_bin = alt_bin
+                    break
 
-    for cmd in cmds_to_try:
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            output = result.stdout + result.stderr
-            m = _VER_RE.search(output)
-            if m:
-                return True, tool_path, m.group(0)
-        except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
-            continue
+        if managed_bin is not None:
+            # Read version: first try running the binary, then VERSION file
+            version: str | None = None
+            try:
+                result = subprocess.run(
+                    [str(managed_bin), "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                output = result.stdout + result.stderr
+                vm = _VER_RE.search(output)
+                if vm:
+                    version = vm.group(0)
+            except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
+                pass
+            if version is None:
+                version = _read_managed_version(managed_root, name) or None
+            return True, str(managed_bin), version, "managed"
 
-    # Found but version not extractable
-    return True, tool_path, None
+    # --- Not found ---
+    return False, None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -436,17 +564,37 @@ def _get_source_build_fallback(distro_key: str | None, tool_name: str, pkg_map: 
 # Main probe logic
 # ---------------------------------------------------------------------------
 
+def _get_managed_fallback_flag(distro_key: str | None, tool_name: str, pkg_map: dict) -> bool:
+    """Return True when the package map marks this tool as manager-installable."""
+    # Check distro-specific entry first
+    if distro_key is not None:
+        distro_data = pkg_map.get("distros", {}).get(distro_key, {})
+        tool_entry = distro_data.get("tools", {}).get(tool_name, {})
+        if "managed_fallback" in tool_entry:
+            return bool(tool_entry["managed_fallback"])
+    # Check fallback section
+    fb = pkg_map.get("fallback", {})
+    fb_tool = fb.get("tools", {}).get(tool_name, {})
+    if "managed_fallback" in fb_tool:
+        return bool(fb_tool["managed_fallback"])
+    return False
+
+
 def _probe_all_tools(
     tool_names: list[str],
     distro: dict,
     distro_key: str | None,
     pkg_map: dict,
+    managed_root: pathlib.Path | None = None,
+    manifest_cache: dict | None = None,
 ) -> list[dict]:
     floors = pkg_map.get("_floors", {})
     results = []
+    if manifest_cache is None:
+        manifest_cache = {}
 
     for name in tool_names:
-        found, path, version = _probe_tool(name)
+        found, path, version, source = _probe_tool(name, managed_root)
 
         # Determine version floor
         floor_override = _get_floor_override(distro_key, name, pkg_map)
@@ -474,7 +622,7 @@ def _probe_all_tools(
         # Install command
         distro_install_cmd = _build_install_cmd(distro_key, name, pkg_map)
 
-        # Source-build fallback
+        # Source-build fallback (scalar — preserved for backward compat)
         fallback_slug = _get_source_build_fallback(distro_key, name, pkg_map)
         if fallback_slug:
             floor_str = min_version or "0"
@@ -483,6 +631,20 @@ def _probe_all_tools(
         else:
             fb_label = None
             fb_cmd = None
+
+        # source_build_fallbacks (list — W4 dialog reads this for multi-slug support)
+        # When managed_fallback is enabled, prepend "install-via-manager" to the list.
+        fallbacks_list: list[str] = []
+        is_manager_capable = _get_managed_fallback_flag(distro_key, name, pkg_map)
+        if is_manager_capable:
+            fallbacks_list.append("install-via-manager")
+        if fallback_slug:
+            fallbacks_list.append(fallback_slug)
+
+        # managed_fallback: cheap read from cached manifest — no network
+        managed_fb: dict = {"available": False, "latest_version": None, "manifest_url": ""}
+        if is_manager_capable and manifest_cache:
+            managed_fb = _compute_managed_fallback(name, manifest_cache)
 
         notes = _get_tool_notes(distro_key, name, pkg_map)
 
@@ -494,10 +656,13 @@ def _probe_all_tools(
             "min_version": min_version,
             "ok": ok,
             "reason": reason,
+            "source": source,
             "distro_install_cmd": distro_install_cmd,
             "source_build_fallback": fallback_slug,
             "source_build_fallback_label": fb_label,
             "source_build_fallback_cmd": fb_cmd,
+            "source_build_fallbacks": fallbacks_list,
+            "managed_fallback": managed_fb,
             "notes": notes,
         })
 
@@ -636,8 +801,16 @@ def main() -> int:
     else:
         distro["refresh_cmd"] = pkg_map.get("fallback", {}).get("refresh_cmd")
 
-    # Probe tools
-    tool_results = _probe_all_tools(tool_names, distro, distro_key, pkg_map)
+    # Resolve managed-tools directory (tier 2.5) — no network, pure filesystem
+    managed_root = _resolve_managed_tools_dir()
+    manifest_cache = _load_manifest_cache(managed_root)
+
+    # Probe tools (tier 1: system PATH; tier 2.5: managed install; tier 3 handled by dialog)
+    tool_results = _probe_all_tools(
+        tool_names, distro, distro_key, pkg_map,
+        managed_root=managed_root,
+        manifest_cache=manifest_cache,
+    )
     overall_ok = all(t["ok"] for t in tool_results)
 
     # Assemble output
@@ -648,6 +821,7 @@ def main() -> int:
         "distro": distro,
         "build_type": build_type,
         "overall_ok": overall_ok,
+        "managed_tools_dir": str(managed_root),
         "overlays_loaded": overlays_loaded,
         "overlay_errors": overlay_errors,
         "tools": tool_results,

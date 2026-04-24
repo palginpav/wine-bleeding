@@ -220,6 +220,11 @@ install:
 	  install -Dm644 $(RUNTIME_DIR)share/wb-preflight-packages.json \
 	    $(DESTDIR)$(SHAREDIR)/wine-bleeding/wb-preflight-packages.json; \
 	fi
+	@# Install the managed build-tools seed manifest (wb-tools-manager.py data file).
+	@if test -f $(RUNTIME_DIR)share/wb-tools-manager-manifest.json; then \
+	  install -Dm644 $(RUNTIME_DIR)share/wb-tools-manager-manifest.json \
+	    $(DESTDIR)$(SHAREDIR)/wine-bleeding/wb-tools-manager-manifest.json; \
+	fi
 	@for f in $(RUNTIME_DIR)share/schemas/*.json; do \
 	  install -Dm644 "$$f" "$(DESTDIR)$(SHAREDIR)/wine-bleeding/schemas/$$(basename $$f)"; \
 	done

@@ -1,0 +1,324 @@
+name: build-tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Delete existing release tag before creating new one'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'tools-v*'
+
+jobs:
+  build:
+    name: "${{ matrix.tool }} / ${{ matrix.flavor }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor:
+          - glibc2.31
+          - glibc2.35
+          - glibc2.38
+          - glibc2.40
+        tool:
+          - mingw-w64
+          - glslang
+        include:
+          - flavor: glibc2.31
+            container: debian:12
+            glibc_min: "2.31"
+          - flavor: glibc2.35
+            container: ubuntu:22.04
+            glibc_min: "2.35"
+          - flavor: glibc2.38
+            container: fedora:40
+            glibc_min: "2.38"
+          - flavor: glibc2.40
+            container: fedora:41
+            glibc_min: "2.40"
+
+    container:
+      image: ${{ matrix.container }}
+
+    steps:
+      - name: Install build prerequisites (Debian/Ubuntu)
+        if: startsWith(matrix.container, 'debian') || startsWith(matrix.container, 'ubuntu')
+        run: |
+          apt-get update -q
+          apt-get install -y --no-install-recommends \
+            gcc g++ make bison flex git texinfo m4 bzip2 curl \
+            diff zstd wget ca-certificates \
+            cmake ninja-build python3 \
+            pkg-config xz-utils
+
+      - name: Install build prerequisites (Fedora)
+        if: startsWith(matrix.container, 'fedora')
+        run: |
+          dnf install -y \
+            gcc gcc-c++ make bison flex git texinfo m4 bzip2 curl \
+            diffutils zstd wget ca-certificates \
+            cmake ninja-build python3 \
+            pkg-config xz
+
+      - uses: actions/checkout@v4
+
+      - name: Read version from runtime/VERSION
+        id: version
+        run: |
+          WB_VERSION="$(cat runtime/VERSION | tr -d '[:space:]')"
+          echo "wb_version=${WB_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Determine tool version
+        id: tool_version
+        run: |
+          # Extract pinned version constants from the build scripts.
+          # Fallback to a date-stamped version for the tarball name if a script
+          # doesn't expose a parseable constant.
+          case "${{ matrix.tool }}" in
+            mingw-w64)
+              # build-full-wine-deps.sh does not pin a single upstream version;
+              # use the wine-bleeding VERSION as the coordinating version.
+              TOOL_VER="$(cat runtime/VERSION | tr -d '[:space:]')"
+              ;;
+            glslang)
+              TOOL_VER="$(grep -m1 'GLSLANG_TAG=' tools/build-glslang.sh \
+                          | head -1 | sed 's/.*GLSLANG_TAG[^=]*="\{0,1\}\([^"}\n]*\).*/\1/')"
+              TOOL_VER="${TOOL_VER:-unknown}"
+              ;;
+          esac
+          echo "tool_version=${TOOL_VER}" >> "${GITHUB_OUTPUT}"
+          echo "tarball_name=${{ matrix.tool }}-${TOOL_VER}-x86_64-${{ matrix.flavor }}.tar.zst" >> "${GITHUB_OUTPUT}"
+
+      - name: Build mingw-w64
+        if: matrix.tool == 'mingw-w64'
+        env:
+          WB_WINE_SOURCE_ROOT: ${{ github.workspace }}
+          SOURCE_DATE_EPOCH: "0"
+        run: |
+          bash tools/build-full-wine-deps.sh --only-mingw --build-mingw-from-source
+
+      - name: Build glslang
+        if: matrix.tool == 'glslang'
+        env:
+          WB_HOME: ${{ github.workspace }}
+          SOURCE_DATE_EPOCH: "0"
+        run: |
+          bash tools/build-glslang.sh --install-prefix "${GITHUB_WORKSPACE}/build-deps/glslang"
+
+      - name: Locate build output directory
+        id: output_dir
+        run: |
+          case "${{ matrix.tool }}" in
+            mingw-w64)
+              # build-full-wine-deps.sh installs MinGW into build-deps/x86_64-w64-mingw32-cross
+              # (and i686 cross). Collect both cross roots as the managed payload.
+              OUTPUT="${GITHUB_WORKSPACE}/build-deps/x86_64-w64-mingw32-cross"
+              ;;
+            glslang)
+              OUTPUT="${GITHUB_WORKSPACE}/build-deps/glslang"
+              ;;
+          esac
+          if [ ! -d "${OUTPUT}" ]; then
+            echo "ERROR: expected output directory ${OUTPUT} not found" >&2
+            exit 1
+          fi
+          echo "path=${OUTPUT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify primary binary is present
+        run: |
+          case "${{ matrix.tool }}" in
+            mingw-w64)
+              PRIMARY="${{ steps.output_dir.outputs.path }}/bin/x86_64-w64-mingw32-gcc"
+              ;;
+            glslang)
+              PRIMARY="${{ steps.output_dir.outputs.path }}/bin/glslangValidator"
+              ;;
+          esac
+          if [ ! -x "${PRIMARY}" ]; then
+            echo "ERROR: primary binary ${PRIMARY} missing or not executable" >&2
+            exit 1
+          fi
+          echo "Primary binary OK: ${PRIMARY}"
+          "${PRIMARY}" --version || true
+
+      - name: Package tarball
+        id: package
+        run: |
+          TARBALL="${{ steps.tool_version.outputs.tarball_name }}"
+          OUTPUT_DIR="${{ steps.output_dir.outputs.path }}"
+
+          # Wrap content in a top-level dir named <tool>-<version>/ per the
+          # tarball-root-directory convention in w1-managed-tools-flavor-matrix.md §2.
+          WRAP_DIR="${{ matrix.tool }}-${{ steps.tool_version.outputs.tool_version }}"
+
+          # Create a staging area for the wrapped tree.
+          STAGE="$(mktemp -d)"
+          mkdir -p "${STAGE}/${WRAP_DIR}"
+          # Avoid full-tree cp; use tar with strip to re-root cleanly.
+          tar -C "${OUTPUT_DIR}" -cf - . | tar -C "${STAGE}/${WRAP_DIR}" -xf -
+
+          # Compress with aggressive zstd (multi-threaded).
+          tar -C "${STAGE}" \
+            --use-compress-program "zstd -T0 -19" \
+            -cf "${GITHUB_WORKSPACE}/${TARBALL}" \
+            "${WRAP_DIR}"
+
+          rm -rf "${STAGE}"
+
+          # Compute SHA-256 and byte size.
+          SHA="$(sha256sum "${GITHUB_WORKSPACE}/${TARBALL}" | awk '{print $1}')"
+          SIZE="$(wc -c < "${GITHUB_WORKSPACE}/${TARBALL}")"
+
+          echo "tarball=${GITHUB_WORKSPACE}/${TARBALL}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${SHA}" >> "${GITHUB_OUTPUT}"
+          echo "size_bytes=${SIZE}" >> "${GITHUB_OUTPUT}"
+          echo "tarball_name=${TARBALL}" >> "${GITHUB_OUTPUT}"
+
+          echo "Tarball: ${TARBALL}"
+          echo "SHA-256: ${SHA}"
+          echo "Size:    ${SIZE} bytes"
+
+      - name: Write sha256 sidecar file
+        run: |
+          printf '%s  %s\n' \
+            "${{ steps.package.outputs.sha256 }}" \
+            "${{ steps.tool_version.outputs.tarball_name }}" \
+            > "${GITHUB_WORKSPACE}/${{ steps.tool_version.outputs.tarball_name }}.sha256"
+
+      - name: Write metadata sidecar (per-artifact JSON)
+        run: |
+          cat > "${GITHUB_WORKSPACE}/${{ steps.tool_version.outputs.tarball_name }}.meta.json" <<JSON
+          {
+            "tool": "${{ matrix.tool }}",
+            "version": "${{ steps.tool_version.outputs.tool_version }}",
+            "arch": "x86_64",
+            "flavor": "${{ matrix.flavor }}",
+            "glibc_min": "${{ matrix.glibc_min }}",
+            "glibc_max": null,
+            "tarball_name": "${{ steps.tool_version.outputs.tarball_name }}",
+            "sha256": "${{ steps.package.outputs.sha256 }}",
+            "size_bytes": ${{ steps.package.outputs.size_bytes }},
+            "build_host": "${{ matrix.container }}"
+          }
+          JSON
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.tool }}-${{ matrix.flavor }}"
+          path: |
+            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}
+            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}.sha256
+            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}.meta.json
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Read version from runtime/VERSION
+        id: version
+        run: |
+          WB_VERSION="$(cat runtime/VERSION | tr -d '[:space:]')"
+          echo "wb_version=${WB_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Compute release tag
+        id: release_tag
+        run: |
+          # Date-based release tag: tools-vYYYYMMDD
+          TAG="tools-v$(date -u +%Y%m%d)"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "Release tag: ${TAG}"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+
+      - name: Collect tarballs into a flat staging directory
+        id: staging
+        run: |
+          STAGING="/tmp/release-assets"
+          mkdir -p "${STAGING}"
+
+          # Each artifact is downloaded into its own subdirectory.
+          find /tmp/artifacts -type f | while IFS= read -r f; do
+            cp "${f}" "${STAGING}/"
+          done
+
+          echo "Files in staging:"
+          ls -lh "${STAGING}/"
+
+          # Sanity: require exactly 8 tarballs.
+          TARBALL_COUNT="$(find "${STAGING}" -name '*.tar.zst' | wc -l)"
+          if [ "${TARBALL_COUNT}" -ne 8 ]; then
+            echo "ERROR: expected 8 tarballs, found ${TARBALL_COUNT}" >&2
+            exit 1
+          fi
+
+          echo "path=${STAGING}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate manifest.json
+        run: |
+          bash .github/workflows/build-tools-manifest.sh \
+            /tmp/release-assets \
+            "${{ steps.release_tag.outputs.tag }}" \
+            > /tmp/release-assets/manifest.json
+
+          echo "manifest.json contents:"
+          jq . /tmp/release-assets/manifest.json
+
+      - name: Validate manifest.json shape
+        run: |
+          jq -e '
+            .schema_version == 1 and
+            (.manifest_url | startswith("https://")) and
+            (.tools | type == "object") and
+            (.tools | keys | length > 0)
+          ' /tmp/release-assets/manifest.json
+
+      - name: Delete existing release (if --force input set)
+        if: inputs.force_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release_tag.outputs.tag }}"
+          # Delete release + tag if they exist; ignore errors if absent.
+          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+
+      - name: Create or update GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: "Build tools ${{ steps.release_tag.outputs.tag }}"
+          body: |
+            Pre-built managed build-tools for wine-bleeding v${{ steps.version.outputs.wb_version }}.
+
+            Contains MinGW-w64 cross toolchain and glslang shader compiler,
+            packaged per glibc flavor for broad Linux compatibility.
+
+            Use `wb-tools-manager.py install <tool>` to install.
+            The manager fetches `manifest.json` from this release automatically.
+
+            **Flavors:** glibc2.31 (Debian 11+), glibc2.35 (Ubuntu 22.04+),
+            glibc2.38 (Fedora 40+), glibc2.40 (Fedora 41+).
+          files: |
+            /tmp/release-assets/*.tar.zst
+            /tmp/release-assets/*.sha256
+            /tmp/release-assets/manifest.json
+          fail_on_unmatched_files: true
+          make_latest: true

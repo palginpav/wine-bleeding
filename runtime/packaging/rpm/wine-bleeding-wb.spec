@@ -66,6 +66,14 @@ BuildArch:      noarch
 # RHEL / openSUSE detection — on distros without Recommends: support the
 # subpackage still builds (just without the recommendation list); users
 # fall through to wb-preflight at first-run for the install hints anyway.
+# zstd is required at runtime by wb-tools-manager.py to decompress managed
+# build-tool tarballs (.tar.zst). ALT Linux ships zstd in its own repos but
+# its rpmbuild (4.0.4) does not support Recommends:, so this Requires: is
+# guarded identically to the Recommends: block below.
+%if 0%{?fedora} || 0%{?rhel} || 0%{?suse_version} >= 1500
+Requires:       zstd
+%endif
+
 %if 0%{?fedora} >= 24 || 0%{?rhel} >= 8 || 0%{?suse_version} >= 1500
 # Core build tools — present on virtually every RPM-based distro.
 Recommends:     gcc
@@ -111,6 +119,8 @@ preflight dialog will show any remaining gaps with actionable fix buttons.
 
 %files -n wine-bleeding-wb-build
 %{_datadir}/doc/wine-bleeding-wb-build/README
+/usr/lib/wine-bleeding/libexec/wb-tools-manager.py
+%{_datadir}/wine-bleeding/wb-tools-manager-manifest.json
 
 # ---------------------------------------------------------------------------
 
@@ -137,6 +147,9 @@ make -C runtime install \
 /usr/lib/wine-bleeding/wb-lib/
 /usr/lib/wine-bleeding/hooks/
 %{_datadir}/wine-bleeding/
+# wb-tools-manager-manifest.json belongs to wine-bleeding-wb-build (installed
+# alongside the manager script). Exclude it from the main package glob above.
+%exclude %{_datadir}/wine-bleeding/wb-tools-manager-manifest.json
 %{_datadir}/doc/wine-bleeding/
 # Steam Compatibility Tool registration — installed unconditionally by the
 # Makefile `install:` target when the source tree has the directory.
@@ -148,7 +161,8 @@ make -C runtime install \
 # menu, and no icons. Listed as real %files entries now.
 %{_bindir}/wb-gui
 /usr/lib/wine-bleeding/wb-gui-lib/
-/usr/lib/wine-bleeding/libexec/
+/usr/lib/wine-bleeding/libexec/wb-lnk-parse.py
+/usr/lib/wine-bleeding/libexec/wb-preflight.py
 /usr/lib/wine-bleeding/tools/
 %{_datadir}/applications/wine-bleeding-wb.desktop
 %{_datadir}/icons/hicolor/16x16/apps/wine-bleeding.png

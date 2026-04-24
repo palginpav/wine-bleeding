@@ -36,3 +36,16 @@ Tools covered
 
 Package names above are Fedora conventions. Other distros use equivalent
 packages; wb-preflight shows the distro-specific install command at runtime.
+
+Managed build-tools
+-------------------
+
+Prefer pre-built toolchains over local source compilation. Run:
+
+  wb-tools-manager.py check          # see what's available
+  wb-tools-manager.py install mingw-w64-gcc   # download + verify + extract
+  wb-tools-manager.py install glslang
+
+Artifacts land under ~/.local/share/wine-bleeding/build-tools/<tool>/<version>/.
+The manager is also available through wb-gui's preflight dialog ("Install via
+manager" + "Check for updates" buttons).

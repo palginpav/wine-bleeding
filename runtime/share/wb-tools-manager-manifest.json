@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "manifest_url": "https://github.com/palginpav/wine-bleeding/releases/latest/download/manifest.json",
+  "generated_utc": "2026-04-24T00:00:00Z",
+  "generator": "seed (shipped in RPM)",
+  "tools": {}
+}

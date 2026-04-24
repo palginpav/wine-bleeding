@@ -119,6 +119,39 @@ _wgbe_preflight_bin() {
   return 1
 }
 
+# _wgbe_tools_manager_bin — resolve wb-tools-manager.py
+_wgbe_tools_manager_bin() {
+  local self_dir
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local candidates=(
+    "${self_dir}/../../libexec/wb-tools-manager.py"
+    "/usr/lib/wine-bleeding/libexec/wb-tools-manager.py"
+    "/usr/local/lib/wine-bleeding/libexec/wb-tools-manager.py"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -f "${c}" ]]; then
+      printf '%s' "${c}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _wgbe_managed_tools_dir — resolve managed-tools root (same logic as wb-preflight.py)
+_wgbe_managed_tools_dir() {
+  if [[ -n "${WB_MANAGED_TOOLS_DIR:-}" ]]; then
+    printf '%s' "${WB_MANAGED_TOOLS_DIR}"
+    return
+  fi
+  if [[ -n "${WB_TOOLS_DIR:-}" ]]; then
+    printf '%s' "${WB_TOOLS_DIR}"
+    return
+  fi
+  local xdg_data="${XDG_DATA_HOME:-${HOME}/.local/share}"
+  printf '%s' "${xdg_data}/wine-bleeding/build-tools"
+}
+
 # _wgbe_emit — emit an event via WB_BUILD_PROGRESS_FD or stderr
 _wgbe_emit() {
   local prefix="$1"
@@ -304,6 +337,92 @@ wb_gui_build_env_run_source_build() {
         _wgbe_emit "WARN" "meson installed to ${local_bin}/meson but ${local_bin} is not on PATH. Add 'export PATH=\"${local_bin}:\$PATH\"' to your shell startup file, or log out and back in."
       fi
       return 0
+      ;;
+
+    tools-manager-install:*)
+      # Dispatch: install a single managed tool via wb-tools-manager.py.
+      # Slug format: tools-manager-install:<tool-name>
+      local _tm_tool="${slug#tools-manager-install:}"
+      if [[ -z "${_tm_tool}" ]]; then
+        _wgbe_emit "ERROR" "tools-manager-install slug is missing the tool name. What happened: internal caller bug. Next action: file a bug report."
+        return 64
+      fi
+      local _tm_bin
+      if ! _tm_bin="$(_wgbe_tools_manager_bin)"; then
+        _wgbe_emit "ERROR" "wb-tools-manager.py not found. What happened: the managed-tools installer is missing. Why: installation may be incomplete. Next action: reinstall wine-bleeding."
+        return 66
+      fi
+      _wgbe_emit "LOG" "Starting managed install of ${_tm_tool} via wb-tools-manager.py"
+      local _tm_args=()
+      if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
+        _tm_args+=(--progress-fd "${WB_BUILD_PROGRESS_FD}")
+      fi
+      # WB_MANAGED_TOOLS_DIR is forwarded automatically if set (env passthrough).
+      local _tm_rc=0
+      python3 "${_tm_bin}" "${_tm_args[@]}" install "${_tm_tool}" || _tm_rc=$?
+      case "${_tm_rc}" in
+        0) : ;;  # success
+        3) _wgbe_emit "ERROR" "No managed build of ${_tm_tool} is available for your system. What happened: your system's glibc is older than every pre-built flavor. Why: we don't ship a glibc-2.28 or older flavor yet. Next action: use Build from source." ;;
+        4) _wgbe_emit "ERROR" "Not enough disk space to install ${_tm_tool}. What happened: the pre-install disk-space check failed. Why: your partition is nearly full. Next action: free up space then retry." ;;
+        5) _wgbe_emit "ERROR" "Download verification failed for ${_tm_tool}. What happened: the SHA-256 of the downloaded tarball did not match the manifest. Why: download corruption or server-side drift. Next action: retry; if this persists, file an issue." ;;
+        7) _wgbe_emit "ERROR" "Another managed-tools operation is in progress. What happened: a second install was attempted while the first was still running. Why: you may have two wb-gui windows open. Next action: wait for the first install to finish, then retry." ;;
+        *) _wgbe_emit "ERROR" "wb-tools-manager.py install ${_tm_tool} failed (exit ${_tm_rc}). What happened: the installer exited with an unexpected code. Why: see log output above. Next action: retry or use Build from source." ;;
+      esac
+      # After a successful install, re-source the .path snippet so the freshly
+      # installed tool's bin dir is immediately on PATH for the re-probe.
+      if [[ "${_tm_rc}" -eq 0 ]]; then
+        local _tm_path_file
+        _tm_path_file="$(_wgbe_managed_tools_dir)/.path"
+        if [[ -r "${_tm_path_file}" ]]; then
+          # shellcheck source=/dev/null
+          source "${_tm_path_file}" 2>/dev/null || true
+        fi
+      fi
+      return "${_tm_rc}"
+      ;;
+
+    tools-manager-check)
+      # Dispatch: run wb-tools-manager.py check --json to query available updates.
+      # Returns JSON on stdout + exit code (0=no updates, 10=updates available).
+      local _tmc_bin
+      if ! _tmc_bin="$(_wgbe_tools_manager_bin)"; then
+        _wgbe_emit "ERROR" "wb-tools-manager.py not found. What happened: the managed-tools installer is missing. Why: installation may be incomplete. Next action: reinstall wine-bleeding."
+        return 66
+      fi
+      local _tmc_rc=0
+      python3 "${_tmc_bin}" check --json || _tmc_rc=$?
+      return "${_tmc_rc}"
+      ;;
+
+    tools-manager-update:*)
+      # Dispatch: update a single managed tool via wb-tools-manager.py update.
+      # Slug format: tools-manager-update:<tool-name>
+      local _tmu_tool="${slug#tools-manager-update:}"
+      if [[ -z "${_tmu_tool}" ]]; then
+        _wgbe_emit "ERROR" "tools-manager-update slug is missing the tool name. What happened: internal caller bug. Next action: file a bug report."
+        return 64
+      fi
+      local _tmu_bin
+      if ! _tmu_bin="$(_wgbe_tools_manager_bin)"; then
+        _wgbe_emit "ERROR" "wb-tools-manager.py not found. What happened: the managed-tools installer is missing. Why: installation may be incomplete. Next action: reinstall wine-bleeding."
+        return 66
+      fi
+      _wgbe_emit "LOG" "Updating ${_tmu_tool} via wb-tools-manager.py"
+      local _tmu_args=()
+      if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
+        _tmu_args+=(--progress-fd "${WB_BUILD_PROGRESS_FD}")
+      fi
+      local _tmu_rc=0
+      python3 "${_tmu_bin}" "${_tmu_args[@]}" update "${_tmu_tool}" || _tmu_rc=$?
+      if [[ "${_tmu_rc}" -eq 0 ]]; then
+        local _tmu_path_file
+        _tmu_path_file="$(_wgbe_managed_tools_dir)/.path"
+        if [[ -r "${_tmu_path_file}" ]]; then
+          # shellcheck source=/dev/null
+          source "${_tmu_path_file}" 2>/dev/null || true
+        fi
+      fi
+      return "${_tmu_rc}"
       ;;
 
     *)

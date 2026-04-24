@@ -2,6 +2,52 @@
 
 ## [Unreleased] — v1.7.1-dev
 
+### Managed build-tools (tier 2.5 — pre-built toolchains on demand)
+
+Adds a new intermediate tier between "install via distro package manager"
+and "compile from source": download pre-built toolchains from the project's
+GitHub Release, verify sha256, extract into the user's home directory.
+Faster and far more reliable than source-build on modern hosts where modern
+GCC struggles to bootstrap older MinGW GCC.
+
+- **`wb-tools-manager.py`** (stdlib Python CLI at
+  `/usr/lib/wine-bleeding/libexec/`) — subcommands `list`, `check`, `install
+  <tool>`, `update <tool>`, `remove <tool>`, `path`. Downloads from a
+  manifest URL (default
+  `https://github.com/palginpav/wine-bleeding/releases/latest/download/manifest.json`,
+  overridable via `WB_TOOLS_MANIFEST_URL`). Verifies sha256 before extract;
+  uses `tarfile.data_filter` (Py 3.12+) or manual `..`/absolute-path/symlink
+  /zip-bomb rejection (Py 3.8–3.11). Atomic promote via `<tool>/<ver>.stage`
+  → `<tool>/<ver>` → symlink-renamed `current`. Per-tool `.previous` symlink
+  for manual rollback. Refuses to run as root; flock on
+  `.lock` for concurrency. HTTPS-only with TLS verification (no env var
+  disables it).
+- **Glibc-aware flavor selection** — 4 flavors per tool (glibc 2.31, 2.35,
+  2.38, 2.40). Detects host glibc via `ldd --version`, picks highest
+  `glibc_min` ≤ host. No compatible flavor → falls through to existing
+  source-build tier.
+- **Preflight probe extension** (`wb-preflight.py`) — when a tool is missing
+  from system PATH, probe
+  `~/.local/share/wine-bleeding/build-tools/<tool>/current/bin/<binary>`.
+  When found, emits `source: "managed"` in the tool row and the new
+  `managed_tools_dir` top-level field. Never fetches from network in the
+  probe path — manifest info comes from a local cache populated by
+  "Check for updates".
+- **Preflight dialog** — two new footer buttons: "Install `<tool>` via
+  manager" (rc=60, one per tool with a compatible flavor in the cached
+  manifest) and "Check for updates" (rc=61, global). Existing "Build from
+  source" buttons (rc=50/51/52) remain as the last-resort tier.
+- **`wine-bleeding-wb-build` subpackage** — ships the manager CLI and the
+  seed manifest (empty; manager falls back to it when the upstream is
+  unreachable). New `Requires: zstd` under ALT-safe conditional for tarball
+  decompression.
+- **CI workflow** (`.github/workflows/build-tools.yml`) — manual
+  `workflow_dispatch` matrix: 4 glibc flavors × 2 tools (MinGW-w64,
+  glslang) = 8 build jobs + 1 publish job. Generates `manifest.json` from
+  per-job sha256 sidecars; uploads tarballs + manifest to a tagged GitHub
+  Release (`tools-vYYYYMMDD`). First real run is a manual kick-off; until
+  that happens, managed-tool buttons stay hidden (empty fallback manifest).
+
 ### Build-env self-sufficiency (wb-gui → builds anywhere)
 
 Component Builder and Build Dist from Source no longer require a pre-curated
