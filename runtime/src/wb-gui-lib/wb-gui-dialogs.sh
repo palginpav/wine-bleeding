@@ -202,12 +202,19 @@ wb_gui_dialog_list() {
 wb_gui_dialog_log_tail() {
   local title="${1:-Building}"
   local log_file="${2:-}"
-  # Use exec so this function's subshell BECOMES yad — the PID of the
-  # backgrounded function equals yad's PID, so `kill $yad_pid` from the
-  # caller actually terminates yad. Without exec, the subshell forks yad
-  # as a child; killing the subshell leaves yad reparented to init and
-  # the dialog stays on screen showing a stale Cancel button.
-  exec wb_gui_yad \
+  # Use `exec` directly with the real yad BINARY (not the wb_gui_yad
+  # function — bash's `exec` can only invoke executables, not functions;
+  # "exec wb_gui_yad" fails silently with "not found" and the subshell
+  # dies, leaving yad_pid pointing at a corpse). When this function is
+  # backgrounded by the caller, the subshell becomes yad itself, so
+  # `kill $log_tail_pid` reaches yad directly on cleanup.
+  local _yad_bin
+  _yad_bin="$(command -v yad)" || {
+    echo "wb-gui: yad not found on PATH" >&2
+    return 1
+  }
+  export GDK_BACKEND=x11
+  exec -a wine-bleeding "${_yad_bin}" "${_WB_GUI_YAD_COMMON[@]}" \
     --text-info \
     --tail \
     --filename="${log_file}" \
@@ -1239,7 +1246,9 @@ _wb_gui_preflight_dispatch_source_build() {
   wait "${yad_pid}" 2>/dev/null || true
   local build_exit=0
   wait "${builder_pid}" 2>/dev/null || build_exit=$?
-  kill "${reader_pid}" 2>/dev/null || true
+  # SIGKILL — the reader's `while read ... || true` loop defeats EOF and
+  # SIGTERM doesn't reliably interrupt a blocked fifo read (wait would hang).
+  kill -9 "${reader_pid}" 2>/dev/null || true
   wait "${reader_pid}" 2>/dev/null || true
 
   case "${build_exit}" in

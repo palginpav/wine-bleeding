@@ -29,6 +29,11 @@ setup() {
   export PATH="${FAKE_YAD_DIR}:${PATH}"
   export WB_TEST_PATH="${PATH}"
   export WB_GUI_NO_DESKTOP_SHORTCUT=1
+  # Skip the build-env preflight dialog in Component Builder: in the test env
+  # mingw-w64-gcc is missing, which would inject an extra yad invocation and
+  # shift all Stage 1 response slots by one, causing an infinite validation
+  # loop. See W1 diagnosis for orch-20260424T1420Z.
+  export WB_GUI_SKIP_PREFLIGHT=1
 
   touch "${WB_TEST_YAD_LOG}"
   printf '' > "${WB_TEST_YAD_RESPONSE}"
@@ -65,6 +70,7 @@ _run_wb_gui() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${WB_TEST_YAD_RESPONSES_DIR}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     '${WB_GUI}' $*
   "
 }
@@ -157,6 +163,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     # Invoke dist manager directly by sourcing internal function
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
@@ -212,6 +219,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -277,6 +285,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -345,7 +354,8 @@ _src_dist() {
   # Inv 1: main window (source side-effect) → Close
   _write_response "${rdir}" 1 "" 1
   # Inv 2: Stage 1 form → rc=0, output: DXVK|<dist_ro>|2.4|FALSE|
-  printf 'DXVK|%s|2.4|FALSE|' "${dist_name}" > "${rdir}/002"
+  # Stage 1 multi-select form: <dist_ro>|<dxvk_chk>|<vkd3d_chk>|<nvapi_chk>|<force_chk>|
+  printf '%s|TRUE|FALSE|FALSE|FALSE|' "${dist_name}" > "${rdir}/002"
   printf '0' > "${rdir}/002.rc"
   # Inv 3: Stage 2 yad --text-info --tail → rc=0 (natural close; builder already exited)
   _write_response "${rdir}" 3 "" 0
@@ -359,6 +369,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -405,7 +416,8 @@ _src_dist() {
   local rdir
   rdir="$(_mk_responses_dir)"
   _write_response "${rdir}" 1 "" 1   # main window → Close
-  printf 'DXVK|%s||FALSE|' "${dist_name}" > "${rdir}/002"
+  # Stage 1 multi-select form: <dist_ro>|<dxvk_chk>|<vkd3d_chk>|<nvapi_chk>|<force_chk>|
+  printf '%s|TRUE|FALSE|FALSE|FALSE|' "${dist_name}" > "${rdir}/002"
   printf '0' > "${rdir}/002.rc"
   _write_response "${rdir}" 3 "" 0   # Stage 2 log tail → closes
   _write_response "${rdir}" 4 "" 0   # Stage 3 "Build cancelled" → OK
@@ -417,6 +429,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -465,7 +478,8 @@ _src_dist() {
   rdir="$(_mk_responses_dir)"
   _write_response "${rdir}" 1 "" 1   # main window → Close
   # Inv 2: First Stage 1 → rc=0 (proceed)
-  printf 'DXVK|%s||FALSE|' "${dist_name}" > "${rdir}/002"
+  # Stage 1 multi-select form: <dist_ro>|<dxvk_chk>|<vkd3d_chk>|<nvapi_chk>|<force_chk>|
+  printf '%s|TRUE|FALSE|FALSE|FALSE|' "${dist_name}" > "${rdir}/002"
   printf '0' > "${rdir}/002.rc"
   _write_response "${rdir}" 3 "" 0   # Stage 2 log tail → closes
   _write_response "${rdir}" 4 "" 0   # Stage 3 lock-busy error dialog → OK
@@ -478,6 +492,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -529,7 +544,8 @@ _src_dist() {
   local rdir
   rdir="$(_mk_responses_dir)"
   _write_response "${rdir}" 1 "" 1   # main window → Close
-  printf 'DXVK|%s||FALSE|' "${dist_name}" > "${rdir}/002"
+  # Stage 1 multi-select form: <dist_ro>|<dxvk_chk>|<vkd3d_chk>|<nvapi_chk>|<force_chk>|
+  printf '%s|TRUE|FALSE|FALSE|FALSE|' "${dist_name}" > "${rdir}/002"
   printf '0' > "${rdir}/002.rc"
   _write_response "${rdir}" 3 "" 0   # Stage 2 log tail
   _write_response "${rdir}" 4 "" 0   # Stage 3 error dialog → OK
@@ -541,6 +557,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -601,6 +618,7 @@ _src_dist() {
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${rdir}'
     export WB_GUI_NO_DESKTOP_SHORTCUT=1
+    export WB_GUI_SKIP_PREFLIGHT=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'

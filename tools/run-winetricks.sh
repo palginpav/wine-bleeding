@@ -268,6 +268,12 @@ for _verb in "${VERBS[@]}"; do
 
   # Soft timeout watchdog — emits heartbeat every 60s; warns at --timeout
   (
+    # Close inherited stdio so the watchdog's `sleep 60` does not keep the
+    # parent's output pipe open. Without this, bats harnesses that capture
+    # stdout/stderr of a child shell will block waiting for ALL pipe-writers
+    # to close — including this reparented sleep descendant — leading to the
+    # whole test hanging until external SIGKILL. (Evidence: 36_prefix_customization T40.)
+    exec </dev/null >/dev/null 2>&1
     local_elapsed=0
     while sleep 60 && kill -0 "${_WT_CHILD_PID}" 2>/dev/null; do
       local_elapsed=$(( local_elapsed + 60 ))

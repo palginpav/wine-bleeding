@@ -368,6 +368,7 @@ JSON
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSE='${WB_TEST_YAD_RESPONSE}'
     export WB_TEST_YAD_RESPONSE_RC='${WB_TEST_YAD_RESPONSE_RC}'
+    export WB_TEST_YAD_CAPTURE_STDIN=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'
@@ -821,6 +822,7 @@ PYEOF
     export WB_HOME='${WB_HOME}'
     export WB_TEST_YAD_LOG='${WB_TEST_YAD_LOG}'
     export WB_TEST_YAD_RESPONSES_DIR='${WB_TEST_YAD_RESPONSES_DIR}'
+    export WB_TEST_YAD_CAPTURE_STDIN=1
     source '${WB_LIB}/wb-paths.sh'
     source '${WB_LIB}/wb-log.sh'
     source '${WB_LIB}/wb-json.sh'

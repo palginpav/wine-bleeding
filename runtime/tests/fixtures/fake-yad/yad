@@ -43,11 +43,20 @@ if [[ -n "${WB_TEST_YAD_LOG:-}" ]]; then
   _fake_yad_reads_stdin=0
   for _fy_arg in "$@"; do
     case "${_fy_arg}" in
-      --list|--notebook|--text-info) _fake_yad_reads_stdin=1; break ;;
+      --list|--notebook) _fake_yad_reads_stdin=1; break ;;
     esac
   done
-  if [[ ${_fake_yad_reads_stdin} -eq 1 ]] && [[ ! -t 0 ]]; then
-    _fake_yad_stdin="$(cat 2>/dev/null || true)"
+  # Drain stdin ONLY for list/notebook widgets AND only when the caller has
+  # opted in by setting WB_TEST_YAD_CAPTURE_STDIN=1. Callers that pipe actual
+  # data (e.g. preflight's yad --list feed) set it; callers whose stdin is an
+  # inherited-but-quiet pipe (most wb-gui subcommands) leave it unset. Without
+  # this guard, `cat` blocks forever on the quiet pipe — historical cause of
+  # 31/32/36/39-Stage-3 hangs.
+  if [[ ${_fake_yad_reads_stdin} -eq 1 ]] \
+     && [[ "${WB_TEST_YAD_CAPTURE_STDIN:-0}" == "1" ]] \
+     && [[ ! -t 0 ]]; then
+    # Bounded read: if stdin is open-but-quiet, give up after 500ms.
+    _fake_yad_stdin="$(timeout 0.5 cat 2>/dev/null || true)"
     if [[ -n "${_fake_yad_stdin}" ]]; then
       while IFS= read -r _fy_line; do
         printf 'STDIN: %s\n' "${_fy_line}"

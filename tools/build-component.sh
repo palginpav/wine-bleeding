@@ -365,11 +365,16 @@ bc_acquire_build_lock 0
 # ---------------------------------------------------------------------------
 bc_emit_progress 0 "Starting build"
 
-bc_emit_progress 5 "Resolving MinGW toolchain"
-bc_check_env
-bc_check_glslang
-bc_check_vulkan
-bc_resolve_mingw
+if [[ "${WB_BUILD_SKIP_COMPILE:-0}" != "1" ]]; then
+  # These checks only matter when an actual meson/ninja build will run.
+  # Skipping them under WB_BUILD_SKIP_COMPILE avoids bc_resolve_mingw firing
+  # a blocking curl to musl.cc in test environments without system MinGW.
+  bc_emit_progress 5 "Resolving MinGW toolchain"
+  bc_check_env
+  bc_check_glslang
+  bc_check_vulkan
+  bc_resolve_mingw
+fi
 
 # ---------------------------------------------------------------------------
 # Compute staging dir

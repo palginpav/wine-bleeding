@@ -3319,7 +3319,8 @@ _overlay_run_install_with_log() {
   wait "${yad_pid}" 2>/dev/null || true
   wait "${installer_pid}" 2>/dev/null || installer_exit=$?
 
-  kill "${reader_pid}" 2>/dev/null || true
+  # SIGKILL — the reader's `while read ... || true` loop defeats EOF.
+  kill -9 "${reader_pid}" 2>/dev/null || true
   wait "${reader_pid}" 2>/dev/null || true
 
   rm -rf "${tmp_dir}" 2>/dev/null || true
@@ -3904,12 +3905,18 @@ _cmd_build_component() {
   # -------------------------------------------------------------------------
   # Build-env preflight gate (W4 integration point 1)
   # Silent pass-through when overall_ok=true (BLK-1 resolution).
+  # WB_GUI_SKIP_PREFLIGHT=1 lets bats fixtures bypass the dialog — otherwise
+  # a missing mingw in the test environment injects an extra yad invocation
+  # that consumes a fake-yad response slot and shifts all subsequent Stage 1
+  # responses by one, leading to an infinite validation loop.
   # -------------------------------------------------------------------------
-  local preflight_rc=0
-  wb_gui_dialog_preflight_loop "Component Builder" "components" || preflight_rc=$?
-  if [[ "${preflight_rc}" -ne 0 ]]; then
-    # User cancelled preflight — return to Dist Manager list
-    return 0
+  if [[ "${WB_GUI_SKIP_PREFLIGHT:-0}" != "1" ]]; then
+    local preflight_rc=0
+    wb_gui_dialog_preflight_loop "Component Builder" "components" || preflight_rc=$?
+    if [[ "${preflight_rc}" -ne 0 ]]; then
+      # User cancelled preflight — return to Dist Manager list
+      return 0
+    fi
   fi
 
   # -------------------------------------------------------------------------
@@ -4165,9 +4172,7 @@ Next action: reinstall wine-bleeding-wb (the RPM/DEB now ships this file) or set
   sleep "${WB_GUI_BUILD_TAIL_DRAIN_SEC:-0.5}"
   kill "${yad_pid}" 2>/dev/null || true
   wait "${yad_pid}" 2>/dev/null || true
-
-  # Shut down event reader
-  kill "${reader_pid}" 2>/dev/null || true
+  kill -9 "${reader_pid}" 2>/dev/null || true
   wait "${reader_pid}" 2>/dev/null || true
 
   # -------------------------------------------------------------------------
@@ -4468,8 +4473,8 @@ Wait for it to finish or cancel it, then try again."
   wait "${yad_pid}" 2>/dev/null || true
   local full_build_exit=0
   wait "${builder_pid}" 2>/dev/null || full_build_exit=$?
-  kill "${tracker_pid}" 2>/dev/null || true; wait "${tracker_pid}" 2>/dev/null || true
-  kill "${reader_pid}" 2>/dev/null || true;  wait "${reader_pid}" 2>/dev/null || true
+  kill -9 "${tracker_pid}" 2>/dev/null || true; wait "${tracker_pid}" 2>/dev/null || true
+  kill -9 "${reader_pid}" 2>/dev/null || true;  wait "${reader_pid}" 2>/dev/null || true
 
   # Read tracking sentinel files
   [[ -r "${log_file}.last_progress" ]] && \
