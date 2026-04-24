@@ -110,8 +110,16 @@ fi
 # Resolve WB_HOME
 # ---------------------------------------------------------------------------
 if [[ -z "${WB_HOME:-}" ]]; then
-  # Derive WB_HOME from script location (dev-tree: it's the repo root)
-  WB_HOME="${WINE_ROOT}"
+  # WINE_ROOT may be a read-only install prefix (/usr/lib/wine-bleeding) when
+  # this script ships in an installed package. Only fall back to WINE_ROOT if
+  # it looks like a dev checkout (writable). Otherwise use the XDG user-data
+  # default (matches what wb-gui would have set).
+  if [[ -w "${WINE_ROOT}" && -f "${WINE_ROOT}/tools/full-build.sh" ]]; then
+    WB_HOME="${WINE_ROOT}"
+  else
+    WB_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding"
+    mkdir -p "${WB_HOME}" 2>/dev/null || true
+  fi
 fi
 
 GLSLANG_TAG="${TAG_OVERRIDE:-${GLSLANG_TAG}}"

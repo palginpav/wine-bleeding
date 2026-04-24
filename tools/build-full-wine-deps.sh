@@ -39,7 +39,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 WINE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEPS_DIR="$WINE_ROOT/build-deps"
+# WINE_ROOT may point to an install prefix (/usr/lib/wine-bleeding) when this
+# script is invoked from an installed package. Prefer a user-writable build
+# root: WB_BUILD_DEPS_DIR override, then $WB_HOME/build-deps, then
+# $WB_WINE_SOURCE_ROOT/build-deps (user's source tree), then the legacy
+# $WINE_ROOT/build-deps (only works in a dev checkout).
+if [ -n "${WB_BUILD_DEPS_DIR:-}" ]; then
+    DEPS_DIR="$WB_BUILD_DEPS_DIR"
+elif [ -n "${WB_HOME:-}" ]; then
+    DEPS_DIR="$WB_HOME/build-deps"
+elif [ -n "${WB_WINE_SOURCE_ROOT:-}" ]; then
+    DEPS_DIR="$WB_WINE_SOURCE_ROOT/build-deps"
+else
+    DEPS_DIR="$WINE_ROOT/build-deps"
+fi
 DIST_DIR="$DEPS_DIR/dist"
 BUILD_DIR="$DEPS_DIR/build"
 MINGW_CROSS_DIR="$DEPS_DIR/x86_64-w64-mingw32-cross"

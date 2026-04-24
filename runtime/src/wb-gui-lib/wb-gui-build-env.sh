@@ -166,7 +166,14 @@ wb_gui_build_env_run_source_build() {
         _wgbe_emit "ERROR" "build-glslang.sh not found at ${glslang_script}. What happened: script missing. Why: installation incomplete. Next action: reinstall wine-bleeding."
         return 66
       fi
-      _wgbe_emit "LOG" "Starting glslang source build via ${glslang_script}"
+      # Export user-writable WB_HOME so build-glslang.sh routes its src/build/install
+      # trees under $WB_HOME/build-deps/ instead of WINE_ROOT (which is the read-only
+      # install prefix /usr/lib/wine-bleeding when invoked from the installed package).
+      local _wb_home_export
+      _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
+      mkdir -p "${_wb_home_export}" 2>/dev/null || true
+      export WB_HOME="${_wb_home_export}"
+      _wgbe_emit "LOG" "Starting glslang source build via ${glslang_script} under ${WB_HOME}/build-deps"
       local args=()
       if [[ -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
         args+=(--progress-fd "${WB_BUILD_PROGRESS_FD}")
@@ -181,7 +188,14 @@ wb_gui_build_env_run_source_build() {
         _wgbe_emit "ERROR" "build-full-wine-deps.sh not found at ${deps_script}. What happened: script missing. Why: installation incomplete. Next action: reinstall wine-bleeding."
         return 66
       fi
-      _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical)"
+      # Resolve + export a user-writable WB_HOME so the child build-full-wine-deps.sh
+      # routes its build-deps/ workspace under $WB_HOME (e.g. ~/.local/share/wine-bleeding/build-deps)
+      # instead of the read-only install prefix (/usr/lib/wine-bleeding/build-deps).
+      local _wb_home_export
+      _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
+      mkdir -p "${_wb_home_export}" 2>/dev/null || true
+      export WB_HOME="${_wb_home_export}"
+      _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical) under ${WB_HOME}/build-deps"
       "${deps_script}" --only-mingw --build-mingw-from-source
       return $?
       ;;
