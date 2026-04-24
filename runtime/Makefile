@@ -71,16 +71,46 @@ FLATPAK_MANIFEST := $(FLATPAK_DIR)/org.wine_bleeding.wb.yaml
         dist-rpm dist-deb dist-appimage dist-all
 
 test:
-	@if [[ -x "$(VENDOR_BATS)" ]]; then \
-	  echo "Using vendored bats-core at $(VENDOR_BATS)"; \
-	  "$(VENDOR_BATS)" "$(TESTS_DIR)"; \
+	@# Per-file timeout (WB_TEST_FILE_TIMEOUT_SEC, default 180s) protects the
+	@# suite against files that deadlock under the fake-yad harness when real
+	@# wb-gui event pipes exit out-of-order (known-flaky files documented in
+	@# feedback_bats_invocation.md). Without this, `make test` in CI would
+	@# run until GitHub's 6-hour job cap on any hang. `timeout` exit 124
+	@# is surfaced as a per-file failure without aborting the whole loop.
+	@set -u; \
+	if [[ -x "$(VENDOR_BATS)" ]]; then \
+	  BATS_BIN="$(VENDOR_BATS)"; echo "Using vendored bats-core at $(VENDOR_BATS)"; \
 	elif command -v bats >/dev/null 2>&1; then \
-	  echo "Using system bats on PATH"; \
-	  bats "$(TESTS_DIR)"; \
+	  BATS_BIN="$$(command -v bats)"; echo "Using system bats on PATH"; \
 	else \
 	  echo "SKIP: bats-core not found. Run: git submodule update --init -- runtime/tests/vendor/bats-core"; \
 	  exit 0; \
-	fi
+	fi; \
+	timeout_sec="$${WB_TEST_FILE_TIMEOUT_SEC:-180}"; \
+	overall=0; total=0; passed=0; failed=0; timed_out=0; \
+	fail_list=""; timeout_list=""; \
+	for f in "$(TESTS_DIR)"/*.bats; do \
+	  [[ -f "$$f" ]] || continue; \
+	  total=$$((total+1)); \
+	  name=$$(basename "$$f"); \
+	  if timeout --foreground "$$timeout_sec" "$$BATS_BIN" "$$f"; then \
+	    passed=$$((passed+1)); \
+	  else \
+	    rc=$$?; \
+	    if [[ "$$rc" -eq 124 ]]; then \
+	      timed_out=$$((timed_out+1)); timeout_list="$$timeout_list $$name"; \
+	      echo "TIMEOUT ($${timeout_sec}s): $$name"; \
+	    else \
+	      failed=$$((failed+1)); fail_list="$$fail_list $$name"; \
+	    fi; \
+	    overall=1; \
+	  fi; \
+	done; \
+	echo ""; \
+	echo "bats summary: $$total files, $$passed passed, $$failed failed, $$timed_out timed out"; \
+	[[ -n "$$fail_list" ]]    && echo "  failed:  $$fail_list"; \
+	[[ -n "$$timeout_list" ]] && echo "  timeout: $$timeout_list"; \
+	exit "$$overall"
 
 lint:
 	@if ! command -v shellcheck >/dev/null 2>&1; then \
