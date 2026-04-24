@@ -48,6 +48,56 @@ _wgbe_tools_dir() {
   printf '%s' "${self_dir}/../../../tools"
 }
 
+# _wgbe_discover_source_root — find user's wine-bleeding source checkout, if any.
+# Prints the path on stdout and sets WB_WINE_SOURCE_ROOT as a side-effect.
+# Returns 0 when found (and writable), 1 when not.
+#
+# Precedence:
+#   1. $WB_WINE_SOURCE_ROOT if already set to a valid source tree
+#   2. Common clone locations: $HOME/wine, $HOME/src/wine-bleeding,
+#      $HOME/wine-bleeding, $HOME/src/wine
+#
+# Valid source tree: has tools/full-build.sh AND runtime/VERSION AND is writable.
+_wgbe_discover_source_root() {
+  local _wgbe_candidates=(
+    "${WB_WINE_SOURCE_ROOT:-}"
+    "${HOME}/wine"
+    "${HOME}/src/wine-bleeding"
+    "${HOME}/wine-bleeding"
+    "${HOME}/src/wine"
+  )
+  local _c
+  for _c in "${_wgbe_candidates[@]}"; do
+    [[ -z "${_c}" ]] && continue
+    if [[ -f "${_c}/tools/full-build.sh" ]] \
+       && [[ -f "${_c}/runtime/VERSION" ]] \
+       && [[ -w "${_c}" ]]; then
+      export WB_WINE_SOURCE_ROOT="${_c}"
+      printf '%s' "${_c}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# _wgbe_resolve_build_deps_dir — pick the best build-deps parent for source builds.
+# Prefers the user's source checkout ($WB_WINE_SOURCE_ROOT) so build artefacts sit
+# co-located with source (per user preference — keeps everything in one tree).
+# Falls back to $WB_HOME when no source tree is available.
+_wgbe_resolve_build_deps_dir() {
+  # Discover source tree (may set WB_WINE_SOURCE_ROOT)
+  _wgbe_discover_source_root >/dev/null 2>&1 || true
+  if [[ -n "${WB_WINE_SOURCE_ROOT:-}" ]] && [[ -w "${WB_WINE_SOURCE_ROOT}" ]]; then
+    printf '%s' "${WB_WINE_SOURCE_ROOT}"
+    return 0
+  fi
+  # Fallback: user-local XDG data dir
+  local _wgbe_wb_home
+  _wgbe_wb_home="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
+  mkdir -p "${_wgbe_wb_home}" 2>/dev/null || true
+  printf '%s' "${_wgbe_wb_home}"
+}
+
 # _wgbe_preflight_bin — resolve wb-preflight.py
 _wgbe_preflight_bin() {
   # Installed: /usr/lib/wine-bleeding/libexec/wb-preflight.py
@@ -166,12 +216,10 @@ wb_gui_build_env_run_source_build() {
         _wgbe_emit "ERROR" "build-glslang.sh not found at ${glslang_script}. What happened: script missing. Why: installation incomplete. Next action: reinstall wine-bleeding."
         return 66
       fi
-      # Export user-writable WB_HOME so build-glslang.sh routes its src/build/install
-      # trees under $WB_HOME/build-deps/ instead of WINE_ROOT (which is the read-only
-      # install prefix /usr/lib/wine-bleeding when invoked from the installed package).
+      # Route glslang's work dir to the user's source checkout if available,
+      # otherwise $WB_HOME. Detection is in _wgbe_resolve_build_deps_dir.
       local _wb_home_export
-      _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
-      mkdir -p "${_wb_home_export}" 2>/dev/null || true
+      _wb_home_export="$(_wgbe_resolve_build_deps_dir)"
       export WB_HOME="${_wb_home_export}"
       _wgbe_emit "LOG" "Starting glslang source build via ${glslang_script} under ${WB_HOME}/build-deps"
       local args=()
@@ -188,12 +236,11 @@ wb_gui_build_env_run_source_build() {
         _wgbe_emit "ERROR" "build-full-wine-deps.sh not found at ${deps_script}. What happened: script missing. Why: installation incomplete. Next action: reinstall wine-bleeding."
         return 66
       fi
-      # Resolve + export a user-writable WB_HOME so the child build-full-wine-deps.sh
-      # routes its build-deps/ workspace under $WB_HOME (e.g. ~/.local/share/wine-bleeding/build-deps)
-      # instead of the read-only install prefix (/usr/lib/wine-bleeding/build-deps).
+      # Route the build-full-wine-deps.sh work dir to the user's wine-bleeding
+      # source checkout if we can find one (so build-deps sit co-located with
+      # the source tree, per user preference), falling back to $WB_HOME.
       local _wb_home_export
-      _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
-      mkdir -p "${_wb_home_export}" 2>/dev/null || true
+      _wb_home_export="$(_wgbe_resolve_build_deps_dir)"
       export WB_HOME="${_wb_home_export}"
       # Strategy: default to source build — user's explicit preference over musl.cc
       # pre-built binaries (which may fail at runtime on older/different glibc).

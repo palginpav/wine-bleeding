@@ -199,8 +199,12 @@ wb_gui_dialog_list() {
 wb_gui_dialog_log_tail() {
   local title="${1:-Building}"
   local log_file="${2:-}"
-  local rc=0
-  wb_gui_yad \
+  # Use exec so this function's subshell BECOMES yad — the PID of the
+  # backgrounded function equals yad's PID, so `kill $yad_pid` from the
+  # caller actually terminates yad. Without exec, the subshell forks yad
+  # as a child; killing the subshell leaves yad reparented to init and
+  # the dialog stays on screen showing a stale Cancel button.
+  exec wb_gui_yad \
     --text-info \
     --tail \
     --filename="${log_file}" \
@@ -208,8 +212,7 @@ wb_gui_dialog_log_tail() {
     --width=800 \
     --height=500 \
     --no-markup \
-    --button="Cancel:1" 2>/dev/null || rc=$?
-  return "${rc}"
+    --button="Cancel:1" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -1050,6 +1053,37 @@ _wb_gui_preflight_dispatch_source_build() {
         wb-build-glslang)
           # Extend PATH in the current wb-gui process so re-probe finds the new binary
           export PATH="${wb_home}/build-deps/glslang/bin:${PATH}"
+          ;;
+        build-mingw-from-source)
+          # build-full-wine-deps.sh writes a ready-to-source PATH line to
+          # $DEPS_DIR/.mingw-path after success. Source it so the re-probe
+          # finds x86_64-w64-mingw32-gcc.  DEPS_DIR may live under either
+          # $WB_WINE_SOURCE_ROOT/build-deps or $wb_home/build-deps — try both.
+          local _mingw_path_file
+          for _mingw_path_file in \
+              "${WB_WINE_SOURCE_ROOT:-/does-not-exist}/build-deps/.mingw-path" \
+              "${wb_home}/build-deps/.mingw-path"; do
+            if [[ -r "${_mingw_path_file}" ]]; then
+              # File format: `export PATH="..."`
+              # shellcheck source=/dev/null
+              source "${_mingw_path_file}"
+              break
+            fi
+          done
+          # Belt-and-braces: also add common candidates directly in case the
+          # .mingw-path file is absent (e.g. older builds).
+          for _mingw_bin_dir in \
+              "${WB_WINE_SOURCE_ROOT:-/does-not-exist}/build-deps/mingw64-cross/bin" \
+              "${wb_home}/build-deps/mingw64-cross/bin" \
+              "${WB_WINE_SOURCE_ROOT:-/does-not-exist}/build-deps/x86_64-w64-mingw32-cross/bin" \
+              "${wb_home}/build-deps/x86_64-w64-mingw32-cross/bin"; do
+            if [[ -x "${_mingw_bin_dir}/x86_64-w64-mingw32-gcc" ]]; then
+              case ":${PATH}:" in
+                *":${_mingw_bin_dir}:"*) ;;   # already on PATH
+                *) export PATH="${_mingw_bin_dir}:${PATH}" ;;
+              esac
+            fi
+          done
           ;;
         pip-install-meson)
           # Check for PATH gap (D.4)
