@@ -195,14 +195,15 @@ wb_gui_build_env_run_source_build() {
       _wb_home_export="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
       mkdir -p "${_wb_home_export}" 2>/dev/null || true
       export WB_HOME="${_wb_home_export}"
-      # Strategy: default to musl.cc pre-built download (~130 MB, ~2-5 min, near-100%
-      # success) rather than source compile (~45 min, fragile — modern host GCC often
-      # fails to bootstrap older MinGW GCC, as observed on ALT / Fedora / Arch). The
-      # script's `--only-mingw` without `--build-mingw-from-source` takes the musl.cc
-      # path. Source build is available via WB_MINGW_PREFER_SOURCE=1 for users whose
-      # glibc is too old for musl.cc binaries or who are offline.
+      # Strategy: default to source build — user's explicit preference over musl.cc
+      # pre-built binaries (which may fail at runtime on older/different glibc).
+      # build-full-wine-deps.sh already probes multiple pre-built locations before
+      # building (system PATH, $DEPS_DIR, $WB_WINE_SOURCE_ROOT/build-deps/...) and
+      # will reuse any found toolchain — only falls through to source compile when
+      # nothing is already there. Set WB_MINGW_PREFER_PREBUILT=1 to opt into the
+      # musl.cc pre-built download (~130 MB, ~2-5 min) instead of the source compile.
       local -a _mingw_args=(--only-mingw)
-      if [[ "${WB_MINGW_PREFER_SOURCE:-0}" == "1" ]]; then
+      if [[ "${WB_MINGW_PREFER_PREBUILT:-0}" != "1" ]]; then
         _mingw_args+=(--build-mingw-from-source)
         _wgbe_emit "LOG" "Starting MinGW-w64 source build (30–60 min typical) under ${WB_HOME}/build-deps"
       else
@@ -223,6 +224,21 @@ wb_gui_build_env_run_source_build() {
         fi
       else
         "${deps_script}" "${_mingw_args[@]}" || _mingw_rc=$?
+      fi
+      # On failure, dump the tail of mingw-w64-build's build.log into the
+      # progress fd so the user sees the actual compile error (the script
+      # merely says "error, check build.log for details" and exits; without
+      # this tail, the real C/C++ compile failure is locked inside the log).
+      if [[ "${_mingw_rc}" -ne 0 && -n "${WB_BUILD_PROGRESS_FD:-}" ]]; then
+        local _mingw_build_log="${WB_HOME}/build-deps/mingw-build/build.log"
+        if [[ -r "${_mingw_build_log}" ]]; then
+          _wgbe_emit "ERROR" "MinGW source build failed. Last 80 lines of ${_mingw_build_log}:"
+          # Explicit `1>&N` (not `>&N`) so shellcheck SC2261 isn't confused about
+          # stdout vs stderr routing when another redirect targets stderr.
+          tail -n 80 "${_mingw_build_log}" 1>&"${WB_BUILD_PROGRESS_FD}" 2>/dev/null || true
+          _wgbe_emit "ERROR" "End of build.log tail. Full log: ${_mingw_build_log}"
+          _wgbe_emit "ERROR" "Workarounds: (1) install distro's mingw package (see preflight Fix column); (2) set WB_MINGW_PREFER_PREBUILT=1 and retry to download pre-built binaries from musl.cc (~130 MB); (3) inspect the build.log for the specific compiler error."
+        fi
       fi
       return "${_mingw_rc}"
       ;;
