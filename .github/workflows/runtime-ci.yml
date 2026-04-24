@@ -33,7 +33,7 @@ jobs:
       image: bash:${{ matrix.bash-version }}
     steps:
       - name: Install runtime deps (before checkout so git is available)
-        run: apk add --no-cache bash ncurses jq grep coreutils findutils tar gzip sed python3 wget curl ca-certificates make git flock
+        run: apk add --no-cache bash ncurses jq grep coreutils findutils tar gzip zstd sed python3 wget curl ca-certificates make git flock
 
       - uses: actions/checkout@v4
 
@@ -42,8 +42,16 @@ jobs:
           wget -qO- https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz | tar xz
           ./bats-core-1.11.1/install.sh /usr/local
 
+      - name: Create non-root test user
+        # wb-tools-manager.py refuses to run as euid=0 (matches production
+        # invariant: managed tools live under HOME, not /root). Run bats as a
+        # regular user so 40_tools_manager tests exercise the real read path.
+        run: |
+          adduser -D -u 1001 tester
+          chown -R tester:tester "${GITHUB_WORKSPACE}"
+
       - name: Run bats tests
-        run: make -C runtime test
+        run: su tester -c "make -C runtime test"
 
   schema-check:
     name: schema-check (check-jsonschema)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WB_VERSION="1.7.0"
+WB_VERSION="1.7.1-dev"
 
 # Resolve lib directory — Option A fallback for system-package installs.
 # When wb lives at /usr/bin/wb, the sibling wb-lib/ doesn't exist there;
