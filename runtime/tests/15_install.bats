@@ -41,14 +41,16 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. wb --version returns 1.7.0 after install
+# 2. wb --version after install returns the version from runtime/VERSION
 # ---------------------------------------------------------------------------
-@test "install: wb --version returns 1.7.0" {
+@test "install: wb --version matches runtime/VERSION" {
+  local expected
+  expected="$(tr -d '[:space:]' < "${BATS_TEST_DIRNAME}/../VERSION")"
   run bash "${INSTALL_SH}"
   [ "${status}" -eq 0 ]
   run "${WB_HOME}/bin/wb" --version
   [ "${status}" -eq 0 ]
-  [ "${output}" = "wb 1.7.0" ]
+  [ "${output}" = "wb ${expected}" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -92,13 +94,15 @@ teardown() {
 # ---------------------------------------------------------------------------
 @test "install: --prefix installs to custom path" {
   local custom_path="${TEST_HOME}/custom-wb"
+  local expected
+  expected="$(tr -d '[:space:]' < "${BATS_TEST_DIRNAME}/../VERSION")"
   run bash "${INSTALL_SH}" --prefix "${custom_path}"
   [ "${status}" -eq 0 ]
   [ -d "${custom_path}/bin" ]
   [ -f "${custom_path}/bin/wb" ]
   run "${custom_path}/bin/wb" --version
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"1.7.0"* ]]
+  [[ "${output}" == *"${expected}"* ]]
 }
 
 # ---------------------------------------------------------------------------
