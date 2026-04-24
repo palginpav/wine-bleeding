@@ -192,16 +192,26 @@ jobs:
           echo "SHA-256: ${SHA}"
           echo "Size:    ${SIZE} bytes"
 
-      - name: Write sha256 sidecar file
+      - name: Stage tarball + sidecars into per-cell upload dir
+        # upload-artifact@v4 with multiple absolute paths inside a container
+        # job drops 2 of 3 files (LCA collapses to `/` and only the first path
+        # is located on disk from the host). Staging all three files into a
+        # single per-cell directory and uploading that directory avoids the
+        # multi-path resolution issue entirely.
+        id: stage
         run: |
+          STAGE_DIR="${GITHUB_WORKSPACE}/upload-stage/${{ matrix.tool }}-${{ matrix.flavor }}"
+          mkdir -p "${STAGE_DIR}"
+          TARBALL="${{ steps.tool_version.outputs.tarball_name }}"
+
+          # Write sha256 sidecar into the staging dir.
           printf '%s  %s\n' \
             "${{ steps.package.outputs.sha256 }}" \
-            "${{ steps.tool_version.outputs.tarball_name }}" \
-            > "${GITHUB_WORKSPACE}/${{ steps.tool_version.outputs.tarball_name }}.sha256"
+            "${TARBALL}" \
+            > "${STAGE_DIR}/${TARBALL}.sha256"
 
-      - name: Write metadata sidecar (per-artifact JSON)
-        run: |
-          cat > "${GITHUB_WORKSPACE}/${{ steps.tool_version.outputs.tarball_name }}.meta.json" <<JSON
+          # Write metadata sidecar into the staging dir.
+          cat > "${STAGE_DIR}/${TARBALL}.meta.json" <<JSON
           {
             "tool": "${{ matrix.tool }}",
             "version": "${{ steps.tool_version.outputs.tool_version }}",
@@ -209,21 +219,26 @@ jobs:
             "flavor": "${{ matrix.flavor }}",
             "glibc_min": "${{ matrix.glibc_min }}",
             "glibc_max": null,
-            "tarball_name": "${{ steps.tool_version.outputs.tarball_name }}",
+            "tarball_name": "${TARBALL}",
             "sha256": "${{ steps.package.outputs.sha256 }}",
             "size_bytes": ${{ steps.package.outputs.size_bytes }},
             "build_host": "${{ matrix.container }}"
           }
           JSON
 
+          # Move the tarball into the staging dir (saves disk vs. copy for
+          # the 170 MB mingw tarballs).
+          mv "${GITHUB_WORKSPACE}/${TARBALL}" "${STAGE_DIR}/${TARBALL}"
+
+          echo "stage_dir=${STAGE_DIR}" >> "${GITHUB_OUTPUT}"
+          echo "Staged files:"
+          ls -lh "${STAGE_DIR}/"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: "${{ matrix.tool }}-${{ matrix.flavor }}"
-          path: |
-            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}
-            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}.sha256
-            ${{ github.workspace }}/${{ steps.tool_version.outputs.tarball_name }}.meta.json
+          path: ${{ steps.stage.outputs.stage_dir }}
           retention-days: 7
           if-no-files-found: error
 
