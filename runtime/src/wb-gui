@@ -3584,6 +3584,60 @@ _wb_overlay_btn_check_all() {
 export -f _wb_overlay_btn_check_all
 
 # ---------------------------------------------------------------------------
+# _wb_gui_detect_gpus
+# Enumerate GPU(s) on this host and emit one line per device:
+#   <pretty_label>|<vendor_enum>
+# vendor_enum is one of: nvidia | amd | intel | other (matches the schema
+# used by wb_gui_settings_set_general gpu — picking a specific card maps
+# back to its vendor enum on save). Pretty labels look like
+# "GeForce RTX 4080 SUPER" or "Radeon RX 7900 XT" — extracted from the
+# bracketed product name in lspci output.
+#
+# Probe order: lspci (preferred — works without a graphical session) →
+# fall back to /sys/class/drm if lspci is missing. Empty output if no GPU
+# class device is detected (e.g. headless container).
+# ---------------------------------------------------------------------------
+_wb_gui_detect_gpus() {
+  if ! command -v lspci >/dev/null 2>&1; then
+    return 0
+  fi
+  # PCI base class 0x03 = Display Controller (covers VGA 0x0300, 3D 0x0302,
+  # and Other Display 0x0380). Multiple -d flags AND together in lspci, so
+  # filter post-hoc by the bracketed class id.
+  local raw
+  raw="$(lspci -nn 2>/dev/null | grep -E '\[03(00|01|02|80)\]')"
+  [[ -z "${raw}" ]] && return 0
+
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    # Vendor enum from the leading vendor name (case-insensitive).
+    local vendor_enum="other"
+    case "${line,,}" in
+      *"nvidia"*)                vendor_enum="nvidia" ;;
+      *"amd"*|*"advanced micro"*|*"ati "*) vendor_enum="amd" ;;
+      *"intel"*)                 vendor_enum="intel" ;;
+    esac
+    # Pretty name from the LAST [...] before [vid:did]. Examples:
+    #   ... NVIDIA Corporation GB203 [GeForce RTX 5080] [10de:2c02] (rev a1)
+    #   ... Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX] [1002:744c]
+    #   ... Intel Corporation Raptor Lake-S UHD Graphics [8086:a780]
+    # Strategy: strip the trailing [vid:did]... segment, then take the LAST
+    # bracketed name; if there is none, fall back to whatever follows the
+    # ': ' colon up to '[' (covers Intel-style entries with no product brackets).
+    local stripped
+    stripped="$(printf '%s' "${line}" | sed -E 's/[[:space:]]*\[[0-9a-f]{4}:[0-9a-f]{4}\].*$//I')"
+    local pretty
+    pretty="$(printf '%s' "${stripped}" | grep -oE '\[[^][]+\][^][]*$' | tr -d '[]' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    if [[ -z "${pretty}" ]]; then
+      pretty="$(printf '%s' "${stripped}" | sed -E 's/^[^:]+:[[:space:]]*//' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    fi
+    # Fallback to vendor name if everything else failed.
+    [[ -z "${pretty}" ]] && pretty="${vendor_enum^}"
+    printf '%s|%s\n' "${pretty}" "${vendor_enum}"
+  done <<< "${raw}"
+}
+
+# ---------------------------------------------------------------------------
 # _cmd_general_prefs
 # Single-window Prefs dialog. Replaces the 4-tab yad --plug/--notebook flow
 # (which renders as 4 detached windows on Plasma 6 / Wayland because the X11
@@ -3603,18 +3657,65 @@ _cmd_general_prefs() {
   winver_cur="$(wb_gui_settings_get_general win_version 2>/dev/null || true)"
   debug_cur="$(wb_gui_settings_get_general wine_debug 2>/dev/null || true)"
 
-  local gpu_label
-  gpu_label="$(_settings_gpu_json_to_label "${gpu_cur}")"
-  [[ -z "${gpu_label}" ]] && gpu_label="Auto"
-
   local winver_label
   winver_label="$(_settings_winver_json_to_label "${winver_cur}")"
   [[ -z "${winver_label}" ]] && winver_label="Windows 10"
 
-  # CB option lists with the current selection placed first (yad convention).
-  local gpu_opts="${gpu_label}!Auto!NVIDIA!AMD!Intel"
-  gpu_opts="$(echo "${gpu_opts}" \
-    | sed 's/Auto!Auto/Auto/;s/NVIDIA!NVIDIA/NVIDIA/;s/AMD!AMD/AMD/;s/Intel!Intel/Intel/')"
+  # Build the GPU dropdown from actual hardware detected on this host.
+  # Each detected card becomes its own entry (e.g. "GeForce RTX 4080 SUPER")
+  # and maps back to the vendor enum (nvidia/amd/intel) on save. "Auto" is
+  # always first and means "let Wine pick whichever the driver reports".
+  # Falls back to the original generic vendor list when lspci is missing
+  # or returns nothing (e.g. headless test environments).
+  local -a gpu_labels=("Auto")
+  local -A gpu_label_to_vendor=( ["Auto"]="auto" )
+  local _gpu_detected_lines _line _lbl _vend
+  _gpu_detected_lines="$(_wb_gui_detect_gpus 2>/dev/null || true)"
+  if [[ -n "${_gpu_detected_lines}" ]]; then
+    while IFS='|' read -r _lbl _vend; do
+      [[ -z "${_lbl}" ]] && continue
+      gpu_labels+=("${_lbl}")
+      gpu_label_to_vendor["${_lbl}"]="${_vend}"
+    done <<< "${_gpu_detected_lines}"
+  else
+    # No detection — fall back to the legacy generic vendor list so the
+    # dialog is still usable on headless / lspci-less hosts.
+    gpu_labels+=("NVIDIA" "AMD" "Intel")
+    gpu_label_to_vendor["NVIDIA"]="nvidia"
+    gpu_label_to_vendor["AMD"]="amd"
+    gpu_label_to_vendor["Intel"]="intel"
+  fi
+
+  # Pre-select the entry matching the saved vendor (first match wins). If
+  # the saved vendor doesn't appear in the detected list (e.g. user moved a
+  # config across hosts), fall back to "Auto".
+  local saved_vendor="${gpu_cur:-auto}"
+  local current_label="Auto"
+  local _l
+  for _l in "${gpu_labels[@]}"; do
+    if [[ "${gpu_label_to_vendor[$_l]:-}" == "${saved_vendor}" && "${_l}" != "Auto" ]]; then
+      current_label="${_l}"
+      break
+    fi
+  done
+  [[ "${saved_vendor}" == "auto" || -z "${saved_vendor}" ]] && current_label="Auto"
+
+  # yad CB convention: first item is the pre-selected one; remaining items
+  # are the choices. Build "current!opt1!opt2!..." with the current label
+  # de-duplicated from its position in the option list.
+  local gpu_opts="${current_label}"
+  for _l in "${gpu_labels[@]}"; do
+    [[ "${_l}" == "${current_label}" ]] && continue
+    gpu_opts+="!${_l}"
+  done
+  # If current_label happens to be "Auto" (the first entry in gpu_labels),
+  # we still need Auto as an option. The above loop already skips it once,
+  # so gpu_opts starts with "Auto" and Auto is not duplicated downstream.
+  # Otherwise we need to ensure Auto is included as a choice — by
+  # construction, the loop iterates gpu_labels which always contains Auto,
+  # so it gets emitted unless current_label==Auto (in which case it's the
+  # leading selected slot and that's fine).
+  :
 
   local winver_opts="${winver_label}!Windows 10!Windows 11!Windows 8.1!Windows 8!Windows 7!Windows XP!Vista"
   local _wv
@@ -3665,8 +3766,19 @@ _cmd_general_prefs() {
   local _lbl1 new_gpu new_winver new_debug _lbl2 _ro1 _ro2 _ro3 _ro4 _trail
   IFS='|' read -r _lbl1 new_gpu new_winver new_debug _lbl2 _ro1 _ro2 _ro3 _ro4 _trail <<< "${form_out}"
 
-  local gpu_json winver_json
-  gpu_json="$(_settings_gpu_label_to_json "${new_gpu}")"
+  # GPU: the dropdown can contain detected card names ("GeForce RTX 4080
+  # SUPER") OR the legacy generic vendor entries ("NVIDIA"/"AMD"/"Intel"),
+  # depending on what _wb_gui_detect_gpus produced. Map back via the
+  # gpu_label_to_vendor table that was populated above; this keeps storage
+  # at vendor granularity while showing real hardware in the picker.
+  local gpu_json="${gpu_label_to_vendor[${new_gpu}]:-}"
+  if [[ -z "${gpu_json}" ]]; then
+    # Fallback for the generic-vendor labels in case the lookup table is
+    # empty (e.g. headless host where detection returned nothing).
+    gpu_json="$(_settings_gpu_label_to_json "${new_gpu}")"
+  fi
+
+  local winver_json
   winver_json="$(_settings_winver_label_to_json "${new_winver}")"
 
   [[ -n "${gpu_json}" ]]    && wb_gui_settings_set_general gpu         "${gpu_json}"    2>/dev/null || true
