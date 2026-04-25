@@ -4780,30 +4780,20 @@ The dist list now shows ACTIVE in the first column for this row."
         ;;
       # ------------------------------------------------------------------
       25)
-        # Deactivate — clear the WINE-BLEEDING alias. Companion to button-20
-        # so the user can return to a "no dist active" state from the UI
-        # (yad --list buttons are static; we can't toggle Activate's label
-        # based on row selection, so both buttons are always visible and
-        # context-sensitive in their handlers).
-        local _dm _dn _ds _dw _dlb _dp _db _dtrail
-        IFS='|' read -r _dm _dn _ds _dw _dlb _dp _db _dtrail <<< "${yad_out}"
-        local d_name="${_dn}"
+        # Deactivate — clear the WINE-BLEEDING alias. There is at most ONE
+        # active dist at a time, so this button operates on "whichever dist
+        # is currently active" and does NOT require a row selection. The
+        # earlier version asked the user to "Select a dist row first", which
+        # didn't match what the button actually does (and yad-list's
+        # selection state is also flaky when the user clicks the button
+        # without first clicking on a row).
+        local active_now
+        active_now="$(jq -r '.active // empty' "${wb_home}/dists.json" 2>/dev/null || true)"
+        if [[ -z "${active_now}" || "${active_now}" == "null" ]]; then
+          wb_gui_dialog_info "No active dist" \
+            "There is no active distribution to deactivate.
 
-        if [[ -z "${d_name}" || "${d_name}" == "No dists registered" ]]; then
-          wb_gui_dialog_info "Deactivate" "Select a dist row first."
-          continue
-        fi
-
-        # Guard: only the currently-active dist can be deactivated. Reading
-        # from the registry rather than the row's marker so a stale render
-        # can't trick us into clearing the alias when nothing is active.
-        local d_is_active
-        d_is_active="$(jq -r --arg n "${d_name}" \
-          '.dists[] | select(.name == $n) | .active' \
-          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
-        if [[ "${d_is_active}" != "true" ]]; then
-          wb_gui_dialog_info "Not active" \
-            "${d_name} is not currently the active distribution. Nothing to deactivate."
+The Dist Manager's ACTIVE column on the left tells you which dist (if any) is the current one."
           continue
         fi
 
@@ -4811,10 +4801,10 @@ The dist list now shows ACTIVE in the first column for this row."
         deact_err="$(wb_gui_dist_deactivate 2>&1)" || deact_rc=$?
         if [[ "${deact_rc}" -ne 0 ]]; then
           wb_gui_dialog_error "Deactivate Failed" \
-            "Failed to deactivate: ${deact_err}."
+            "Failed to deactivate '${active_now}': ${deact_err}."
         else
           wb_gui_dialog_info "Deactivated" \
-            "${d_name} is no longer active. No dist is currently active.
+            "${active_now} is no longer active. No dist is currently active.
 
 wb run will refuse to launch apps until you Activate a dist again."
         fi
