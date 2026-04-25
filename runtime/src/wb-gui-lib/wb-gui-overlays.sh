@@ -40,6 +40,64 @@ _wb_gui_overlays_root() {
   printf '%s' "${wb_home}/overlays"
 }
 
+# ---------------------------------------------------------------------------
+# wb_gui_overlays_system_installed <name>
+# Returns 0 if the system package for an overlay is detectable, non-zero
+# otherwise. Used by the per-app Settings overlay panel to know whether to
+# offer "System" as a usable source (vs. silently letting the user pick a
+# missing system overlay and have it fail at app launch).
+#
+# Detection per overlay:
+#   mangohud   — command -v mangohud (CLI wrapper) OR libMangoHud.so on
+#                LD library path; checks PKG_CONFIG path for the loader too
+#   vkbasalt   — libvkbasalt.so anywhere under common Vulkan ICD/layer paths,
+#                OR a vkBasalt.json layer manifest under the system Vulkan
+#                explicit_layer.d (matches both /usr/share and /usr/local).
+#                vkbasalt has no CLI; its presence is detected purely by the
+#                Vulkan implicit-layer manifest the user's compositor would
+#                load via VK_LAYER_PATH.
+#   optiscaler — always returns 1 (Windows DLL, no system equivalent).
+# ---------------------------------------------------------------------------
+wb_gui_overlays_system_installed() {
+  local name="${1:-}"
+  case "${name}" in
+    mangohud)
+      command -v mangohud >/dev/null 2>&1 && return 0
+      # Library probe: look in standard linker search paths.
+      local _ld
+      for _ld in /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu \
+                 /usr/lib/i386-linux-gnu /usr/local/lib /usr/local/lib64; do
+        [[ -e "${_ld}/libMangoHud.so" ]] && return 0
+        [[ -e "${_ld}/mangohud/libMangoHud.so" ]] && return 0
+      done
+      return 1
+      ;;
+    vkbasalt)
+      local _vk
+      for _vk in /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu \
+                 /usr/lib/i386-linux-gnu /usr/local/lib /usr/local/lib64; do
+        [[ -e "${_vk}/libvkbasalt.so" ]] && return 0
+      done
+      # Vulkan implicit-layer manifest probe (the canonical install marker)
+      local _man
+      for _man in /usr/share/vulkan/implicit_layer.d \
+                  /usr/local/share/vulkan/implicit_layer.d \
+                  /etc/vulkan/implicit_layer.d; do
+        [[ -e "${_man}/vkBasalt.json" ]] && return 0
+        [[ -e "${_man}/vkBasalt.x86_64.json" ]] && return 0
+        [[ -e "${_man}/vkBasalt.i686.json" ]] && return 0
+      done
+      return 1
+      ;;
+    optiscaler)
+      return 1  # Windows DLL — no system package
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 _wb_gui_overlays_cache() {
   local wb_home
   wb_home="$(_wb_gui_overlays_wb_home)"
@@ -474,6 +532,25 @@ wb_gui_overlays_install() {
   overlay_root="$(_wb_gui_overlays_root)"
   local cache_dir
   cache_dir="$(_wb_gui_overlays_cache)"
+
+  # Ensure the install root + cache dir exist. fetch-overlay.sh's --dest
+  # validator (tools/fetch-overlay.sh:218) refuses to proceed with
+  # "Invalid --dest '<path>': does not exist or is not a directory" if the
+  # target dir is missing — and on a fresh wb-gui install nothing has
+  # populated $WB_HOME/overlays yet, so the very first overlay install
+  # always failed. Create the layout here so subsequent installs find it.
+  if [[ ! -d "${overlay_root}" ]]; then
+    mkdir -p "${overlay_root}" 2>/dev/null || {
+      echo "wb_gui_overlays_install: cannot create overlay root '${overlay_root}'" >&2
+      return 1
+    }
+  fi
+  if [[ ! -d "${cache_dir}" ]]; then
+    mkdir -p "${cache_dir}" 2>/dev/null || {
+      echo "wb_gui_overlays_install: cannot create overlay cache '${cache_dir}'" >&2
+      return 1
+    }
+  fi
 
   # Locate fetch-overlay.sh.
   # Preference order: WB_OVERLAY_FETCHER override → WB_TOOLS_DIR (set by wb-gui) →

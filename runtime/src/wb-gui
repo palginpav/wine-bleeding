@@ -4084,28 +4084,67 @@ _cmd_app_prefs() {
     printf '%s' "${v:-${def}}"
   }
 
+  # Probe the host once for system-installed overlays. Used both to label the
+  # source-CB option and to refuse "System" if the package isn't actually
+  # there (without this check the dropdown unconditionally offered "System"
+  # and let the user select it; the launch then failed because nothing
+  # provides libMangoHud.so / vkBasalt at runtime).
+  local _sys_mh="0" _sys_vkb="0"
+  wb_gui_overlays_system_installed mangohud && _sys_mh="1"
+  wb_gui_overlays_system_installed vkbasalt && _sys_vkb="1"
+
+  # Build the source CB. yad's CB convention: first item is pre-selected,
+  # remainder are choices. Hide "System" entirely when the system package
+  # isn't installed — picking it would be a footgun. The Bundled-only case
+  # still needs at least one option so yad renders the field; show
+  # "Bundled" as a single option (yad permits a one-item CB).
+  local _sys_mh_label="System"
+  [[ "${_sys_mh}" == "0" ]] && _sys_mh_label=""
+  local _sys_vkb_label="System"
+  [[ "${_sys_vkb}" == "0" ]] && _sys_vkb_label=""
+
   local mh_enabled_bool mh_enabled_chk mh_bundled mh_source_cb mh_version_cb mh_action mh_config_path mh_label
   mh_enabled_bool="$(_ov_field "${overlay_json_str}" '.mangohud.enabled' 'false')"
   mh_enabled_chk="FALSE"; [[ "${mh_enabled_bool}" == "true" ]] && mh_enabled_chk="TRUE"
   mh_bundled="$(_ov_field "${overlay_json_str}" '.mangohud.bundled' 'true')"
-  mh_source_cb="Bundled!System"; [[ "${mh_bundled}" == "false" ]] && mh_source_cb="System!Bundled"
+  if [[ "${_sys_mh}" == "1" ]]; then
+    mh_source_cb="Bundled!System"
+    [[ "${mh_bundled}" == "false" ]] && mh_source_cb="System!Bundled"
+  else
+    # System unavailable — only Bundled is a real choice. Force Bundled.
+    mh_source_cb="Bundled"
+    mh_bundled="true"
+  fi
   mh_version_cb="$(_overlay_build_version_cb mangohud)"
   mh_action="$(_overlay_action_label mangohud)"
   mh_config_path="$(_ov_field "${overlay_json_str}" '.mangohud.config_path' '')"
   mh_label="MangoHud (FPS/frametime HUD)"
-  [[ "${mh_enabled_chk}" == "TRUE" && "${mh_bundled}" == "true" && "${mh_action}" == "Install" ]] \
-    && mh_label="MangoHud (FPS/frametime HUD) [not installed]"
+  if [[ "${_sys_mh}" == "1" ]]; then
+    mh_label="MangoHud (FPS/frametime HUD) — system package detected"
+  elif [[ "${mh_enabled_chk}" == "TRUE" && "${mh_bundled}" == "true" && "${mh_action}" == "Install" ]]; then
+    mh_label="MangoHud (FPS/frametime HUD) [not installed]"
+  fi
 
   local vkb_enabled_bool vkb_enabled_chk vkb_bundled vkb_source_cb vkb_version_cb vkb_action vkb_label
   vkb_enabled_bool="$(_ov_field "${overlay_json_str}" '.vkbasalt.enabled' 'false')"
   vkb_enabled_chk="FALSE"; [[ "${vkb_enabled_bool}" == "true" ]] && vkb_enabled_chk="TRUE"
   vkb_bundled="$(_ov_field "${overlay_json_str}" '.vkbasalt.bundled' 'true')"
-  vkb_source_cb="Bundled!System"; [[ "${vkb_bundled}" == "false" ]] && vkb_source_cb="System!Bundled"
+  if [[ "${_sys_vkb}" == "1" ]]; then
+    vkb_source_cb="Bundled!System"
+    [[ "${vkb_bundled}" == "false" ]] && vkb_source_cb="System!Bundled"
+  else
+    vkb_source_cb="Bundled"
+    vkb_bundled="true"
+  fi
   vkb_version_cb="$(_overlay_build_version_cb vkbasalt)"
   vkb_action="$(_overlay_action_label vkbasalt)"
   vkb_label="VKBasalt (post-FX shaders)"
-  [[ "${vkb_enabled_chk}" == "TRUE" && "${vkb_bundled}" == "true" && "${vkb_action}" == "Install" ]] \
-    && vkb_label="VKBasalt (post-FX shaders) [not installed]"
+  if [[ "${_sys_vkb}" == "1" ]]; then
+    vkb_label="VKBasalt (post-FX shaders) — system package detected"
+  elif [[ "${vkb_enabled_chk}" == "TRUE" && "${vkb_bundled}" == "true" && "${vkb_action}" == "Install" ]]; then
+    vkb_label="VKBasalt (post-FX shaders) [not installed]"
+  fi
+  : "${_sys_mh_label}" "${_sys_vkb_label}"
 
   local osc_enabled_bool osc_enabled_chk osc_version_cb osc_action
   osc_enabled_bool="$(_ov_field "${overlay_json_str}" '.optiscaler.enabled' 'false')"
