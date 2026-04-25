@@ -535,44 +535,21 @@ wb_gui_dist_add_external() {
     return 1
   fi
 
-  # Read wine version for caching in plugin JSON (use the copy, not the source).
-  local wine_version=""
-  wine_version="$("${local_dist_path}/bin/wine" --version 2>/dev/null | head -1 || true)"
-
-  # Build plugin JSON pointing at the LOCAL copy, not the external source.
-  local plugin_dir="${wb_home}/plugins/runtimes.d"
-  mkdir -p "${plugin_dir}"
-
-  local plugin_json
-  plugin_json="$(jq -cn \
-    --arg schema "1" \
-    --arg name "${name}" \
-    --arg path "${local_dist_path}" \
-    --arg wine_version "${wine_version}" \
-    '{schema: ($schema | tonumber), name: $name, path: $path, wine_version: $wine_version}')"
-
-  # Delegate to wb runtime register (security gate)
-  # wb runtime register expects a plugin JSON file path
-  local tmp_plugin
-  tmp_plugin="$(mktemp "${plugin_dir}/.wb_plugin_tmp_XXXXXX.json")"
-  printf '%s\n' "${plugin_json}" > "${tmp_plugin}"
-
-  local register_ok=0
-  if command -v wb &>/dev/null; then
-    if wb runtime register "${tmp_plugin}" 2>/dev/null; then
-      register_ok=1
-    fi
-  else
-    # Fallback: place JSON directly (e.g., in test environments)
-    mv -f "${tmp_plugin}" "${plugin_dir}/${name}.json"
-    register_ok=1
-  fi
-  rm -f "${tmp_plugin}" 2>/dev/null || true
-
-  if [[ "${register_ok}" -eq 0 ]]; then
-    echo "wb_gui_dist_add_external: wb runtime register failed" >&2
-    return 1
-  fi
+  # The dist now lives at ${wb_home}/dist/${name}/ — the native auto-scan in
+  # wb_gui_dist_registry_refresh picks it up by directory presence alone, so
+  # there is no need to write a plugins/runtimes.d/<name>.json pointer.
+  # Doing so would register the same dist twice (once as native by location,
+  # once as external by plugin JSON), giving the user two duplicate rows in
+  # the Dist Manager and confusing every consumer that expects names to be
+  # unique. Provenance (the original source path) is recorded in a sidecar
+  # file inside the dist itself so it survives across registry rebuilds.
+  cat > "${local_dist_path}/.wb_external_source.json" <<JSON
+{
+  "schema": 1,
+  "added_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "original_source": "${canon_path}"
+}
+JSON
 
   wb_gui_dist_registry_refresh
   return 0

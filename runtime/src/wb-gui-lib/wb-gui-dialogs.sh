@@ -1017,12 +1017,17 @@ Wait for it to finish or cancel it, then try again."
         # Security requirement: NEVER auto-install. Always confirm via list dialog.
         rm -f "${json_file}" 2>/dev/null || true
 
-        # Run check --json to get available updates
-        local _chk_tmp
+        # Run check --json to get available updates. Capture stderr separately
+        # so we can surface the manager's actual error message in the dialog
+        # when something fails — without it, every failure looks the same and
+        # the user has no way to diagnose (e.g. a transient TLS handshake vs.
+        # a corrupt cache vs. an OS-level write error all render identically).
+        local _chk_tmp _chk_err
         _chk_tmp="$(mktemp /tmp/wb-tools-check-XXXXXX.json)"
+        _chk_err="$(mktemp /tmp/wb-tools-check-XXXXXX.err)"
         local _chk_rc=0
         wb_gui_build_env_run_source_build "tools-manager-check" \
-          > "${_chk_tmp}" 2>/dev/null || _chk_rc=$?
+          > "${_chk_tmp}" 2>"${_chk_err}" || _chk_rc=$?
 
         case "${_chk_rc}" in
           0)
@@ -1030,13 +1035,13 @@ Wait for it to finish or cancel it, then try again."
             wb_gui_dialog_info "Build tools up to date" \
               "All managed build tools are up to date.
 No new versions are available in the manifest."
-            rm -f "${_chk_tmp}"
+            rm -f "${_chk_tmp}" "${_chk_err}"
             continue
             ;;
           10)
             # Updates available — show selection dialog
             _wb_gui_preflight_check_updates_dialog "${_chk_tmp}" || true
-            rm -f "${_chk_tmp}"
+            rm -f "${_chk_tmp}" "${_chk_err}"
             continue
             ;;
           66)
@@ -1045,30 +1050,38 @@ No new versions are available in the manifest."
               "What happened: wb-tools-manager.py could not be located.
 Why: the installation may be incomplete.
 Next action: reinstall wine-bleeding, then try again."
-            rm -f "${_chk_tmp}"
+            rm -f "${_chk_tmp}" "${_chk_err}"
             continue
             ;;
           *)
-            # Map known wb-tools-manager.py exit codes to actionable messages.
-            # Codes that can land here: 2 (network/TLS/filesystem),
-            # 5 (manifest parse error / corrupt cache), 99 (internal error).
-            # Anything else is unexpected.
-            local _chk_why _chk_next
+            # Pull the actual error from the manager's stderr — it always
+            # writes a Phase-B `ERROR: <human-readable cause>` line before
+            # returning non-zero. Show that to the user so they can act on
+            # the real failure, not a generic per-code template.
+            local _chk_why
+            _chk_why="$(grep -m1 '^ERROR:' "${_chk_err}" 2>/dev/null \
+              | sed 's/^ERROR: //' || true)"
+            if [[ -z "${_chk_why}" ]]; then
+              # Fallback: dump the last few stderr lines so the user has
+              # SOME signal even when the manager bypassed the reporter.
+              _chk_why="$(tail -n 5 "${_chk_err}" 2>/dev/null \
+                | tr '\n' ' ' | sed 's/  */ /g' || true)"
+              [[ -z "${_chk_why}" ]] \
+                && _chk_why="(no diagnostic from wb-tools-manager.py — see ${_chk_err})"
+            fi
+
+            local _chk_next
             case "${_chk_rc}" in
               2)
-                _chk_why="Network, TLS, or filesystem error reaching the manifest."
-                _chk_next="Verify network connectivity and that your system trusts GitHub's TLS certificate, then retry."
+                _chk_next="If the message above mentions network/TLS — check connectivity. If it mentions the tools directory — your WB_HOME or HOME environment may be misconfigured."
                 ;;
               5)
-                _chk_why="The manifest JSON could not be parsed (corrupt cache or upstream regression)."
-                _chk_next="Delete the local cache (rm -rf ~/.local/share/wine-bleeding/build-tools/manifest.cache.*) and click Check for updates again."
+                _chk_next="The local manifest cache may be corrupt. Run: rm -rf \"${WB_HOME:-~/.local/share/wine-bleeding}/build-tools/manifest.cache.*\" and retry."
                 ;;
               99)
-                _chk_why="Internal error in wb-tools-manager.py (unhandled exception)."
-                _chk_next="Run wb-tools-manager.py check --json in a terminal to see the traceback, then file a bug."
+                _chk_next="Internal error. Run wb-tools-manager.py check --json in a terminal to see the traceback, then file a bug."
                 ;;
               *)
-                _chk_why="Unexpected exit code from wb-tools-manager.py."
                 _chk_next="Run wb-tools-manager.py check --json in a terminal to see the actual error."
                 ;;
             esac
@@ -1077,7 +1090,7 @@ Next action: reinstall wine-bleeding, then try again."
 Why: ${_chk_why}
 Next action: ${_chk_next}
 You can still use Build from source buttons to install tools locally."
-            rm -f "${_chk_tmp}"
+            rm -f "${_chk_tmp}" "${_chk_err}"
             continue
             ;;
         esac
