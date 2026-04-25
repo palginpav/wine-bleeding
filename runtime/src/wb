@@ -733,13 +733,33 @@ _wb_validate_path_arg() {
     echo "wb ${context}: invalid PATH/NAME '${val}' (path traversal via '..' rejected)" >&2
     exit 1
   fi
-  # Absolute paths allow `/`; relative names do not (prefixes are one segment).
-  if [[ "${val}" == /* ]]; then
-    if ! [[ "${val}" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
-      echo "wb ${context}: invalid PATH '${val}' (expected [A-Za-z0-9_./-]+)" >&2
-      exit 1
-    fi
-  else
+  # SECURITY: reject shell metacharacters that could break quoting downstream.
+  # \x60=backtick, \x24=$. Pattern: [;|&`$()<>{}]
+  local _sc_re
+  _sc_re="$(printf '[;|&\x60\x24()<>{}]')"
+  if [[ "${val}" =~ ${_sc_re} ]]; then
+    echo "wb ${context}: invalid PATH/NAME '${val}' (shell metacharacters rejected)" >&2
+    exit 1
+  fi
+  # Reject control characters / NUL / quote-likes / backslash — anything that
+  # could break quoting once the value is passed to a shell or env-var consumer.
+  if [[ "${val}" =~ [[:cntrl:]] ]] \
+     || [[ "${val}" == *\"* ]] \
+     || [[ "${val}" == *\'* ]] \
+     || [[ "${val}" == *\\* ]]; then
+    echo "wb ${context}: invalid PATH/NAME '${val}' (control characters or quote/backslash rejected)" >&2
+    exit 1
+  fi
+  # Absolute paths: any printable UTF-8 codepoint is allowed (Cyrillic, CJK,
+  # accented Latin, emoji, …) — real users have non-ASCII directory names
+  # like ~/Загрузки/, ~/桌面/, ~/Téléchargements/. The previous ASCII-only
+  # whitelist (^/[A-Za-z0-9_./-]+$) refused them with a confusing
+  # "invalid PATH" error in the install/run flow.
+  #
+  # Relative names (prefix / dist / app identifiers) stay ASCII-strict —
+  # they're project-internal slugs, not filesystem paths. Same rule the rest
+  # of the codebase uses for these.
+  if [[ "${val}" != /* ]]; then
     if ! [[ "${val}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
       echo "wb ${context}: invalid NAME '${val}' (expected [A-Za-z0-9_.-]+ with no slashes)" >&2
       exit 1
