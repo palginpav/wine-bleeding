@@ -134,6 +134,13 @@ wb_dist_set_alias() {
   local dist_dir
   dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
 
+  # Ensure the dist dir exists before ln -sfn — if it doesn't, the symlink
+  # call fails with "No such file or directory". Hits when the user activates
+  # an externally-registered dist (created before Add External started copying
+  # the tree into WB_HOME/dist/<name>) on a fresh profile where dist/ has
+  # never been written.
+  mkdir -p "${dist_dir}"
+
   # SECURITY: atomic symlink swap — ln -sfn directly is unlink+symlink (non-atomic).
   # PID-qualified temp name avoids the concurrent-writer race where two callers
   # share the same `.new` path and last-writer wins silently.

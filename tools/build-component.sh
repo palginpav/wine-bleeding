@@ -199,6 +199,22 @@ fi
 export WB_BUILD_PROGRESS_FD="${PROGRESS_FD:-}"
 export FORCE_REBUILD_DEPS BUILD_MINGW_FROM_SOURCE
 
+# Pull managed-tools bin dirs onto PATH up-front. wb-tools-manager.py writes
+# $WB_HOME/build-tools/.path with one prepended PATH entry per installed tool
+# (mingw-w64-gcc/current/bin, glslang/current/bin, ...). Sourcing it here means
+# every subsequent command-v / direct invocation in this script and in
+# lib/build-common.sh sees the binaries the user just installed via the
+# preflight dialog's "Install via manager" button. Without this, the build
+# fails at bc_resolve_mingw with exit 66 even though wb-preflight.py reports
+# the toolchain ok=true (preflight probes the managed dir directly; the build
+# steps don't).
+_wb_mt_path_file="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}/build-tools/.path"
+if [[ -r "${_wb_mt_path_file}" ]]; then
+  # shellcheck source=/dev/null
+  source "${_wb_mt_path_file}"
+fi
+unset _wb_mt_path_file
+
 # ---------------------------------------------------------------------------
 # Build-environment preflight (CLI belt-and-braces; GUI runs this before us)
 # Skip when WB_BUILD_SKIP_COMPILE=1 (tests) or WB_SKIP_PREFLIGHT=1 (GUI sets

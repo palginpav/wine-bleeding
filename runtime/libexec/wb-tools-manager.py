@@ -1551,13 +1551,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_tools_dir(args: argparse.Namespace) -> pathlib.Path:
-    """Resolve tools directory from args / env vars."""
+    """Resolve tools directory from args / env vars.
+
+    Order:
+      1. --tools-dir flag (explicit)
+      2. WB_TOOLS_DIR / WB_MANAGED_TOOLS_DIR (explicit override)
+      3. WB_HOME/build-tools — keeps managed tools co-located with dists,
+         apps, and prefixes per the PortProton-style "everything under one
+         home" layout.
+      4. XDG_DATA_HOME/wine-bleeding/build-tools (default fallback)
+    """
     if args.tools_dir:
         return pathlib.Path(args.tools_dir).expanduser().resolve()
     for env_var in ("WB_TOOLS_DIR", "WB_MANAGED_TOOLS_DIR"):
         val = os.environ.get(env_var)
         if val:
             return pathlib.Path(val).expanduser().resolve()
+    wb_home = os.environ.get("WB_HOME", "")
+    if wb_home:
+        return pathlib.Path(wb_home).expanduser().resolve() / "build-tools"
     xdg_data = os.environ.get("XDG_DATA_HOME", "")
     if xdg_data:
         return pathlib.Path(xdg_data) / "wine-bleeding" / "build-tools"

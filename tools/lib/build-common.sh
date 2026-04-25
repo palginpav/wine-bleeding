@@ -140,9 +140,20 @@ bc_resolve_mingw() {
   local mingw32_cross_dir="${deps_dir}/i686-w64-mingw32-cross"
   local build_mingw_from_source="${BUILD_MINGW_FROM_SOURCE:-0}"
 
+  # Pull in managed-tools bin dirs before probing. wb-tools-manager.py writes
+  # ~/.local/share/wine-bleeding/build-tools/.path that prepends every installed
+  # tool's current/bin to PATH. Without this, "Install mingw-w64-gcc via
+  # manager" lands the toolchain in a directory the build subprocess never
+  # sees, and bc_resolve_mingw exits 66 despite the toolchain being present.
+  local _wb_mt_path_file="${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding/build-tools/.path"
+  if [[ -r "${_wb_mt_path_file}" ]]; then
+    # shellcheck source=/dev/null
+    source "${_wb_mt_path_file}"
+  fi
+
   MINGW_BIN=""
 
-  # Priority 1: system PATH
+  # Priority 1: system PATH (now includes managed-tools bin dirs)
   if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
     MINGW_BIN="$(dirname "$(command -v x86_64-w64-mingw32-gcc)")"
   elif command -v mingw64-gcc &>/dev/null; then

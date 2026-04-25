@@ -46,11 +46,20 @@ _MANAGED_TOOLS_DEFAULT = pathlib.Path.home() / ".local" / "share" / "wine-bleedi
 
 
 def _resolve_managed_tools_dir() -> pathlib.Path:
-    """Resolve the managed-tools root directory from env vars."""
+    """Resolve the managed-tools root directory from env vars.
+
+    Order matches wb-tools-manager.py's _resolve_tools_dir so probe and
+    install agree on the same path. WB_HOME takes precedence over XDG so
+    a user with a custom WB_HOME (PortProton-style) sees consistent paths
+    across dists, apps, prefixes, and managed tools.
+    """
     for env_var in ("WB_MANAGED_TOOLS_DIR", "WB_TOOLS_DIR"):
         val = os.environ.get(env_var)
         if val:
             return pathlib.Path(val)
+    wb_home = os.environ.get("WB_HOME")
+    if wb_home:
+        return pathlib.Path(wb_home) / "build-tools"
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
         return pathlib.Path(xdg) / "wine-bleeding" / "build-tools"

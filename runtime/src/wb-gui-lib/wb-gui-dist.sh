@@ -498,13 +498,48 @@ wb_gui_dist_add_external() {
   local canon_path
   canon_path="$(realpath -m "${path}")"
 
-  # Read wine version for caching in plugin JSON
-  local wine_version=""
-  wine_version="$("${canon_path}/bin/wine" --version 2>/dev/null | head -1 || true)"
-
-  # Build plugin JSON and write to plugins/runtimes.d/<name>.json
+  # Copy the dist into $WB_HOME/dist/<name>/. Per product design, every
+  # registered dist lives under WB_HOME — that way activate (which symlinks
+  # WINE-BLEEDING -> dist path) is always pointing at a stable, project-owned
+  # location and can never end up dangling because the user moved or deleted
+  # the original external tree. Refusing to register pointer-style externals
+  # also prevents the "ln: No such file or directory" failure mode where
+  # WB_HOME/dist/ wasn't created yet.
   local wb_home
   wb_home="$(_wb_gui_dist_wb_home)"
+  local local_dist_dir="${wb_home}/dist"
+  local local_dist_path="${local_dist_dir}/${name}"
+
+  if [[ -e "${local_dist_path}" ]]; then
+    echo "wb_gui_dist_add_external: '${local_dist_path}' already exists; choose a different name or remove the old dist first" >&2
+    return 1
+  fi
+
+  mkdir -p "${local_dist_dir}" || {
+    echo "wb_gui_dist_add_external: could not create '${local_dist_dir}'" >&2
+    return 1
+  }
+
+  # cp -a preserves permissions, ownership (where allowed), timestamps, and
+  # symlinks — the right primitive for mirroring a Wine dist tree.
+  if ! cp -a "${canon_path}/." "${local_dist_path}/" 2>/dev/null; then
+    echo "wb_gui_dist_add_external: failed to copy '${canon_path}' -> '${local_dist_path}'" >&2
+    rm -rf "${local_dist_path}" 2>/dev/null || true
+    return 1
+  fi
+
+  # Sanity-check that the copy landed and bin/wine is still executable.
+  if [[ ! -x "${local_dist_path}/bin/wine" ]]; then
+    echo "wb_gui_dist_add_external: copy completed but '${local_dist_path}/bin/wine' is not executable" >&2
+    rm -rf "${local_dist_path}" 2>/dev/null || true
+    return 1
+  fi
+
+  # Read wine version for caching in plugin JSON (use the copy, not the source).
+  local wine_version=""
+  wine_version="$("${local_dist_path}/bin/wine" --version 2>/dev/null | head -1 || true)"
+
+  # Build plugin JSON pointing at the LOCAL copy, not the external source.
   local plugin_dir="${wb_home}/plugins/runtimes.d"
   mkdir -p "${plugin_dir}"
 
@@ -512,7 +547,7 @@ wb_gui_dist_add_external() {
   plugin_json="$(jq -cn \
     --arg schema "1" \
     --arg name "${name}" \
-    --arg path "${canon_path}" \
+    --arg path "${local_dist_path}" \
     --arg wine_version "${wine_version}" \
     '{schema: ($schema | tonumber), name: $name, path: $path, wine_version: $wine_version}')"
 
