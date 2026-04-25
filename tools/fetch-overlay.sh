@@ -56,9 +56,14 @@ declare -rA WB_OVERLAY_INSTALL_KIND=(
   [optiscaler]="prebuilt-archive"
 )
 
-# Expected sentinel files (used for staging validation)
+# Expected sentinel files (used for staging validation).
+# MangoHud sentinel updated to lib64/ subdir — upstream's 0.7+ tarball lays
+# out as lib/mangohud/{lib32,lib64}/libMangoHud.so (mirrors a typical distro
+# packaging layout under /usr/lib/mangohud/...) instead of the older flat
+# lib/mangohud/libMangoHud.so. Without this update the staging validator
+# rejected every MangoHud install with "expected file missing".
 declare -rA WB_OVERLAY_SENTINEL=(
-  [mangohud]="lib/mangohud/libMangoHud.so"
+  [mangohud]="lib/mangohud/lib64/libMangoHud.so"
   [vkbasalt]="lib/vkbasalt/libvkbasalt.so"
   [optiscaler]="bin/optiscaler/OptiScaler.dll"
 )
@@ -551,12 +556,87 @@ INSTALL_KIND="${WB_OVERLAY_INSTALL_KIND[${OVERLAY}]}"
 
 case "${INSTALL_KIND}" in
   prebuilt-tarball)
-    tar xf "${CACHE_FILE}" -C "${_FO_STAGING_DIR}" 2>/dev/null || {
-      bc_emit_error "tar extraction failed for ${CACHE_FILE}"
-      rm -rf "${_FO_STAGING_DIR}"
-      bc_release_build_lock
-      exit 69
-    }
+    if [[ "${OVERLAY}" == "mangohud" ]]; then
+      # MangoHud (0.7+) ships a two-step package: the outer release tarball
+      # contains:
+      #   MangoHud/MangoHud-package.tar  (the actual file tree, prefixed
+      #                                   ./usr/{bin,lib,share}/...)
+      #   MangoHud/mangohud-setup.sh     (a user-targeted installer script
+      #                                   that drops files into ~/.local —
+      #                                   we don't use it; we install into
+      #                                   $WB_HOME/overlays/mangohud/<ver>)
+      # Plain `tar xf outer.tar.gz` lands MangoHud-package.tar +
+      # mangohud-setup.sh under staging/, so the sentinel lookup for
+      # lib/mangohud/lib64/libMangoHud.so failed and the install errored
+      # out with "Staging failure: expected file missing".
+      #
+      # Two-stage extract: outer into a scratch dir, then the inner package
+      # tar into staging stripping the leading ./usr/ so the resulting
+      # layout is bin/, lib/, share/ at staging root — which matches the
+      # sentinel + the LD_LIBRARY_PATH / VK_LAYER_PATH the launch env-bake
+      # emits.
+      OUTER_TMP="${_FO_STAGING_DIR}/_outer"
+      mkdir -p "${OUTER_TMP}"
+      tar xf "${CACHE_FILE}" -C "${OUTER_TMP}" 2>/dev/null || {
+        bc_emit_error "outer tar extraction failed for ${CACHE_FILE}"
+        rm -rf "${_FO_STAGING_DIR}"
+        bc_release_build_lock
+        exit 69
+      }
+      INNER_PKG="$(find "${OUTER_TMP}" -maxdepth 3 \
+        -name 'MangoHud-package.tar' -type f 2>/dev/null | head -1)"
+      if [[ -z "${INNER_PKG}" ]]; then
+        bc_emit_error "MangoHud release format unexpected: MangoHud-package.tar not inside ${CACHE_FILE}"
+        rm -rf "${_FO_STAGING_DIR}"
+        bc_release_build_lock
+        exit 69
+      fi
+      # Inner paths look like ./usr/{bin,lib,share}/... — --strip-components=2
+      # drops the leading ./ and usr/ components, giving us bin/lib/share at
+      # staging root.
+      tar xf "${INNER_PKG}" -C "${_FO_STAGING_DIR}" --strip-components=2 2>/dev/null || {
+        bc_emit_error "inner MangoHud-package.tar extraction failed"
+        rm -rf "${_FO_STAGING_DIR}"
+        bc_release_build_lock
+        exit 69
+      }
+      rm -rf "${OUTER_TMP}"
+
+      # Rewrite each Vulkan implicit-layer manifest's hardcoded
+      # library_path. Upstream ships
+      #   "library_path": "/usr/lib/mangohud/lib64/libMangoHud.so"
+      # which is correct for a distro install but wrong for our bundled
+      # location at $WB_HOME/overlays/mangohud/<ver>/lib/mangohud/lib*/...
+      # The Vulkan loader requires an absolute path here, so a relative
+      # rewrite isn't an option — we substitute the resolved INSTALL_DIR.
+      # Two manifests (x86_64 + x86), each pointing at the matching arch
+      # subdir.
+      _MH_X64_JSON="${_FO_STAGING_DIR}/share/vulkan/implicit_layer.d/MangoHud.x86_64.json"
+      _MH_X86_JSON="${_FO_STAGING_DIR}/share/vulkan/implicit_layer.d/MangoHud.x86.json"
+      _MH_X64_LIB="${INSTALL_DIR}/lib/mangohud/lib64/libMangoHud.so"
+      _MH_X86_LIB="${INSTALL_DIR}/lib/mangohud/lib32/libMangoHud.so"
+      if [[ -f "${_MH_X64_JSON}" ]]; then
+        # sed-rewrite library_path. Use | as separator so / in the new path
+        # doesn't need escaping. The match is intentionally permissive
+        # ("library_path" : "<anything>") so it survives upstream
+        # whitespace tweaks.
+        sed -i -E \
+          "s|(\"library_path\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${_MH_X64_LIB}\2|" \
+          "${_MH_X64_JSON}"
+      fi
+      if [[ -f "${_MH_X86_JSON}" ]]; then
+        sed -i -E \
+          "s|(\"library_path\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${_MH_X86_LIB}\2|" \
+          "${_MH_X86_JSON}"
+      fi
+    else
+      tar xf "${CACHE_FILE}" -C "${_FO_STAGING_DIR}" 2>/dev/null || {
+        bc_emit_error "tar extraction failed for ${CACHE_FILE}"
+        rm -rf "${_FO_STAGING_DIR}"
+        bc_release_build_lock
+        exit 69
+      }
+    fi
     ;;
 
   source-build)

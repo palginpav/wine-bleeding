@@ -226,10 +226,11 @@ BFUNC
 #      action button state.
 # ---------------------------------------------------------------------------
 @test "overlay panel field: installed version appears in registry installed_versions after refresh" {
-  # Plant a fake MangoHud installed version (with sentinel file)
+  # Plant a fake MangoHud installed version (with sentinel file).
+  # Sentinel updated for MangoHud 0.7+ layout (lib/mangohud/lib64/...)
   local mh_ver_dir="${WB_HOME}/overlays/mangohud/0.8.0"
-  mkdir -p "${mh_ver_dir}/lib/mangohud"
-  touch "${mh_ver_dir}/lib/mangohud/libMangoHud.so"
+  mkdir -p "${mh_ver_dir}/lib/mangohud/lib64"
+  touch "${mh_ver_dir}/lib/mangohud/lib64/libMangoHud.so"
 
   run bash -c "
     $(_src_overlays_snippet)
@@ -268,10 +269,11 @@ BFUNC
   _mk_test_app "${app_id}"
 
   # Plant a fake installed MangoHud version with sentinel
+  # (lib/mangohud/lib64/libMangoHud.so — modern MangoHud layout)
   local mh_ver_dir="${WB_HOME}/overlays/mangohud/0.8.1"
-  mkdir -p "${mh_ver_dir}/lib/mangohud"
+  mkdir -p "${mh_ver_dir}/lib/mangohud/lib64"
   mkdir -p "${mh_ver_dir}/share/vulkan/implicit_layer.d"
-  touch "${mh_ver_dir}/lib/mangohud/libMangoHud.so"
+  touch "${mh_ver_dir}/lib/mangohud/lib64/libMangoHud.so"
 
   local overlays_json='{"mangohud":{"enabled":true,"bundled":true,"version":null,"config_path":null},"vkbasalt":{"enabled":false,"bundled":true,"version":null},"optiscaler":{"enabled":false,"version":null}}'
 

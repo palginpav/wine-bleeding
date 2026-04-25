@@ -130,7 +130,7 @@ _wb_gui_overlays_repo() {
 _wb_gui_overlays_sentinel_file() {
   local name="$1"
   case "${name}" in
-    mangohud)   printf 'lib/mangohud/libMangoHud.so' ;;
+    mangohud)   printf 'lib/mangohud/lib64/libMangoHud.so' ;;
     vkbasalt)   printf 'lib/vkbasalt/libvkbasalt.so' ;;
     optiscaler) printf 'bin/optiscaler/OptiScaler.dll' ;;
     *) printf '' ;;
@@ -756,7 +756,12 @@ _wb_gui_overlays_emit_mangohud() {
     install_path="$(_wb_gui_overlays_resolve_install_path "mangohud" "${version}" "${overlay_root}" "${reg_file}")"
     if [[ -n "${install_path}" ]]; then
       printf 'VK_LAYER_PATH=%s/share/vulkan/implicit_layer.d\n' "${install_path}"
-      printf 'LD_LIBRARY_PATH=%s/lib/mangohud:${LD_LIBRARY_PATH}\n' "${install_path}"
+      # Modern MangoHud layout: lib/mangohud/{lib32,lib64}/libMangoHud.so.
+      # Include both arch dirs so 32-bit and 64-bit Wine binaries each find
+      # the right .so. lib64 first because most Wine installs run 64-bit
+      # binaries by default.
+      printf 'LD_LIBRARY_PATH=%s/lib/mangohud/lib64:%s/lib/mangohud/lib32:${LD_LIBRARY_PATH}\n' \
+        "${install_path}" "${install_path}"
     else
       echo "LOG: MangoHud bundled requested but not installed — falling back to system." >&2
       _wb_gui_overlays_record_fallback "mangohud" "${reg_file}" "bundled-requested-no-install"
@@ -966,7 +971,10 @@ wb_gui_overlays_save_env_bake() {
         mh_path="$(_wb_gui_overlays_resolve_install_path "mangohud" "${mh_version}" "${overlay_root}" "${reg_file}")"
         if [[ -n "${mh_path}" ]]; then
           local vk_path="${mh_path}/share/vulkan/implicit_layer.d"
-          local ld_path="${mh_path}/lib/mangohud:\${LD_LIBRARY_PATH}"
+          # MangoHud 0.7+ layout: lib/mangohud/{lib32,lib64}/libMangoHud.so —
+          # both arch dirs in LD_LIBRARY_PATH so 32-bit and 64-bit Wine
+          # binaries both find the right .so.
+          local ld_path="${mh_path}/lib/mangohud/lib64:${mh_path}/lib/mangohud/lib32:\${LD_LIBRARY_PATH}"
           new_env_vars="$(printf '%s' "${new_env_vars}" | jq \
             --arg vk "${vk_path}" \
             --arg ld "${ld_path}" \

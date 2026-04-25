@@ -98,9 +98,11 @@ _make_overlay_install() {
 
   case "${name}" in
     mangohud)
-      mkdir -p "${install_dir}/lib/mangohud"
+      # MangoHud 0.7+ layout: lib/mangohud/lib64/libMangoHud.so (sentinel
+      # path also extended to include the lib64 subdir).
+      mkdir -p "${install_dir}/lib/mangohud/lib64"
       mkdir -p "${install_dir}/share/vulkan/implicit_layer.d"
-      touch "${install_dir}/lib/mangohud/libMangoHud.so"
+      touch "${install_dir}/lib/mangohud/lib64/libMangoHud.so"
       ;;
     vkbasalt)
       mkdir -p "${install_dir}/lib/vkbasalt"
