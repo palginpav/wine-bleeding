@@ -668,6 +668,26 @@ wb_gui_dist_activate() {
 }
 
 # ---------------------------------------------------------------------------
+# wb_gui_dist_deactivate
+# Clear the WINE-BLEEDING alias (no dist active). Idempotent.
+# Refreshes the registry on success.
+# ---------------------------------------------------------------------------
+wb_gui_dist_deactivate() {
+  if command -v wb &>/dev/null; then
+    if ! wb runtime deactivate 2>&1; then
+      echo "wb_gui_dist_deactivate: 'wb runtime deactivate' failed" >&2
+      return 1
+    fi
+  else
+    # Fallback for test environments: clear the alias directly.
+    wb_dist_clear_alias
+  fi
+
+  wb_gui_dist_registry_refresh
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # wb_gui_dist_apps_count <dist_name>
 # Returns the count of apps with .dist == dist_name.
 # ---------------------------------------------------------------------------

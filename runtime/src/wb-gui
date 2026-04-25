@@ -4621,6 +4621,7 @@ _cmd_dist_manager() {
       --separator="|" \
       --button="Add External!list-add:10" \
       --button="Activate!emblem-default:20" \
+      --button="Deactivate!process-stop:25" \
       --button="Build Components!applications-development:30" \
       --button="Build Dist from Source...:80" \
       --button="Remove!list-remove:40" \
@@ -4774,6 +4775,48 @@ Fix or remove this dist, then try again."
             "${a_name} is now the active distribution.
 
 The dist list now shows ACTIVE in the first column for this row."
+        fi
+        continue
+        ;;
+      # ------------------------------------------------------------------
+      25)
+        # Deactivate — clear the WINE-BLEEDING alias. Companion to button-20
+        # so the user can return to a "no dist active" state from the UI
+        # (yad --list buttons are static; we can't toggle Activate's label
+        # based on row selection, so both buttons are always visible and
+        # context-sensitive in their handlers).
+        local _dm _dn _ds _dw _dlb _dp _db _dtrail
+        IFS='|' read -r _dm _dn _ds _dw _dlb _dp _db _dtrail <<< "${yad_out}"
+        local d_name="${_dn}"
+
+        if [[ -z "${d_name}" || "${d_name}" == "No dists registered" ]]; then
+          wb_gui_dialog_info "Deactivate" "Select a dist row first."
+          continue
+        fi
+
+        # Guard: only the currently-active dist can be deactivated. Reading
+        # from the registry rather than the row's marker so a stale render
+        # can't trick us into clearing the alias when nothing is active.
+        local d_is_active
+        d_is_active="$(jq -r --arg n "${d_name}" \
+          '.dists[] | select(.name == $n) | .active' \
+          "${wb_home}/dists.json" 2>/dev/null | head -1 || true)"
+        if [[ "${d_is_active}" != "true" ]]; then
+          wb_gui_dialog_info "Not active" \
+            "${d_name} is not currently the active distribution. Nothing to deactivate."
+          continue
+        fi
+
+        local deact_err deact_rc=0
+        deact_err="$(wb_gui_dist_deactivate 2>&1)" || deact_rc=$?
+        if [[ "${deact_rc}" -ne 0 ]]; then
+          wb_gui_dialog_error "Deactivate Failed" \
+            "Failed to deactivate: ${deact_err}."
+        else
+          wb_gui_dialog_info "Deactivated" \
+            "${d_name} is no longer active. No dist is currently active.
+
+wb run will refuse to launch apps until you Activate a dist again."
         fi
         continue
         ;;

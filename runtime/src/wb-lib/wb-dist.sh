@@ -153,3 +153,20 @@ wb_dist_set_alias() {
     fi
   fi
 }
+
+# wb_dist_clear_alias — remove the WINE-BLEEDING symlink (no active dist).
+# Idempotent: returns 0 even if the alias was already absent. Used by the
+# GUI's Deactivate button so the user can switch to a "no active dist" state
+# without having to remove a dist or re-activate a different one.
+wb_dist_clear_alias() {
+  local dist_dir
+  dist_dir="${WB_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/wine-bleeding}/dist"
+  local alias_path="${dist_dir}/WINE-BLEEDING"
+  # Only unlink if it's a symlink — guard against accidentally rm-ing a real
+  # directory if the user manually replaced the alias.
+  if [[ -L "${alias_path}" ]]; then
+    rm -f "${alias_path}"
+    sync -f "${dist_dir}" 2>/dev/null || true
+  fi
+  return 0
+}

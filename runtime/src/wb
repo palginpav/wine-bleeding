@@ -158,6 +158,7 @@ Subcommands:
   runtime install <TARBALL> Extract tarball into dist/, write manifest
                             [--activate] also point WINE-BLEEDING alias at it
   runtime activate <NAME>   Re-point WINE-BLEEDING alias atomically
+  runtime deactivate        Clear the WINE-BLEEDING alias (no active dist)
   runtime prune [--keep N]  Remove oldest dists beyond N most recent (default 3)
                             [--yes] skip confirmation prompt
   runtime register <JSON>   Register an external Wine build from a plugin JSON descriptor
@@ -562,6 +563,13 @@ cmd_runtime_activate() {
   wb_dist_set_alias "${dist_path}"
   wb_log_info "Activated ${name} as WINE-BLEEDING alias"
   echo "Activated: ${name}"
+}
+
+cmd_runtime_deactivate() {
+  _wb_load_dist_lib
+  wb_dist_clear_alias
+  wb_log_info "Cleared WINE-BLEEDING alias (no active dist)"
+  echo "Deactivated: no dist is currently active."
 }
 
 cmd_runtime_prune() {
@@ -2034,6 +2042,9 @@ main() {
         activate)
           cmd_runtime_activate "${3:-}"
           ;;
+        deactivate)
+          cmd_runtime_deactivate
+          ;;
         prune)
           shift 2
           cmd_runtime_prune "$@"
@@ -2046,7 +2057,7 @@ main() {
           ;;
         *)
           echo "wb runtime: unknown action '${action}'" >&2
-          echo "Valid actions: list, info, install, activate, prune, register, unregister" >&2
+          echo "Valid actions: list, info, install, activate, deactivate, prune, register, unregister" >&2
           exit 1
           ;;
       esac
