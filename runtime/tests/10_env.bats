@@ -28,7 +28,7 @@ setup() {
   unset WB_ESYNC WB_FSYNC WB_NTSYNC WB_DXVK WB_VKD3D WB_NVAPI \
         WB_DXVK_HUD WB_DXVK_ASYNC WB_DXVK_STATE_CACHE_PATH \
         WB_VKD3D_SHADER_CACHE_PATH WB_DEBUG_WINE WB_STAGING_SHARED_MEMORY \
-        WB_EXTRA_DLLOVERRIDES WB_DEBUG 2>/dev/null || true
+        WB_EXTRA_DLLOVERRIDES WB_DEBUG WB_GPU_LABEL 2>/dev/null || true
 }
 
 teardown() {
@@ -340,4 +340,42 @@ _compose() {
   rm -rf "${full_dist}"
   unset LD_LIBRARY_PATH 2>/dev/null || true
   [ "${out1}" = "${out2}" ]
+}
+
+# 28. Per-card GPU pinning: WB_GPU_LABEL is highest precedence and emits both
+#     DXVK_FILTER_DEVICE_NAME and VKD3D_FILTER_DEVICE_NAME so DXVK and
+#     VKD3D-Proton pick the same Vulkan device on multi-GPU hosts.
+@test "env: WB_GPU_LABEL emits DXVK and VKD3D filter device names" {
+  export WB_GPU_LABEL="GeForce RTX 4080 SUPER"
+  run _compose "${TEST_PFX}" "${TEST_DIST}"
+  unset WB_GPU_LABEL
+  [ "${status}" -eq 0 ]
+  echo "${output}" | grep -qE '^DXVK_FILTER_DEVICE_NAME=GeForce RTX 4080 SUPER$'
+  echo "${output}" | grep -qE '^VKD3D_FILTER_DEVICE_NAME=GeForce RTX 4080 SUPER$'
+}
+
+# 29. Per-card GPU pinning: with WB_GPU_LABEL unset, the JSON layer at
+#     $WB_HOME/settings/general.json supplies gpu_label. Empty value → no emit.
+@test "env: gpu_label from general.json drives the filter env vars" {
+  mkdir -p "${WB_HOME}/settings"
+  cat > "${WB_HOME}/settings/general.json" <<JSON
+{ "schema": 1, "gpu": "nvidia", "gpu_label": "Radeon RX 7900 XTX" }
+JSON
+  run _compose "${TEST_PFX}" "${TEST_DIST}"
+  [ "${status}" -eq 0 ]
+  echo "${output}" | grep -qE '^DXVK_FILTER_DEVICE_NAME=Radeon RX 7900 XTX$'
+  echo "${output}" | grep -qE '^VKD3D_FILTER_DEVICE_NAME=Radeon RX 7900 XTX$'
+}
+
+# 30. Per-card GPU pinning: empty gpu_label and unset WB_GPU_LABEL emit
+#     neither filter (driver default device selection wins).
+@test "env: empty gpu_label suppresses the filter env vars" {
+  mkdir -p "${WB_HOME}/settings"
+  cat > "${WB_HOME}/settings/general.json" <<JSON
+{ "schema": 1, "gpu": "auto", "gpu_label": "" }
+JSON
+  run _compose "${TEST_PFX}" "${TEST_DIST}"
+  [ "${status}" -eq 0 ]
+  ! echo "${output}" | grep -qE '^DXVK_FILTER_DEVICE_NAME='
+  ! echo "${output}" | grep -qE '^VKD3D_FILTER_DEVICE_NAME='
 }

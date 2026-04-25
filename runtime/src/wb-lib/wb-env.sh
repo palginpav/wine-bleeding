@@ -148,6 +148,28 @@ wb_env_compose() {
 
   _emit "DXVK_STATE_CACHE_PATH" "${WB_DXVK_STATE_CACHE_PATH:-${WB_HOME:-}/cache/dxvk-state}"
 
+  # --- GPU pinning: per-card Vulkan device selection ---------------------
+  # The Prefs dialog stores the user's chosen GPU as a literal label (e.g.
+  # "GeForce RTX 4080 SUPER") in $WB_HOME/settings/general.json. DXVK and
+  # VKD3D-Proton both honour DXVK_FILTER_DEVICE_NAME / VKD3D_FILTER_DEVICE_NAME
+  # — case-insensitive substring match against the Vulkan device name as
+  # reported by VK_EXT_physical_device_properties2. Setting both pins the
+  # whole D3D11/12 stack to the user's chosen card on multi-GPU hosts (e.g.
+  # picking the RTX 4080 SUPER over an integrated iGPU, or one of two
+  # NVIDIA cards). WB_GPU_LABEL takes precedence (lets per-app/per-prefix
+  # overrides via wb-config win); falls back to general.json's gpu_label.
+  local _gpu_label="${WB_GPU_LABEL:-}"
+  if [[ -z "${_gpu_label}" && -n "${WB_HOME:-}" ]]; then
+    local _gen_settings="${WB_HOME}/settings/general.json"
+    if [[ -r "${_gen_settings}" ]]; then
+      _gpu_label="$(jq -r '.gpu_label // empty' "${_gen_settings}" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -n "${_gpu_label}" ]]; then
+    _emit "DXVK_FILTER_DEVICE_NAME"  "${_gpu_label}"
+    _emit "VKD3D_FILTER_DEVICE_NAME" "${_gpu_label}"
+  fi
+
   # --- VKD3D vars ---------------------------------------------------------
   _emit "VKD3D_SHADER_CACHE_PATH" "${WB_VKD3D_SHADER_CACHE_PATH:-${WB_HOME:-}/cache/vkd3d-shader}"
 

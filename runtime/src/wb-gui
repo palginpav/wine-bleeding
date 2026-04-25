@@ -3686,19 +3686,29 @@ _cmd_general_prefs() {
     gpu_label_to_vendor["Intel"]="intel"
   fi
 
-  # Pre-select the entry matching the saved vendor (first match wins). If
-  # the saved vendor doesn't appear in the detected list (e.g. user moved a
-  # config across hosts), fall back to "Auto".
-  local saved_vendor="${gpu_cur:-auto}"
+  # Pre-select the saved card by exact label first (so reopening Prefs
+  # remembers which of two same-vendor cards the user picked); fall back to
+  # the first card matching the saved vendor; finally Auto.
+  local saved_label saved_vendor="${gpu_cur:-auto}"
+  saved_label="$(wb_gui_settings_get_general gpu_label 2>/dev/null || true)"
   local current_label="Auto"
   local _l
-  for _l in "${gpu_labels[@]}"; do
-    if [[ "${gpu_label_to_vendor[$_l]:-}" == "${saved_vendor}" && "${_l}" != "Auto" ]]; then
-      current_label="${_l}"
-      break
-    fi
-  done
-  [[ "${saved_vendor}" == "auto" || -z "${saved_vendor}" ]] && current_label="Auto"
+  if [[ -n "${saved_label}" ]]; then
+    for _l in "${gpu_labels[@]}"; do
+      if [[ "${_l}" == "${saved_label}" ]]; then
+        current_label="${saved_label}"
+        break
+      fi
+    done
+  fi
+  if [[ "${current_label}" == "Auto" && "${saved_vendor}" != "auto" && -n "${saved_vendor}" ]]; then
+    for _l in "${gpu_labels[@]}"; do
+      if [[ "${gpu_label_to_vendor[$_l]:-}" == "${saved_vendor}" && "${_l}" != "Auto" ]]; then
+        current_label="${_l}"
+        break
+      fi
+    done
+  fi
 
   # yad CB convention: first item is the pre-selected one; remaining items
   # are the choices. Build "current!opt1!opt2!..." with the current label
@@ -3784,6 +3794,17 @@ _cmd_general_prefs() {
   [[ -n "${gpu_json}" ]]    && wb_gui_settings_set_general gpu         "${gpu_json}"    2>/dev/null || true
   [[ -n "${winver_json}" ]] && wb_gui_settings_set_general win_version "${winver_json}" 2>/dev/null || true
   wb_gui_settings_set_general wine_debug "${new_debug}" 2>/dev/null || true
+
+  # Persist the literal card label too — wb_env_compose reads this on launch
+  # and exports DXVK_FILTER_DEVICE_NAME / VKD3D_FILTER_DEVICE_NAME so DXVK
+  # and VKD3D-Proton pick that specific Vulkan device. "Auto" (or generic
+  # vendor labels with no detected card) clears the override so wine falls
+  # back to the driver's default device selection.
+  local gpu_label_persist=""
+  if [[ "${new_gpu}" != "Auto" && "${new_gpu}" != "NVIDIA" && "${new_gpu}" != "AMD" && "${new_gpu}" != "Intel" ]]; then
+    gpu_label_persist="${new_gpu}"
+  fi
+  wb_gui_settings_set_general gpu_label "${gpu_label_persist}" 2>/dev/null || true
 
   wb_gui_dialog_info "Settings saved" \
     "Defaults updated.
