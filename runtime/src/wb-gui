@@ -3859,6 +3859,217 @@ WINEDEBUG: $([[ -n "${new_debug}" ]] && echo "${new_debug}" || echo "(no overrid
 }
 
 # ---------------------------------------------------------------------------
+# _cmd_app_prefs <app_id>
+# Single-window per-app Settings dialog. Replaces the 4-tab yad --plug/
+# --notebook flow (which renders as 4 detached "YAD" windows on Plasma 6 /
+# Wayland because XWayland's X11 EmbedProto handshake is unreliable through
+# the compositor — same root cause that broke the General Prefs dialog).
+#
+# Field state-building mirrors _launch_tab_app (Tab 4); the form is rendered
+# synchronously via wb_gui_yad --form and the form output is fed back into
+# the existing _settings_save_app for persistence (no save-path duplication).
+# ---------------------------------------------------------------------------
+_cmd_app_prefs() {
+  _wb_gui_load_libs
+
+  local app_id="${1:-}"
+  if [[ -z "${app_id}" ]]; then
+    wb_gui_dialog_error "Settings" "No app id supplied to _cmd_app_prefs."
+    return 1
+  fi
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # ---- read app values + inherited trace (mirrors _launch_tab_app) --------
+  local winver_cur debug_cur app_display_name
+  winver_cur="$(wb_gui_settings_get_app "${app_id}" win_version 2>/dev/null || true)"
+  debug_cur="$(wb_gui_settings_get_app "${app_id}" wine_debug 2>/dev/null || true)"
+
+  local wine_args_json wine_args_display=""
+  wine_args_json="$(wb_gui_settings_get_app "${app_id}" wine_args 2>/dev/null || true)"
+  if [[ -n "${wine_args_json}" && "${wine_args_json}" != "null" && "${wine_args_json}" != "[]" ]]; then
+    wine_args_display="$(printf '%s' "${wine_args_json}" | jq -r 'join(" ")' 2>/dev/null || true)"
+  fi
+
+  local env_vars_json env_vars_display=""
+  env_vars_json="$(wb_gui_settings_get_app "${app_id}" env_vars 2>/dev/null || true)"
+  if [[ -n "${env_vars_json}" && "${env_vars_json}" != "null" && "${env_vars_json}" != "{}" ]]; then
+    env_vars_display="$(printf '%s' "${env_vars_json}" | jq -r 'to_entries[] | "\(.key)=\(.value)"' 2>/dev/null || true)"
+  fi
+
+  local app_entry
+  app_entry="$(wb_gui_apps_get "${app_id}" 2>/dev/null || true)"
+  app_display_name="${app_id}"
+  if [[ -n "${app_entry}" ]]; then
+    app_display_name="$(printf '%s' "${app_entry}" | jq -r '.name // empty')"
+    [[ -z "${app_display_name}" ]] && app_display_name="${app_id}"
+  fi
+
+  local trace_winver trace_debug
+  trace_winver="$(wb_gui_settings_resolve_trace win_version "${app_id}" 2>/dev/null || echo '{}')"
+  trace_debug="$(wb_gui_settings_resolve_trace wine_debug "${app_id}" 2>/dev/null || echo '{}')"
+
+  local inherited_winver_src inherited_winver_val inherited_winver_label
+  inherited_winver_src="$(printf '%s' "${trace_winver}" | jq -r '.resolved_from // "general"' 2>/dev/null || echo "general")"
+  inherited_winver_val="$(printf '%s' "${trace_winver}" | jq -r '
+    if .candidates.prefix != null then .candidates.prefix
+    elif .candidates.dist != null then .candidates.dist
+    else (.candidates.general // "win10") end' 2>/dev/null || echo "win10")"
+  inherited_winver_label="$(_settings_winver_json_to_label "${inherited_winver_val}")"
+  [[ -z "${inherited_winver_label}" ]] && inherited_winver_label="Windows 10"
+
+  local inherited_debug_src inherited_debug_val inherited_debug_display
+  inherited_debug_src="$(printf '%s' "${trace_debug}" | jq -r '.resolved_from // "general"' 2>/dev/null || echo "general")"
+  inherited_debug_val="$(printf '%s' "${trace_debug}" | jq -r '
+    .candidates.prefix // .candidates.dist // .candidates.general // ""' 2>/dev/null || true)"
+  inherited_debug_display="(none)"
+  [[ -n "${inherited_debug_val}" ]] && inherited_debug_display="${inherited_debug_val}"
+
+  local winver_display="${inherited_winver_label} — from ${inherited_winver_src}"
+  local winver_opts
+  winver_opts="$(_settings_build_winver_combo "${winver_cur}" "${winver_display}")"
+
+  # ---- overlay panel state (mirrors _launch_tab_app overlay block) --------
+  wb_gui_overlays_registry_refresh 2>/dev/null || true
+
+  local overlay_json_str
+  overlay_json_str="$(wb_gui_settings_get_app "${app_id}" overlays 2>/dev/null || true)"
+  [[ -z "${overlay_json_str}" || "${overlay_json_str}" == "null" ]] && overlay_json_str="{}"
+
+  _ov_field() {
+    local j="${1}" path="${2}" def="${3:-}"
+    local v
+    v="$(printf '%s' "${j}" | jq -r "${path} // empty" 2>/dev/null || true)"
+    printf '%s' "${v:-${def}}"
+  }
+
+  local mh_enabled_bool mh_enabled_chk mh_bundled mh_source_cb mh_version_cb mh_action mh_config_path mh_label
+  mh_enabled_bool="$(_ov_field "${overlay_json_str}" '.mangohud.enabled' 'false')"
+  mh_enabled_chk="FALSE"; [[ "${mh_enabled_bool}" == "true" ]] && mh_enabled_chk="TRUE"
+  mh_bundled="$(_ov_field "${overlay_json_str}" '.mangohud.bundled' 'true')"
+  mh_source_cb="Bundled!System"; [[ "${mh_bundled}" == "false" ]] && mh_source_cb="System!Bundled"
+  mh_version_cb="$(_overlay_build_version_cb mangohud)"
+  mh_action="$(_overlay_action_label mangohud)"
+  mh_config_path="$(_ov_field "${overlay_json_str}" '.mangohud.config_path' '')"
+  mh_label="MangoHud (FPS/frametime HUD)"
+  [[ "${mh_enabled_chk}" == "TRUE" && "${mh_bundled}" == "true" && "${mh_action}" == "Install" ]] \
+    && mh_label="MangoHud (FPS/frametime HUD) [not installed]"
+
+  local vkb_enabled_bool vkb_enabled_chk vkb_bundled vkb_source_cb vkb_version_cb vkb_action vkb_label
+  vkb_enabled_bool="$(_ov_field "${overlay_json_str}" '.vkbasalt.enabled' 'false')"
+  vkb_enabled_chk="FALSE"; [[ "${vkb_enabled_bool}" == "true" ]] && vkb_enabled_chk="TRUE"
+  vkb_bundled="$(_ov_field "${overlay_json_str}" '.vkbasalt.bundled' 'true')"
+  vkb_source_cb="Bundled!System"; [[ "${vkb_bundled}" == "false" ]] && vkb_source_cb="System!Bundled"
+  vkb_version_cb="$(_overlay_build_version_cb vkbasalt)"
+  vkb_action="$(_overlay_action_label vkbasalt)"
+  vkb_label="VKBasalt (post-FX shaders)"
+  [[ "${vkb_enabled_chk}" == "TRUE" && "${vkb_bundled}" == "true" && "${vkb_action}" == "Install" ]] \
+    && vkb_label="VKBasalt (post-FX shaders) [not installed]"
+
+  local osc_enabled_bool osc_enabled_chk osc_version_cb osc_action
+  osc_enabled_bool="$(_ov_field "${overlay_json_str}" '.optiscaler.enabled' 'false')"
+  osc_enabled_chk="FALSE"; [[ "${osc_enabled_bool}" == "true" ]] && osc_enabled_chk="TRUE"
+  osc_version_cb="$(_overlay_build_version_cb optiscaler)"
+  osc_action="$(_overlay_action_label optiscaler)"
+  : "${osc_action}"
+
+  local last_checked_text
+  last_checked_text="$(_overlay_last_checked_text)"
+
+  local mh_config_default="${HOME}/.config/MangoHud/MangoHud.conf (optional)"
+  if [[ -n "${mh_config_path}" ]]; then
+    mh_config_default="${mh_config_path}"
+  elif [[ -f "${HOME}/.config/MangoHud/MangoHud.conf" ]]; then
+    mh_config_default="${HOME}/.config/MangoHud/MangoHud.conf"
+  fi
+
+  # Export context for BTN callbacks (yad runs them in subshells)
+  export _WB_OVERLAY_APP_ID="${app_id}"
+  export _WB_OVERLAY_WB_HOME="${wb_home}"
+  export _WB_GUI_LIB_DIR
+  export _WB_LIB_DIR
+  export -f _wb_overlay_btn_mangohud 2>/dev/null || true
+  export -f _wb_overlay_btn_vkbasalt 2>/dev/null || true
+  export -f _wb_overlay_btn_optiscaler 2>/dev/null || true
+  export -f _wb_overlay_btn_check_all 2>/dev/null || true
+
+  # ---- single-window form -------------------------------------------------
+  # Field order MUST match _settings_save_app's IFS read so existing parser
+  # works unchanged: winver_sel | inh_ro1 | debug_val | inh_ro2 | wine_args |
+  # env_vars_ml | sep_lbl | mh_chk | mh_src_cb | mh_ver_cb | mh_btn |
+  # mh_config | vkb_chk | vkb_src_cb | vkb_ver_cb | vkb_btn | osc_chk |
+  # osc_src_lbl | osc_ver_cb | osc_btn | check_btn | ts_lbl | gs_lbl
+  local form_out form_rc=0
+  form_out="$(wb_gui_yad --form \
+    --title="wine-bleeding — Per-app settings: ${app_display_name}" \
+    --text="Editing app: ${app_display_name}. Leave a field blank to use the inherited value shown below it." \
+    --no-markup \
+    --separator="|" \
+    --columns=1 \
+    --width=620 \
+    --field="Windows version:CB" \
+      "${winver_opts}" \
+    --field="  Inherited from ${inherited_winver_src}: ${inherited_winver_label}:RO" \
+      "" \
+    --field="WINEDEBUG (leave blank to inherit):TEXT" \
+      "${debug_cur}" \
+    --field="  Inherited from ${inherited_debug_src}: ${inherited_debug_display}:RO" \
+      "" \
+    --field="Extra Wine args (space-separated):TEXT" \
+      "${wine_args_display}" \
+    --field="Env vars (KEY=VALUE, one per line):TXT" \
+      "${env_vars_display}" \
+    --field="─── Overlays ───────────────────────────────────────────────────:LBL" "" \
+    --field="${mh_label}:CHK" \
+      "${mh_enabled_chk}" \
+    --field="  MangoHud source:CB" \
+      "${mh_source_cb}" \
+    --field="  MangoHud version:CB" \
+      "${mh_version_cb}" \
+    --field="  MangoHud action:BTN" \
+      "_wb_overlay_btn_mangohud" \
+    --field="  MangoHud config:FL" \
+      "${mh_config_default}" \
+    --field="${vkb_label}:CHK" \
+      "${vkb_enabled_chk}" \
+    --field="  VKBasalt source:CB" \
+      "${vkb_source_cb}" \
+    --field="  VKBasalt version:CB" \
+      "${vkb_version_cb}" \
+    --field="  VKBasalt action:BTN" \
+      "_wb_overlay_btn_vkbasalt" \
+    --field="OptiScaler (Windows DLL upscaler):CHK" \
+      "${osc_enabled_chk}" \
+    --field="  OptiScaler source:LBL" \
+      "Bundled (Windows DLL) — no system option" \
+    --field="  OptiScaler version:CB" \
+      "${osc_version_cb}" \
+    --field="  OptiScaler action:BTN" \
+      "_wb_overlay_btn_optiscaler" \
+    --field="  Check for updates (all overlays):BTN" \
+      "_wb_overlay_btn_check_all" \
+    --field="${last_checked_text}:LBL" "" \
+    --field="GStreamer support comes from your system libraries. No action needed unless you report codec issues.:LBL" "" \
+    --button="Cancel:1" \
+    --button="Save:0" 2>/dev/null)" || form_rc=$?
+
+  if [[ "${form_rc}" -ne 0 ]]; then
+    return 0  # Cancel / Escape — no save
+  fi
+
+  # Reuse existing per-app save: write form output to a temp file (the same
+  # shape the plug version produced) and hand off to _settings_save_app.
+  local tmp_pipe
+  tmp_pipe="$(mktemp)"
+  printf '%s\n' "${form_out}" > "${tmp_pipe}"
+  _settings_save_app "${app_id}" "${tmp_pipe}" || true
+  rm -f "${tmp_pipe}"
+
+  wb_gui_dialog_info "Settings saved" "Per-app settings saved for ${app_display_name}."
+}
+
+# ---------------------------------------------------------------------------
 # _cmd_settings_v2 [<scope> [<id>]]
 # Opens the 4-pane Settings notebook.
 # scope: general | dist <id> | prefix <id> | app <id>
@@ -5311,13 +5522,17 @@ _cmd_main_window() {
         fi
         ;;
       30)
-        # Settings button (per-row → Per-App tab)
+        # Settings button → single-window per-app dialog (_cmd_app_prefs).
+        # The legacy 4-tab notebook is still callable as `wb-gui settings-v2
+        # app <id>` for tooling/tests but the GUI no longer routes here
+        # because plug/notebook detaches into 4 separate windows on
+        # Plasma 6 / Wayland (XWayland EmbedProto issue).
         local _sel_n sel_pfx _sel_rt2 _sel_lp2 sel_id2 _sel_exe2
         IFS='|' read -r _sel_n sel_pfx _sel_rt2 _sel_lp2 sel_id2 _sel_exe2 <<< "${yad_out}"
         if [[ -z "${sel_id2}" || "${sel_pfx}" == "" ]]; then
           wb_gui_dialog_info "Settings" "Please select an app first."
         else
-          _cmd_settings_v2 app "${sel_id2}"
+          _cmd_app_prefs "${sel_id2}"
         fi
         ;;
       40)
