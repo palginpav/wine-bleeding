@@ -552,6 +552,28 @@ _cmd_install_flow() {
     return 0
   }
 
+  # If the user picked "Create new prefix..." (or otherwise named a prefix
+  # that doesn't exist yet on disk), initialise it NOW — before the user
+  # sees the "Ready to install" confirm dialog. Surfaces any init failure
+  # at the earliest natural point in the flow, so the user doesn't get a
+  # confirm prompt for an installer that can never start. Idempotent: when
+  # the prefix already has drive_c/, we skip and continue.
+  local _wb_home_path
+  _wb_home_path="$(_wb_gui_home)"
+  if [[ ! -d "${_wb_home_path}/prefixes/${prefix_name}/drive_c" ]]; then
+    local init_log init_rc=0
+    init_log="$("${_WB_BIN}" prefix init "${prefix_name}" 2>&1)" || init_rc=$?
+    if [[ "${init_rc}" -ne 0 ]]; then
+      wb_gui_dialog_error "Prefix init failed" \
+        "Could not initialise the Wine prefix '${prefix_name}' (exit ${init_rc}).
+
+${init_log}
+
+Common causes: no active dist (open Dists → Activate), missing build tools, insufficient disk space."
+      return 1
+    fi
+  fi
+
   # Step B3: Confirm and install
   local rc_b3=0
   wb_gui_yad \
@@ -567,12 +589,34 @@ _cmd_install_flow() {
     return 0
   fi
 
-  # Execute install sequence
+  # Execute install sequence — prefix is guaranteed to exist at this point
+  # (Step B2 init'd it if necessary, with errors surfaced before the confirm
+  # dialog).
   local before_path
   before_path="$(wb_detect_snapshot_before "${prefix_name}")"
 
-  # Run installer (ignore non-zero exit — partial installs still caught)
-  "${_WB_BIN}" run "${installer_exe}" --prefix "${prefix_name}" --wait 2>/dev/null || true
+  # Run installer. Capture stderr so failures surface in a dialog instead
+  # of silently closing the install flow with no feedback.
+  local run_log run_rc=0
+  run_log="$("${_WB_BIN}" run "${installer_exe}" --prefix "${prefix_name}" --wait 2>&1)" || run_rc=$?
+  if [[ "${run_rc}" -ne 0 ]]; then
+    # Non-zero from the installer is COMMON (lots of installers exit 1 even
+    # on success, or the user closes the wizard mid-install) so we still
+    # proceed with detection. But if the installer never started at all
+    # (wb run aborted before exec — typically dist/prefix issues), the
+    # error should reach the user. Heuristic: a "wb run:" error line means
+    # wb itself rejected the call before exec.
+    if printf '%s\n' "${run_log}" | grep -qE '^wb run:'; then
+      wb_gui_dialog_error "Install could not start" \
+        "wb run refused to launch the installer (exit ${run_rc}):
+
+${run_log}"
+      return 1
+    fi
+    # Otherwise: installer exited non-zero on its own. Continue to
+    # detection — the user might have completed the install and clicked
+    # Cancel on the wizard's last screen.
+  fi
 
   local candidates_json
   candidates_json="$(wb_detect_diff_after "${prefix_name}" "${before_path}")"
