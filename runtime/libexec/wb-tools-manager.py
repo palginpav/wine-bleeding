@@ -39,12 +39,15 @@ Exit codes:
 
 Environment:
     WB_TOOLS_MANIFEST_URL   Override default manifest URL.
-    WB_TOOLS_DIR            Override default tools directory.
+    WB_MANAGED_TOOLS_DIR    Override default tools directory.
+    WB_HOME                 Implied $WB_HOME/build-tools when set (default location root).
     WB_TOOLS_MANIFEST_TTL_SEC  Manifest cache TTL in seconds (default: 600).
     WB_TOOLS_DISK_BUDGET_BYTES Disk budget cap in bytes (default: 524288000 / 500 MB).
-    WB_MANAGED_TOOLS_DIR    Alias for WB_TOOLS_DIR (for bats test compatibility).
 
     NOT SUPPORTED:
+    WB_TOOLS_DIR — intentionally ignored. wb-gui exports it as the build-scripts
+    directory (a different concept), and accepting it here caused exit-2 errors
+    in "Check for updates". Use WB_MANAGED_TOOLS_DIR for explicit overrides.
     WB_TOOLS_SKIP_TLS_VERIFY — intentionally absent. TLS verification is non-optional.
 
 Dependencies: Python 3.8+ stdlib only.
@@ -1499,7 +1502,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tools-dir",
         metavar="DIR",
         default=None,
-        help="Tools directory (default: ~/.local/share/wine-bleeding/build-tools/; env: WB_TOOLS_DIR or WB_MANAGED_TOOLS_DIR)",
+        help="Tools directory (default: $WB_HOME/build-tools/ or ~/.local/share/wine-bleeding/build-tools/; env: WB_MANAGED_TOOLS_DIR)",
     )
     p.add_argument(
         "--progress-fd",
@@ -1555,18 +1558,26 @@ def _resolve_tools_dir(args: argparse.Namespace) -> pathlib.Path:
 
     Order:
       1. --tools-dir flag (explicit)
-      2. WB_TOOLS_DIR / WB_MANAGED_TOOLS_DIR (explicit override)
+      2. WB_MANAGED_TOOLS_DIR (explicit override)
       3. WB_HOME/build-tools — keeps managed tools co-located with dists,
          apps, and prefixes per the PortProton-style "everything under one
          home" layout.
       4. XDG_DATA_HOME/wine-bleeding/build-tools (default fallback)
+
+    NOTE: WB_TOOLS_DIR is intentionally NOT consulted. wb-gui exports that
+    variable pointing at the build-scripts directory (where
+    build-component.sh lives), so accepting it here would silently route
+    every dispatched `wb-tools-manager.py check` invocation at
+    /usr/lib/wine-bleeding/tools — which is outside the user's HOME and
+    trips the safety check below, surfacing as a confusing exit-2 error
+    in the "Check for updates" dialog. WB_MANAGED_TOOLS_DIR is the only
+    supported override.
     """
     if args.tools_dir:
         return pathlib.Path(args.tools_dir).expanduser().resolve()
-    for env_var in ("WB_TOOLS_DIR", "WB_MANAGED_TOOLS_DIR"):
-        val = os.environ.get(env_var)
-        if val:
-            return pathlib.Path(val).expanduser().resolve()
+    val = os.environ.get("WB_MANAGED_TOOLS_DIR")
+    if val:
+        return pathlib.Path(val).expanduser().resolve()
     wb_home = os.environ.get("WB_HOME", "")
     if wb_home:
         return pathlib.Path(wb_home).expanduser().resolve() / "build-tools"

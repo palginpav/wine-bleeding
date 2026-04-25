@@ -52,11 +52,16 @@ def _resolve_managed_tools_dir() -> pathlib.Path:
     install agree on the same path. WB_HOME takes precedence over XDG so
     a user with a custom WB_HOME (PortProton-style) sees consistent paths
     across dists, apps, prefixes, and managed tools.
+
+    NOTE: WB_TOOLS_DIR is intentionally NOT consulted. wb-gui exports that
+    variable pointing at the build-scripts directory (build-component.sh
+    et al), and inheriting it here would route preflight's managed probe
+    at /usr/lib/wine-bleeding/tools instead of the per-user managed root.
+    See the matching note in wb-tools-manager.py::_resolve_tools_dir.
     """
-    for env_var in ("WB_MANAGED_TOOLS_DIR", "WB_TOOLS_DIR"):
-        val = os.environ.get(env_var)
-        if val:
-            return pathlib.Path(val)
+    val = os.environ.get("WB_MANAGED_TOOLS_DIR")
+    if val:
+        return pathlib.Path(val)
     wb_home = os.environ.get("WB_HOME")
     if wb_home:
         return pathlib.Path(wb_home) / "build-tools"
