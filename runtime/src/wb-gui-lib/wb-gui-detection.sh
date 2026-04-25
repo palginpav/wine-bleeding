@@ -465,6 +465,21 @@ wb_detect_diff_after() {
       continue
     fi
 
+    # Skip uninstallers / installer helpers / updaters / crash handlers — same
+    # blacklist _wb_detect_pick_main_exe applies to Program Files candidates.
+    # Inno Setup creates a Start Menu uninstall shortcut (e.g. unins000.exe)
+    # which would otherwise show up alongside the real app in the candidate
+    # checklist and end up registered in apps.json on "Add All".
+    local _bn_lnk
+    _bn_lnk="$(basename "${host_exe}")"
+    case "${_bn_lnk,,}" in
+      unins*.exe|setup.exe|setup_*.exe|install.exe|installer.exe|\
+      updater*.exe|update.exe|crashhandler*.exe|crashreport*.exe|\
+      _*.exe|unwise*.exe|uninst*.exe)
+        continue
+        ;;
+    esac
+
     # Append to m1_candidates
     m1_candidates="$(jq -cn \
       --argjson arr "${m1_candidates}" \

@@ -264,7 +264,24 @@ _gui_build_app_rows() {
       last_played="${added_at}"
     fi
 
-    rows+=("${name}" "${prefix}" "${runtime}" "${last_played}" "${id}" "${exe}")
+    # Display-clean the NAME column. Legacy entries (pre-LNK-parser fix) have
+    # the full Windows target path stored in .name (e.g.
+    # "C:\Program Files\TrackChecker\TrackChecker") because the python parser
+    # used os.path.basename on a backslash-separated path, which on Linux
+    # returns the whole string. Strip everything up to and including the last
+    # '\' so the user sees "TrackChecker", not the raw path. Yad/glib's
+    # --text and column-data escape processing also consumes single
+    # backslashes (\P → P, \T → T) which made the displayed value look like
+    # "C:Program FilesTrackCheckerTrackChecker"; normalising here side-steps
+    # both problems.
+    local display_name="${name}"
+    if [[ "${display_name}" == *\\* ]]; then
+      display_name="${display_name##*\\}"
+      display_name="${display_name%.exe}"
+      display_name="${display_name%.EXE}"
+    fi
+
+    rows+=("${display_name}" "${prefix}" "${runtime}" "${last_played}" "${id}" "${exe}")
   done < <(wb_gui_apps_list)
 
   local f
@@ -302,13 +319,27 @@ _gui_remove_app() {
   name="$(printf '%s' "${entry}" | jq -r '.name')"
   prefix="$(printf '%s' "${entry}" | jq -r '.prefix')"
 
+  # Display name may contain Windows backslashes (e.g. legacy entries from
+  # before the LNK parser fix). Yad's --text consumes \X as escape sequences
+  # even with --no-markup; double-escape them so what the user sees matches
+  # what's stored.
+  local name_display="${name//\\/\\\\}"
+
   wb_gui_dialog_confirm "Remove App" \
-    "Remove '${name}' from the registry?\n\nPrefix '${prefix}' will be kept on disk.\nUse 'wb prefix' commands to manage it." || {
+    "Remove '${name_display}' from wine-bleeding's app list?
+
+This only deregisters the app — it does NOT uninstall the program from the
+Wine prefix. The prefix '${prefix}' and all its installed files stay on disk.
+
+To actually uninstall the Windows program, run its uninstaller from inside
+the prefix (e.g. via 'wb run' on the unins000.exe / setup.exe in
+~/.local/share/wine-bleeding/prefixes/${prefix}/drive_c/...) before pressing
+Yes here." || {
     return 0
   }
 
   wb_gui_apps_remove "${app_id}"
-  wb_gui_dialog_info "Removed" "App '${name}' removed from registry."
+  wb_gui_dialog_info "Removed" "App '${name_display}' removed from the wine-bleeding app list. The Wine prefix and installed files were not touched."
 }
 
 # ---------------------------------------------------------------------------
@@ -3627,6 +3658,26 @@ _wb_overlay_btn_check_all() {
 }
 export -f _wb_overlay_btn_check_all
 
+# yad spawns BTN field commands via 'bash -c' (a fresh shell that does not
+# inherit non-exported functions). The four _wb_overlay_btn_* handlers above
+# are exported, but the helpers they call (_overlay_single_update_flow,
+# _overlay_check_all_dialog, _overlay_install_selected_flow,
+# _overlay_action_label, _overlay_run_install_with_log,
+# _overlay_build_version_cb, _overlay_last_checked_text, plus the
+# wb_gui_dialog_* helpers from dialogs.sh) live in this same wb-gui script —
+# sourcing wb-gui-overlays.sh from the BTN subshell does NOT bring them in.
+# Without exporting them, the buttons silently no-op (the '|| true' on the
+# call sites swallows the "command not found" error). Export them all so the
+# BTN-spawned shell can resolve them.
+export -f _overlay_single_update_flow 2>/dev/null || true
+export -f _overlay_check_all_dialog 2>/dev/null || true
+export -f _overlay_install_selected_flow 2>/dev/null || true
+export -f _overlay_action_label 2>/dev/null || true
+export -f _overlay_run_install_with_log 2>/dev/null || true
+export -f _overlay_build_version_cb 2>/dev/null || true
+export -f _overlay_last_checked_text 2>/dev/null || true
+export -f _wb_gui_home 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # _wb_gui_detect_gpus
 # Enumerate GPU(s) on this host and emit one line per device:
@@ -5481,13 +5532,14 @@ _cmd_main_window() {
       --list \
       --title="wine-bleeding — apps" \
       --text="Double-click an app to launch it." \
+      --width=860 \
+      --height=480 \
       --column="NAME" \
       --column="PREFIX" \
       --column="RUNTIME" \
       --column="LAST PLAYED" \
       --column="ID:HD" \
       --column="EXE:HD" \
-      --print-all \
       --separator="|" \
       --button="Add App!list-add:10" \
       --button="Run!media-playback-start:20" \

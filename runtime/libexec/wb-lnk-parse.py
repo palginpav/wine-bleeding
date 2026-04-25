@@ -141,16 +141,25 @@ def parse_lnk(path: str) -> dict:
     # -----------------------------------------------------------------------
     target_path = target_from_link_info.strip()
 
+    # Windows-aware basename: target_path uses '\' as separator. os.path.basename
+    # on Linux only splits on '/', so for "C:\\Program Files\\App\\app.exe" it
+    # returns the whole string unchanged — which then ended up persisted as the
+    # display_name in apps.json and rendered as the literal escaped Windows path
+    # in the apps list. Split on backslash explicitly, then strip the .exe.
+    def _winbasename_no_ext(p: str) -> str:
+        last = p.rsplit("\\", 1)[-1]
+        return os.path.splitext(last)[0]
+
     display_name = display_name_from_string.strip()
     if not display_name and target_path:
-        display_name = os.path.splitext(os.path.basename(target_path))[0]
+        display_name = _winbasename_no_ext(target_path)
 
     if not target_path:
         raise ValueError("could not extract target path from .lnk file")
 
     return {
         "target_path": target_path,
-        "display_name": display_name or os.path.splitext(os.path.basename(target_path))[0],
+        "display_name": display_name or _winbasename_no_ext(target_path),
     }
 
 
