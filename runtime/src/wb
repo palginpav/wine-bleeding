@@ -1523,6 +1523,57 @@ cmd_install() {
 # cmd_run: wb run <exe> [--prefix NAME] [--runtime NAME] [--wait] [args...]
 # Implements the full §5.2 call graph.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# _wb_apps_env_vars_for_exe <exe_path>
+# Look up the registered app entry whose .exe matches <exe_path> in apps.json,
+# then read settings/apps/<app_id>.json and emit its .env_vars map as
+# KEY=VALUE lines (one per line). Used by cmd_run / cmd_exec to apply
+# per-app env overrides — the wb-gui per-app Settings dialog and overlays
+# panel write into these files, but until this helper landed nothing on the
+# runtime side ever read them, so MANGOHUD=1, ENABLE_VKBASALT=1, the per-app
+# WINEDLLOVERRIDES from the OptiScaler enable, and any user-set custom
+# env_vars all silently went nowhere — the user could enable MangoHud in the
+# GUI and the overlay never appeared at launch.
+#
+# Silent no-op when:
+#   - apps.json is missing
+#   - no entry matches <exe_path>
+#   - the per-app settings file is missing
+#   - .env_vars is null / empty / missing
+#
+# Values are emitted verbatim — caller is responsible for whatever shell
+# expansion semantics it wants (env(1) doesn't expand $VAR; bake values that
+# need expansion at write-time, not here).
+# ---------------------------------------------------------------------------
+_wb_apps_env_vars_for_exe() {
+  local exe="${1:-}"
+  [[ -n "${exe}" ]] || return 0
+
+  local wb_home="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
+  local apps_json="${wb_home}/apps.json"
+  [[ -f "${apps_json}" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  # Match by exact .exe path. Same exe registered to multiple prefixes is
+  # rare but possible; first match wins (jq's order is array order).
+  local app_id
+  app_id="$(jq -r --arg exe "${exe}" '
+    .apps // []
+    | map(select(.exe == $exe))
+    | .[0].id // empty
+  ' "${apps_json}" 2>/dev/null || true)"
+  [[ -n "${app_id}" ]] || return 0
+
+  local app_settings="${wb_home}/settings/apps/${app_id}.json"
+  [[ -f "${app_settings}" ]] || return 0
+
+  jq -r '
+    (.env_vars // {})
+    | to_entries[]
+    | "\(.key)=\(.value)"
+  ' "${app_settings}" 2>/dev/null || true
+}
+
 cmd_run() {
   local exe=""
   local prefix_name=""
@@ -1802,6 +1853,17 @@ cmd_run() {
     env_pairs+=("${line}")
   done <<< "${env_lines}"
 
+  # Step 10b: Apply per-app env_vars overrides from
+  # $WB_HOME/settings/apps/<app_id>.json. The wb-gui per-app Settings dialog
+  # and the overlay panel save into these files (e.g. {"MANGOHUD":"1"} when
+  # the user enables MangoHud); appended AFTER wb_env_compose's defaults so
+  # `env A=1 A=2 wine` semantics let the per-app value win — env(1) honours
+  # the LAST KEY=VALUE for any key, so user-set values override defaults.
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    env_pairs+=("${line}")
+  done < <(_wb_apps_env_vars_for_exe "${exe}")
+
   # Extract WINELOADER from composed env for the exec call
   local wineloader="${dist_path}/bin/wine"
   local ev
@@ -1946,6 +2008,12 @@ cmd_exec() {
     [[ -n "${line}" ]] || continue
     env_pairs+=("${line}")
   done <<< "${env_lines}"
+
+  # Apply per-app env_vars (same as cmd_run); see _wb_apps_env_vars_for_exe.
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    env_pairs+=("${line}")
+  done < <(_wb_apps_env_vars_for_exe "${exe}")
 
   local wineloader="${dist_path}/bin/wine"
   local ev
