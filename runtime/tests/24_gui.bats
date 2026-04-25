@@ -282,3 +282,30 @@ _source_gui_libs() {
   run grep "ARGV:" "${WB_TEST_YAD_LOG}"
   [ "${status}" -eq 0 ]
 }
+
+# ===========================================================================
+# Unicode-path acceptance: _wb_gui_validate_exe_path must accept non-ASCII
+# directory names (Cyrillic / CJK / accented Latin) as long as no shell
+# metacharacter or quote is present. Regression for the ASCII-only whitelist
+# bug that rejected paths like ~/Загрузки/installer.exe with "is not a valid
+# executable path." in v1.7.0.
+# ===========================================================================
+
+@test "_wb_gui_validate_exe_path accepts Unicode paths and rejects unsafe ones" {
+  run bash -c "
+    source '${WB_GUI_LIB}/wb-gui-apps.sh'
+
+    # Should accept
+    _wb_gui_validate_exe_path '/home/palgin/Загрузки/setup.exe'           || exit 11
+    _wb_gui_validate_exe_path '/home/u/桌面/installer.exe'                  || exit 12
+    _wb_gui_validate_exe_path '/home/u/Téléchargements/x.exe'             || exit 13
+    _wb_gui_validate_exe_path '/home/u/Apps/Setup with spaces.exe'        || exit 14
+
+    # Should reject (return non-zero) — flip the test
+    if _wb_gui_validate_exe_path '/path/with/../traversal.exe' 2>/dev/null; then exit 21; fi
+    if _wb_gui_validate_exe_path '/path/with/\$evil.exe'       2>/dev/null; then exit 22; fi
+    if _wb_gui_validate_exe_path '/path/with;semi.exe'         2>/dev/null; then exit 23; fi
+    if _wb_gui_validate_exe_path 'relative/path.exe'           2>/dev/null; then exit 24; fi
+  "
+  [ "${status}" -eq 0 ]
+}

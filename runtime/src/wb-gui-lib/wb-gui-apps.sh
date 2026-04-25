@@ -100,15 +100,24 @@ _wb_gui_validate_exe_path() {
     echo "wb-gui: invalid exe path '${path}' (shell metacharacters rejected)" >&2
     return 1
   fi
-  # Must be absolute path with safe characters (letters, digits, _ . / space -)
-  local _path_re='^/[-A-Za-z0-9_./\ ]+$'
-  if [[ "${path}" == /* ]]; then
-    if ! [[ "${path}" =~ ${_path_re} ]]; then
-      echo "wb-gui: invalid exe path '${path}' (only [-A-Za-z0-9_./ ] allowed)" >&2
-      return 1
-    fi
-  else
+  # Must be absolute.
+  if [[ "${path}" != /* ]]; then
     echo "wb-gui: exe path must be absolute (starts with /)" >&2
+    return 1
+  fi
+  # Reject newlines / other control characters / quote-like chars that could
+  # break quoting once we eventually pass the path through a shell context.
+  # Any printable UTF-8 codepoint (Cyrillic, CJK, accented Latin, emoji, …)
+  # is otherwise allowed: real users have non-ASCII directory names like
+  # ~/Загрузки/ (Russian "Downloads"), ~/桌面/ (Chinese "Desktop"),
+  # ~/Téléchargements/ (French "Downloads") and they were being rejected
+  # by the previous ASCII-only whitelist regex (^/[-A-Za-z0-9_./ ]+$).
+  if [[ "${path}" =~ [[:cntrl:]] ]] \
+     || [[ "${path}" == *$'\n'* ]] \
+     || [[ "${path}" == *\"* ]] \
+     || [[ "${path}" == *\'* ]] \
+     || [[ "${path}" == *\\* ]]; then
+    echo "wb-gui: invalid exe path '${path}' (control characters or quote/backslash rejected)" >&2
     return 1
   fi
 }
