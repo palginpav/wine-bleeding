@@ -302,6 +302,95 @@ _gui_launch_app() {
 }
 
 # ---------------------------------------------------------------------------
+# _gui_purge_missing_apps
+# Walk apps.json; for each registered app whose .exe path no longer exists on
+# disk (the user uninstalled the Windows program from inside Wine, or the
+# prefix was deleted), present a single batch checklist and drop the rows
+# the user confirms. Pre-checked by default — the file really IS gone, the
+# row is almost certainly stale.
+#
+# Called on apps menu open and on Refresh. PortProton-equivalent UX: instead
+# of letting the user click Run on a phantom .exe and getting a Wine error,
+# proactively offer cleanup.
+#
+# Silent no-op if every registered app's exe still exists.
+# ---------------------------------------------------------------------------
+_gui_purge_missing_apps() {
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+  local apps_json="${wb_home}/apps.json"
+  [[ -f "${apps_json}" ]] || return 0
+
+  # Collect <id>|<display_name>|<prefix>|<exe> for missing-exe rows
+  local -a stale_rows=()
+  local id name prefix exe
+  while IFS=$'\t' read -r id name prefix exe _added_at _source_field; do
+    [[ -z "${id}" || -z "${exe}" ]] && continue
+    [[ -e "${exe}" ]] && continue  # exe still on disk → keep
+    # Display-clean the name the same way _gui_build_app_rows does so the
+    # checklist row matches what the user sees in the main list.
+    local disp="${name}"
+    if [[ "${disp}" == *\\* ]]; then
+      disp="${disp##*\\}"
+      disp="${disp%.exe}"
+      disp="${disp%.EXE}"
+    fi
+    stale_rows+=("TRUE" "${disp}" "${prefix}" "${exe}" "${id}")
+  done < <(wb_gui_apps_list)
+
+  local stale_count=$(( ${#stale_rows[@]} / 5 ))
+  [[ "${stale_count}" -eq 0 ]] && return 0
+
+  # One batch dialog. Pre-checked = drop. User can uncheck to keep an entry.
+  local body_text
+  if [[ "${stale_count}" -eq 1 ]]; then
+    body_text="The following app's executable is no longer on disk — likely you uninstalled it from inside Wine, or the prefix was deleted. Remove the stale entry from wine-bleeding's app list?"
+  else
+    body_text="${stale_count} apps in your list have executables that are no longer on disk — likely you uninstalled them from inside Wine, or the prefix was deleted. Pick which stale entries to drop from wine-bleeding's app list:"
+  fi
+
+  local checklist_out chk_rc=0
+  checklist_out="$(wb_gui_yad \
+    --list \
+    --checklist \
+    --title="wine-bleeding — stale entries" \
+    --text="${body_text}" \
+    --no-markup \
+    --width=820 \
+    --height=360 \
+    --column="Drop:CHK" \
+    --column="App" \
+    --column="Prefix" \
+    --column="Missing path" \
+    --column="ID:HD" \
+    --separator="|" \
+    --print-all \
+    --button="Drop selected:0" \
+    --button="Skip:1" \
+    "${stale_rows[@]}" 2>/dev/null)" || chk_rc=$?
+
+  if [[ "${chk_rc}" -ne 0 ]]; then
+    return 0  # User chose Skip / dismissed — leave entries alone
+  fi
+
+  local chk_name _disp _pfx _path drop_id _trail
+  local removed=0
+  while IFS="|" read -r chk_name _disp _pfx _path drop_id _trail; do
+    [[ "${chk_name}" == "TRUE" ]] || continue
+    [[ -z "${drop_id}" ]] && continue
+    wb_gui_apps_remove "${drop_id}" 2>/dev/null && removed=$(( removed + 1 )) || true
+  done <<< "${checklist_out}"
+
+  if [[ "${removed}" -gt 0 ]]; then
+    if [[ "${removed}" -eq 1 ]]; then
+      wb_gui_dialog_info "Cleanup" "Removed 1 stale entry from the app list."
+    else
+      wb_gui_dialog_info "Cleanup" "Removed ${removed} stale entries from the app list."
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # _gui_remove_app <app_id>
 # ---------------------------------------------------------------------------
 _gui_remove_app() {
@@ -5511,6 +5600,9 @@ _cmd_main_window() {
   _wb_gui_place_desktop_shortcut
   # Phase C: one-time "New in v1.8.0" overlay discoverability banner (W2 BLK-3)
   _overlay_phase_c_banner
+  # Stale-entry sweep: silent no-op if every registered app's .exe still
+  # exists; otherwise prompts a single checklist of dead rows.
+  _gui_purge_missing_apps || true
 
   while true; do
     # Build app rows for this iteration
@@ -5598,7 +5690,9 @@ _cmd_main_window() {
         fi
         ;;
       50)
-        # Refresh — loop again
+        # Refresh — re-scan for stale entries (uninstalled outside wb-gui),
+        # then loop again to re-render the list.
+        _gui_purge_missing_apps || true
         continue
         ;;
       60)
