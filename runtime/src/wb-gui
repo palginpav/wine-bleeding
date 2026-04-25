@@ -109,6 +109,14 @@ _wb_gui_load_libs() {
   source "${_WB_LIB_DIR}/wb-json.sh"
   # shellcheck source=wb-lib/wb-log.sh
   source "${_WB_LIB_DIR}/wb-log.sh"
+  # shellcheck source=wb-lib/wb-dist.sh
+  # wb-gui-dist.sh's wb_gui_dist_registry_refresh and wb_gui_dist_activate
+  # call wb_dist_resolve_alias / wb_dist_set_alias from this file. Without
+  # the source, registry refresh silently fails to detect the active dist
+  # (alias resolution returns "command not found" → active_path is empty →
+  # every dist row gets active=false), so the Dist Manager's ACTIVE column
+  # stays blank even after a successful Activate.
+  source "${_WB_LIB_DIR}/wb-dist.sh"
   # GUI-specific libs (Phase A: apps.sh is primary; games.sh stays as legacy shim)
   # shellcheck source=wb-gui-lib/wb-gui-apps.sh
   source "${_WB_GUI_LIB_DIR}/wb-gui-apps.sh"
