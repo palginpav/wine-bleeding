@@ -171,7 +171,17 @@ _make_external_dist() {
       \"\${WB_HOME}/dists.json\"
   " WB_HOME="${TEST_HOME}" 2>/dev/null
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"external"* ]]
+  # As of v1.7.1-dev, Add External cp -a's the tree into $WB_HOME/dist/<name>/
+  # and lets the native auto-scan pick it up — the registered source is
+  # "native" because the dist now lives under WB_HOME. Provenance of the
+  # original path is recorded in <name>/.wb_external_source.json.
+  [[ "${output}" == *"native"* ]]
+
+  # The provenance sidecar must exist and reference the original path.
+  local sidecar="${TEST_HOME}/dist/my-custom-wine/.wb_external_source.json"
+  [ -f "${sidecar}" ]
+  run jq -r '.original_source' "${sidecar}"
+  [[ "${output}" == "${ext_path}" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -206,7 +216,10 @@ _make_external_dist() {
     wb_gui_dist_add_external '${ext_path}' 'my-wine'
   " WB_HOME="${TEST_HOME}" 2>&1
   [ "${status}" -ne 0 ]
-  [[ "${output}" == *"already registered"* ]]
+  # Either pre-validation rejects (registry already has it) or the cp-a
+  # collision check rejects (target dir already exists). Both are correct
+  # "duplicate" failure modes after the v1.7.1-dev architecture change.
+  [[ "${output}" == *"already registered"* || "${output}" == *"already exists"* ]]
 }
 
 # ---------------------------------------------------------------------------

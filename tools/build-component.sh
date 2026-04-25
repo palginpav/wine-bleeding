@@ -313,7 +313,11 @@ case "${COMPONENT}" in
     MESON_X64="build-win64.txt"
     MESON_X86="build-win32.txt"
     EXPECTED_X64=("nvapi64.dll" "nvofapi64.dll")
-    EXPECTED_X86=("nvapi.dll" "nvofapi.dll")
+    # nvofapi (NVIDIA Optical Flow API) is 64-bit-only by upstream design —
+    # see jp7677/dxvk-nvapi src/meson.build: "Only build 64-bit versions
+    # of nvofapi". Don't expect nvofapi.dll in the x86 set or the post-build
+    # check fails with exit 69 ("Staged x86 DLL set incomplete").
+    EXPECTED_X86=("nvapi.dll")
     ;;
 esac
 
@@ -423,17 +427,40 @@ bc_check_deps_upstream "${COMPONENT}"
 # widl wrapper (required by VKD3D-Proton)
 # ---------------------------------------------------------------------------
 _bc_setup_widl() {
-  local widl_bin="${WB_WINE_SOURCE_ROOT}/tools/widl/widl"
-  if [[ -x "${widl_bin}" ]]; then
-    local wrapper_dir="${DEPS_DIR}/widl-wrapper"
-    mkdir -p "${wrapper_dir}"
-    local name
-    for name in x86_64-w64-mingw32-widl i686-w64-mingw32-widl; do
-      [[ -x "${wrapper_dir}/${name}" ]] || ln -sf "${widl_bin}" "${wrapper_dir}/${name}"
-    done
-    export PATH="${wrapper_dir}:${PATH}"
-    bc_emit_log "widl: using Wine tree (${widl_bin})"
+  # Probe widl in priority order:
+  #   1. wine-bleeding source tree (dev mode)
+  #   2. the target dist's bin/ — every Wine dist ships its own widl, so
+  #      the dist we're building components FOR is a natural source. This
+  #      is what makes installed-RPM users (who have no source checkout)
+  #      able to build VKD3D-Proton, which needs widl for COM/RPC stubs.
+  #   3. system PATH (e.g. /usr/bin/widl from a wine-tools distro package)
+  local widl_bin=""
+  local _candidate
+  for _candidate in \
+      "${WB_WINE_SOURCE_ROOT}/tools/widl/widl" \
+      "${TARGET_DIST_REAL:-/does-not-exist}/bin/widl" \
+      "$(command -v widl 2>/dev/null || true)"; do
+    if [[ -n "${_candidate}" && -x "${_candidate}" ]]; then
+      widl_bin="${_candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${widl_bin}" ]]; then
+    bc_emit_warn "widl not found in source tree, target dist, or system PATH; VKD3D-Proton meson setup will fail"
+    return 0
   fi
+
+  local wrapper_dir="${DEPS_DIR}/widl-wrapper"
+  mkdir -p "${wrapper_dir}"
+  local name
+  for name in x86_64-w64-mingw32-widl i686-w64-mingw32-widl; do
+    # Re-create the symlink unconditionally so a stale link from a previous
+    # source-tree probe doesn't shadow the dist-bundled binary.
+    ln -sfn "${widl_bin}" "${wrapper_dir}/${name}"
+  done
+  export PATH="${wrapper_dir}:${PATH}"
+  bc_emit_log "widl: using ${widl_bin}"
 }
 
 # ---------------------------------------------------------------------------

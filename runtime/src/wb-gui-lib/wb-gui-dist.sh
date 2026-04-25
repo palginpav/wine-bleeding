@@ -357,14 +357,23 @@ wb_gui_dist_registry_refresh() {
   local active_name="null"
 
   # --- Native dists ---
+  # Iterate every subdirectory under $WB_HOME/dist/ that looks like a wine
+  # dist (has bin/wine). Historically the glob was `WINE-BLEEDING-*/` because
+  # native dists came only from full-build.sh; now Add External cp -a's any
+  # user-chosen name into the same dir and that should also auto-register, so
+  # we glob-everything and gate on the name regex + bin/wine presence.
   local dist_dir="${wb_home}/dist"
   if [[ -d "${dist_dir}" ]]; then
     local entry name path
-    for entry in "${dist_dir}"/WINE-BLEEDING-*/; do
+    for entry in "${dist_dir}"/*/; do
       [[ -d "${entry}" ]] || continue
-      # Skip symlinks (the WINE-BLEEDING alias)
+      # Skip symlinks (the WINE-BLEEDING alias and any *.old swap leftovers)
       [[ -L "${entry%/}" ]] && continue
       name="$(basename "${entry}")"
+      # Skip swap-rollback leftovers and hidden helpers
+      [[ "${name}" == .* ]] && continue
+      [[ "${name}" == *.old ]] && continue
+      [[ "${name}" == *.new.* ]] && continue
       path="$(realpath -m "${entry%/}" 2>/dev/null || echo "${entry%/}")"
 
       # Validate name pattern
@@ -372,6 +381,8 @@ wb_gui_dist_registry_refresh() {
         wb_log_warn "wb_gui_dist_registry_refresh: skipping dist with invalid name '${name}'"
         continue
       fi
+      # Must look like a wine dist (skip stray dirs left by other tooling)
+      [[ -x "${entry%/}/bin/wine" ]] || continue
 
       local desc
       desc="$(_wb_gui_dist_describe_native "${name}" "${path}" "${active_path}")"

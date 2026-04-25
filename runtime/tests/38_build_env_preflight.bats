@@ -61,6 +61,16 @@ STUB
   export ORIG_PATH="${PATH}"
   export PATH="${FAKE_BIN}:${PATH}"
 
+  # Isolate the managed-tools probe — wb-preflight.py probes
+  # $WB_HOME/build-tools (or $XDG_DATA_HOME/wine-bleeding/build-tools) for
+  # managed tool installs alongside the system PATH probe. Without this
+  # override, a real installed tool in the developer's home (e.g.
+  # ~/.local/share/wine-bleeding/build-tools/mingw-w64-gcc/current/bin/...)
+  # leaks into the test and a "tool missing" case actually finds the
+  # binary, breaking overall_ok=false expectations.
+  export WB_MANAGED_TOOLS_DIR="${TEST_HOME}/managed-tools-empty"
+  mkdir -p "${WB_MANAGED_TOOLS_DIR}"
+
   # Fake os-release pointing at fedora
   FAKE_OS_RELEASE="${TEST_HOME}/os-release-fedora"
   cat > "${FAKE_OS_RELEASE}" <<'EOF'

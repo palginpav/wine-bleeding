@@ -286,6 +286,28 @@ _bc_resolve_mingw32() {
 }
 
 # ---------------------------------------------------------------------------
+# bc_resolve_wb_lib — locate the wb-lib directory (wb-log.sh, wb-json.sh,
+# wb-dist.sh, ...). Used by build-component.sh's swap phase to write the
+# dist manifest and registry settings hint via wb_dist_meta_write.
+# Prints the path on stdout (no trailing slash); exits non-zero if not found.
+# Probe order: dev tree (sibling of tools/), then installed locations.
+# ---------------------------------------------------------------------------
+bc_resolve_wb_lib() {
+  local self_dir candidate
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for candidate in \
+      "${self_dir}/../../runtime/src/wb-lib" \
+      "/usr/lib/wine-bleeding/wb-lib" \
+      "/usr/local/lib/wine-bleeding/wb-lib"; do
+    if [[ -d "${candidate}" ]] && [[ -f "${candidate}/wb-dist.sh" ]]; then
+      (cd "${candidate}" && pwd)
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # bc_strip_builtin_marker <dll>
 # Zeros the Wine builtin DLL marker at offset 0x40, with Authenticode guard.
 # Uses canonical implementation from wb-lib/wb-components.sh.
