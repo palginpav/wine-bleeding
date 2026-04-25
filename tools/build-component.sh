@@ -255,24 +255,34 @@ fi
 # Set up component-specific constants
 # ---------------------------------------------------------------------------
 DEPS_DIR="${WB_BUILD_DEPS_DIR:-${WB_WINE_SOURCE_ROOT}/build-deps}"
-export DEPS_DIR
 
-# Pre-flight: DEPS_DIR must exist. When the driver runs from an installed
-# package and WB_WINE_SOURCE_ROOT points at a non-source location (or is
-# unset), we fail here with an actionable error rather than deep inside a
-# meson/ninja invocation. WB_BUILD_SKIP_COMPILE=1 (tests) bypasses this;
-# the overlay-install path does not use DEPS_DIR and is not guarded here.
-if [[ "${WB_BUILD_SKIP_COMPILE:-0}" != "1" ]] \
-   && [[ "${COMPONENT}" == "dxvk" || "${COMPONENT}" == "vkd3d" || "${COMPONENT}" == "nvapi" ]] \
-   && [[ ! -d "${DEPS_DIR}" ]]; then
-  bc_emit_error "Component build needs a wine-bleeding source tree with build-deps/.
-Expected: ${DEPS_DIR}
-Next action: check out https://github.com/palginpav/wine-bleeding and either
-  (a) run wb-gui directly from that tree, OR
-  (b) set WB_WINE_SOURCE_ROOT=/path/to/wine-bleeding and retry, OR
-  (c) set WB_BUILD_DEPS_DIR=/path/to/build-deps explicitly."
-  exit 66
+# When running from an installed RPM, WB_WINE_SOURCE_ROOT defaults to
+# WINE_ROOT (/usr/lib/wine-bleeding) — a read-only system directory with no
+# build-deps/ subdir. The old behaviour was to bail with exit 66 telling the
+# user to clone the source tree, which is the wrong product direction:
+# end-users shouldn't need a development checkout to use the GUI. Per the
+# PortProton-style "everything under one home" model, fall back to
+# $WB_HOME/build-deps/ (writable, persists across upgrades) — the auto-clone
+# block below populates it on first build.
+if [[ -z "${WB_BUILD_DEPS_DIR:-}" ]] && [[ ! -w "${DEPS_DIR%/*}" ]]; then
+  _wb_user_home="${WB_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/wine-bleeding}"
+  DEPS_DIR="${_wb_user_home}/build-deps"
+  unset _wb_user_home
 fi
+
+# Auto-create build-deps for dxvk/vkd3d/nvapi (the auto-clone at line ~437
+# populates <DEPS_DIR>/<repo_name>/). Other component types (overlays,
+# install-only paths) don't need DEPS_DIR populated up-front.
+if [[ "${WB_BUILD_SKIP_COMPILE:-0}" != "1" ]] \
+   && [[ "${COMPONENT}" == "dxvk" || "${COMPONENT}" == "vkd3d" || "${COMPONENT}" == "nvapi" ]]; then
+  if ! mkdir -p "${DEPS_DIR}" 2>/dev/null; then
+    bc_emit_error "Cannot create build-deps directory.
+Expected: ${DEPS_DIR}
+Next action: ensure \$WB_HOME (${WB_HOME:-${HOME}/.local/share/wine-bleeding}) is writable, or set WB_BUILD_DEPS_DIR explicitly."
+    exit 66
+  fi
+fi
+export DEPS_DIR
 
 case "${COMPONENT}" in
   dxvk)
