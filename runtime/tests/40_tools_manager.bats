@@ -702,3 +702,84 @@ PYEOF
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"happy-path OK"* ]]
 }
+
+# ===========================================================================
+# Case 12: hardlinks inside a wrapped tarball — extract must rewrite both
+# member.name AND member.linkname when stripping the top-level directory,
+# otherwise tarfile raises 'linkname X not found'. Real-world trigger: the
+# mingw-w64 tarball ships hardlinks like c++ -> g++ whose linkname starts
+# with the wrapper dir name.
+# ===========================================================================
+
+@test "manager safe-extract rewrites hardlink linkname after stripping top-level dir" {
+  command -v zstd >/dev/null 2>&1 || skip "zstd not installed"
+
+  run python3 - "${MANAGER}" "${TOOLS_DIR}" <<'PYEOF'
+import sys, importlib.util, pathlib, subprocess, tarfile, io
+
+manager_path = sys.argv[1]
+stage_parent = pathlib.Path(sys.argv[2])
+
+spec = importlib.util.spec_from_file_location("wb_tools_manager", manager_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class _NullReporter:
+    def warn(self, msg): pass
+    def log(self, msg): pass
+    def error(self, msg): pass
+    def progress(self, pct, msg): pass
+
+# Build a tarball that mirrors the mingw-w64 wrapper layout: top-level
+# dir "tool-1.0/", a real file at tool-1.0/bin/g++, and a HARDLINK at
+# tool-1.0/bin/c++ pointing at tool-1.0/bin/g++.
+raw_tar = stage_parent / "fixture.tar"
+real_content = b"#!/bin/sh\necho real\n"
+with tarfile.open(raw_tar, "w") as tf:
+    real_ti = tarfile.TarInfo(name="tool-1.0/bin/g++")
+    real_ti.size = len(real_content)
+    real_ti.mode = 0o755
+    real_ti.type = tarfile.REGTYPE
+    tf.addfile(real_ti, io.BytesIO(real_content))
+
+    link_ti = tarfile.TarInfo(name="tool-1.0/bin/c++")
+    link_ti.type = tarfile.LNKTYPE  # HARDLINK
+    link_ti.linkname = "tool-1.0/bin/g++"
+    tf.addfile(link_ti)
+
+zst_path = stage_parent / "fixture.tar.zst"
+r = subprocess.run(["zstd", "-q", "-f", str(raw_tar), "-o", str(zst_path)], capture_output=True)
+if r.returncode != 0:
+    print(f"FAIL: zstd compression failed: {r.stderr.decode()}", file=sys.stderr)
+    sys.exit(1)
+
+extract_dir = stage_parent / "extract"
+extract_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    mod.safe_extract(zst_path, extract_dir, 0, _NullReporter())
+except Exception as exc:
+    msg = str(exc)
+    if "linkname" in msg and "not found" in msg:
+        print(f"FAIL: linkname-not-found regression — {msg}", file=sys.stderr)
+        sys.exit(1)
+    print(f"FAIL: safe_extract raised: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+# Both files must exist post-strip; the hardlink must point at the same inode.
+g = extract_dir / "bin" / "g++"
+c = extract_dir / "bin" / "c++"
+if not g.is_file():
+    print(f"FAIL: real file {g} missing", file=sys.stderr); sys.exit(1)
+if not c.is_file():
+    print(f"FAIL: hardlink {c} missing", file=sys.stderr); sys.exit(1)
+if g.stat().st_ino != c.stat().st_ino:
+    print(f"FAIL: c++ is not a hardlink to g++ (different inodes)", file=sys.stderr); sys.exit(1)
+
+print("hardlink linkname correctly stripped; both files share an inode")
+sys.exit(0)
+PYEOF
+
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"correctly stripped"* ]]
+}

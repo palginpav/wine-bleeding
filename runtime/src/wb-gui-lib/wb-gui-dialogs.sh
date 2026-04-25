@@ -1049,11 +1049,33 @@ Next action: reinstall wine-bleeding, then try again."
             continue
             ;;
           *)
-            # Network error or other failure
-            wb_gui_dialog_error "Check for updates failed" \
+            # Map known wb-tools-manager.py exit codes to actionable messages.
+            # Codes that can land here: 2 (network/TLS/filesystem),
+            # 5 (manifest parse error / corrupt cache), 99 (internal error).
+            # Anything else is unexpected.
+            local _chk_why _chk_next
+            case "${_chk_rc}" in
+              2)
+                _chk_why="Network, TLS, or filesystem error reaching the manifest."
+                _chk_next="Verify network connectivity and that your system trusts GitHub's TLS certificate, then retry."
+                ;;
+              5)
+                _chk_why="The manifest JSON could not be parsed (corrupt cache or upstream regression)."
+                _chk_next="Delete the local cache (rm -rf ~/.local/share/wine-bleeding/build-tools/manifest.cache.*) and click Check for updates again."
+                ;;
+              99)
+                _chk_why="Internal error in wb-tools-manager.py (unhandled exception)."
+                _chk_next="Run wb-tools-manager.py check --json in a terminal to see the traceback, then file a bug."
+                ;;
+              *)
+                _chk_why="Unexpected exit code from wb-tools-manager.py."
+                _chk_next="Run wb-tools-manager.py check --json in a terminal to see the actual error."
+                ;;
+            esac
+            wb_gui_dialog_error "Check for updates failed (exit ${_chk_rc})" \
               "What happened: wb-tools-manager.py check returned exit code ${_chk_rc}.
-Why: your network may be down, or github.com is temporarily unavailable.
-Next action: check your network connection and try again.
+Why: ${_chk_why}
+Next action: ${_chk_next}
 You can still use Build from source buttons to install tools locally."
             rm -f "${_chk_tmp}"
             continue

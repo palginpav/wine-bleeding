@@ -819,6 +819,15 @@ def _extract_from_pipe(
                 if not member.name:
                     continue  # becomes the stage_dir itself after strip
 
+            # Hardlinks (and intra-archive symlinks) store their target as a
+            # member name within the archive. We just rewrote member.name; the
+            # linkname must be rewritten to match, otherwise tarfile.extract
+            # raises 'linkname X not found' (mingw-w64 ships hardlinks like
+            # c++ -> g++ whose linkname points at the wrapper dir).
+            if (member.islnk() or member.issym()) and member.linkname:
+                if top_level_dir and member.linkname.startswith(top_level_dir + "/"):
+                    member.linkname = member.linkname[len(top_level_dir) + 1:]
+
             if py_ver >= (3, 12):
                 # Use data_filter (Python 3.12+)
                 try:
