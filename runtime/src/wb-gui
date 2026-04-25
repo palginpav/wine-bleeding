@@ -3863,12 +3863,13 @@ _dist_build_rows() {
       last_built="${lb_raw:0:10}"
     fi
 
-    # ACTIVE marker
+    # ACTIVE marker — visible enough to be read at a glance. The single ">"
+    # was easy to miss in a narrow first column; "ACTIVE" is unambiguous.
     local active_marker=""
     if [[ "${broken}" == "true" ]]; then
-      active_marker="!"
+      active_marker="BROKEN"
     elif [[ "${active}" == "true" ]]; then
-      active_marker=">"
+      active_marker="ACTIVE"
     fi
 
     printf '%s\n' "${active_marker}" "${name}" "${source}" "${wine_ver}" \
@@ -4752,12 +4753,20 @@ Fix or remove this dist, then try again."
         fi
 
         # Activate
-        local act_err
-        act_err="$(wb_gui_dist_activate "${a_name}" 2>&1)" || {
+        local act_err act_rc=0
+        act_err="$(wb_gui_dist_activate "${a_name}" 2>&1)" || act_rc=$?
+        if [[ "${act_rc}" -ne 0 ]]; then
           wb_gui_dialog_error "Activate Failed" \
             "Failed to activate '${a_name}': ${act_err}."
-        }
-        # Registry already refreshed by wb_gui_dist_activate on success
+        else
+          # Confirm to the user — silent success was being read as "nothing
+          # happened" because the active-row marker is easy to miss on first
+          # glance. Registry has already been refreshed by wb_gui_dist_activate.
+          wb_gui_dialog_info "Activated" \
+            "${a_name} is now the active distribution.
+
+The dist list now shows ACTIVE in the first column for this row."
+        fi
         continue
         ;;
       # ------------------------------------------------------------------
