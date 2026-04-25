@@ -2558,11 +2558,15 @@ _launch_tab_app() {
   overlay_json_str="$(wb_gui_settings_get_app "${app_id}" overlays 2>/dev/null || true)"
   [[ -z "${overlay_json_str}" || "${overlay_json_str}" == "null" ]] && overlay_json_str="{}"
 
-  # Helper: read per-overlay field with null-safe default
+  # Helper: read per-overlay field with null-safe default. See _cmd_app_prefs
+  # for the rationale — '// empty' would silently strip stored 'false', so
+  # we use an explicit type=="null" check.
   _ov_field() {
     local j="${1}" path="${2}" def="${3:-}"
     local v
-    v="$(printf '%s' "${j}" | jq -r "${path} // empty" 2>/dev/null || true)"
+    v="$(printf '%s' "${j}" \
+      | jq -r "${path} | if type == \"null\" then \"\" else (. | tostring) end" \
+      2>/dev/null || true)"
     printf '%s' "${v:-${def}}"
   }
 
@@ -4077,10 +4081,21 @@ _cmd_app_prefs() {
   overlay_json_str="$(wb_gui_settings_get_app "${app_id}" overlays 2>/dev/null || true)"
   [[ -z "${overlay_json_str}" || "${overlay_json_str}" == "null" ]] && overlay_json_str="{}"
 
+  # Read a single field from overlays JSON with a default fallback. Original
+  # version used jq's '// empty' operator which is BROKEN for boolean false:
+  # in jq, '//' treats both 'null' AND 'false' as "use the alternative", so
+  # a stored '{"bundled": false}' (the user picked System and saved) became
+  # empty → bash '${v:-default}' fell back to 'true' → dialog re-rendered
+  # showing Bundled selected → user's System choice appeared to revert on
+  # every re-open ("not persistent"). Replaced with an explicit null check
+  # via 'if type == "null"' so genuine missing/null values fall back to the
+  # default but stored false survives as the literal string "false".
   _ov_field() {
     local j="${1}" path="${2}" def="${3:-}"
     local v
-    v="$(printf '%s' "${j}" | jq -r "${path} // empty" 2>/dev/null || true)"
+    v="$(printf '%s' "${j}" \
+      | jq -r "${path} | if type == \"null\" then \"\" else (. | tostring) end" \
+      2>/dev/null || true)"
     printf '%s' "${v:-${def}}"
   }
 
