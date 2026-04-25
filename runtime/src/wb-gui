@@ -3584,6 +3584,104 @@ _wb_overlay_btn_check_all() {
 export -f _wb_overlay_btn_check_all
 
 # ---------------------------------------------------------------------------
+# _cmd_general_prefs
+# Single-window Prefs dialog. Replaces the 4-tab yad --plug/--notebook flow
+# (which renders as 4 detached windows on Plasma 6 / Wayland because the X11
+# EmbedProto plug binding is unreliable through XWayland). One yad --form
+# with section headers shows defaults + live status of the registered
+# dists/apps/prefixes; OK persists, Cancel rolls back.
+# ---------------------------------------------------------------------------
+_cmd_general_prefs() {
+  _wb_gui_load_libs
+
+  local wb_home
+  wb_home="$(_wb_gui_home)"
+
+  # --- read current defaults --------------------------------------------------
+  local gpu_cur winver_cur debug_cur
+  gpu_cur="$(wb_gui_settings_get_general gpu 2>/dev/null || true)"
+  winver_cur="$(wb_gui_settings_get_general win_version 2>/dev/null || true)"
+  debug_cur="$(wb_gui_settings_get_general wine_debug 2>/dev/null || true)"
+
+  local gpu_label
+  gpu_label="$(_settings_gpu_json_to_label "${gpu_cur}")"
+  [[ -z "${gpu_label}" ]] && gpu_label="Auto"
+
+  local winver_label
+  winver_label="$(_settings_winver_json_to_label "${winver_cur}")"
+  [[ -z "${winver_label}" ]] && winver_label="Windows 10"
+
+  # CB option lists with the current selection placed first (yad convention).
+  local gpu_opts="${gpu_label}!Auto!NVIDIA!AMD!Intel"
+  gpu_opts="$(echo "${gpu_opts}" \
+    | sed 's/Auto!Auto/Auto/;s/NVIDIA!NVIDIA/NVIDIA/;s/AMD!AMD/AMD/;s/Intel!Intel/Intel/')"
+
+  local winver_opts="${winver_label}!Windows 10!Windows 11!Windows 8.1!Windows 8!Windows 7!Windows XP!Vista"
+  local _wv
+  for _wv in "Windows 10" "Windows 11" "Windows 8.1" "Windows 8" "Windows 7" "Windows XP" "Vista"; do
+    winver_opts="${winver_opts//${_wv}!${_wv}/${_wv}}"
+  done
+
+  # --- read live registry status (these were the placeholders that always
+  # said "no apps/prefixes/dists" because the old plug-tab paths required an
+  # explicit context ID; here we just read the registries directly) ---------
+  local active_dist dists_count apps_count prefixes_count
+  active_dist="$(jq -r '.active // "(none)"' "${wb_home}/dists.json" 2>/dev/null || echo "(none)")"
+  [[ "${active_dist}" == "null" ]] && active_dist="(none)"
+  dists_count="$(jq '.dists | length' "${wb_home}/dists.json" 2>/dev/null || echo 0)"
+  apps_count="$(jq '.apps | length' "${wb_home}/apps.json" 2>/dev/null || echo 0)"
+  if [[ -d "${wb_home}/prefixes" ]]; then
+    prefixes_count="$(find "${wb_home}/prefixes" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)"
+  else
+    prefixes_count=0
+  fi
+
+  # --- single-window form -----------------------------------------------------
+  local form_out form_rc=0
+  form_out="$(wb_gui_yad --form \
+    --title="wine-bleeding — Settings" \
+    --text="Defaults applied to every dist / prefix / app unless overridden at a more specific layer." \
+    --no-markup \
+    --separator="|" \
+    --width=540 \
+    --field=":LBL"                                                           "—— Defaults ——" \
+    --field="Default GPU:CB"                                                 "${gpu_opts}" \
+    --field="Default Windows version:CB"                                     "${winver_opts}" \
+    --field="Default WINEDEBUG (blank = no override):TEXT"                   "${debug_cur}" \
+    --field=":LBL"                                                           "—— Status ——" \
+    --field="Active dist::RO"                                                "${active_dist}" \
+    --field="Registered dists::RO"                                           "${dists_count}" \
+    --field="Registered apps::RO"                                            "${apps_count}" \
+    --field="Wine prefixes on disk::RO"                                      "${prefixes_count}" \
+    --button="Cancel:1" \
+    --button="Save:0" 2>/dev/null)" || form_rc=$?
+
+  if [[ "${form_rc}" -ne 0 ]]; then
+    return 0  # Cancel/Escape — no save
+  fi
+
+  # Parse: 9 fields total = 2 LBL placeholders + 3 editable + 4 RO. yad emits
+  # all fields in declaration order separated by '|', LBL fields emit empty.
+  local _lbl1 new_gpu new_winver new_debug _lbl2 _ro1 _ro2 _ro3 _ro4 _trail
+  IFS='|' read -r _lbl1 new_gpu new_winver new_debug _lbl2 _ro1 _ro2 _ro3 _ro4 _trail <<< "${form_out}"
+
+  local gpu_json winver_json
+  gpu_json="$(_settings_gpu_label_to_json "${new_gpu}")"
+  winver_json="$(_settings_winver_label_to_json "${new_winver}")"
+
+  [[ -n "${gpu_json}" ]]    && wb_gui_settings_set_general gpu         "${gpu_json}"    2>/dev/null || true
+  [[ -n "${winver_json}" ]] && wb_gui_settings_set_general win_version "${winver_json}" 2>/dev/null || true
+  wb_gui_settings_set_general wine_debug "${new_debug}" 2>/dev/null || true
+
+  wb_gui_dialog_info "Settings saved" \
+    "Defaults updated.
+
+GPU: ${new_gpu}
+Windows version: ${new_winver}
+WINEDEBUG: $([[ -n "${new_debug}" ]] && echo "${new_debug}" || echo "(no override)")"
+}
+
+# ---------------------------------------------------------------------------
 # _cmd_settings_v2 [<scope> [<id>]]
 # Opens the 4-pane Settings notebook.
 # scope: general | dist <id> | prefix <id> | app <id>
@@ -5060,8 +5158,13 @@ _cmd_main_window() {
         continue
         ;;
       60)
-        # Prefs button → 4-pane dialog at General tab
-        _cmd_settings_v2 general
+        # Prefs button → single-window Settings dialog (defaults + live status).
+        # The legacy 4-tab notebook is still callable as `wb-gui settings-v2`
+        # for tooling/tests that need the per-dist / per-prefix / per-app
+        # editors, but it's not the user-facing Prefs entry anymore — yad
+        # --plug binding is unreliable on Plasma 6 / Wayland and was rendering
+        # the four panes as four detached "YAD" windows.
+        _cmd_general_prefs
         ;;
       70)
         # Dists button → Dist Manager dialog (Phase B)
